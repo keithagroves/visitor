@@ -21,9 +21,13 @@
 struct Player {
     Vec3 position;
     float rotation = 0.0f;  // Y-axis rotation (facing direction)
+    float verticalVelocity = 0.0f;  // For jumping
+    bool isGrounded = true;
 
     static constexpr float MOVE_SPEED = 6.0f;
     static constexpr float ROTATION_SPEED = 5.0f;
+    static constexpr float JUMP_FORCE = 12.0f;
+    static constexpr float GRAVITY = 25.0f;
 };
 
 struct App {
@@ -177,9 +181,27 @@ void update(float deltaTime) {
     // Update terrain chunks based on player position
     app.terrain.update(app.player.position.x, app.player.position.z);
 
-    // Terrain collision - keep player on ground
+    // Get terrain height
     float terrainHeight = app.terrain.getHeightAt(app.player.position.x, app.player.position.z);
-    app.player.position.y = terrainHeight;
+
+    // Jump input
+    if (Input::isKeyDown(Input::KEY_SPACE) && app.player.isGrounded) {
+        app.player.verticalVelocity = Player::JUMP_FORCE;
+        app.player.isGrounded = false;
+    }
+
+    // Apply gravity
+    if (!app.player.isGrounded) {
+        app.player.verticalVelocity -= Player::GRAVITY * deltaTime;
+        app.player.position.y += app.player.verticalVelocity * deltaTime;
+    }
+
+    // Ground collision
+    if (app.player.position.y <= terrainHeight) {
+        app.player.position.y = terrainHeight;
+        app.player.verticalVelocity = 0.0f;
+        app.player.isGrounded = true;
+    }
 
     // Update character
     app.character.setPosition(app.player.position);
