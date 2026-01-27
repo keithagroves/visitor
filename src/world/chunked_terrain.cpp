@@ -93,7 +93,7 @@ void TerrainChunk::generate(int cx, int cz, const PerlinNoise& noise) {
 
             float worldX = worldOffsetX + localX;
             float worldZ = worldOffsetZ + localZ;
-            float py = h * ChunkedTerrain::HEIGHT_SCALE - 2.0f;
+            float py = h * ChunkedTerrain::HEIGHT_SCALE - ChunkedTerrain::TERRAIN_OFFSET;
 
             // Calculate normal
             float hL = x > 0 ? heightMap[z][x-1] : h;
@@ -297,5 +297,5 @@ float ChunkedTerrain::getHeightAt(float worldX, float worldZ) const {
     float localZ = worldZ - chunkZ * TerrainChunk::WORLD_SIZE;
 
     float h = it->second->getHeightAt(localX, localZ);
-    return h * HEIGHT_SCALE - 2.0f;
+    return h * HEIGHT_SCALE - TERRAIN_OFFSET;
 }

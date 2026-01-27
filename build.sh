@@ -55,6 +55,19 @@ emcc $SOURCES \
     --shell-file shell.html \
     -O2
 
+# Create index.html redirect for GitHub Pages
+cat > "$BUILD_DIR/index.html" << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="refresh" content="0; url=game.html">
+</head>
+<body>
+  <p>Redirecting to <a href="game.html">game.html</a>...</p>
+</body>
+</html>
+EOF
+
 echo ""
 echo "=== Build Complete ==="
 echo ""

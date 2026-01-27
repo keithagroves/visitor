@@ -45,6 +45,7 @@ struct ChunkCoordHash {
 class ChunkedTerrain {
 public:
     static constexpr float HEIGHT_SCALE = 80.0f;  // Taller mountains
+    static constexpr float TERRAIN_OFFSET = 15.0f;  // Shift terrain down (raises water level)
     static constexpr int RENDER_DISTANCE = 5;  // Chunks in each direction
 
     ChunkedTerrain();
