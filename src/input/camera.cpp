@@ -5,7 +5,7 @@ Camera::Camera() : position(0, 5, 0), target(0, 0, 0), yaw(0), pitch(0.3f), dist
 
 void Camera::rotate(float deltaYaw, float deltaPitch) {
     yaw += deltaYaw * MOUSE_SENSITIVITY;
-    pitch -= deltaPitch * MOUSE_SENSITIVITY;
+    pitch += deltaPitch * MOUSE_SENSITIVITY;  // Inverted for natural feel
 
     if (pitch > PITCH_LIMIT) pitch = PITCH_LIMIT;
     if (pitch < -0.2f) pitch = -0.2f;  // Don't go too far below horizontal
