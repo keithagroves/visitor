@@ -227,4 +227,60 @@ void main() {
 }
 )";
 
+// Character shader - uses vertex colors
+const char* characterVertex = R"(#version 300 es
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec3 aColor;
+
+out vec3 vNormal;
+out vec3 vWorldPos;
+out vec3 vColor;
+
+uniform mat4 uMVP;
+uniform mat4 uModel;
+
+void main() {
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+    vNormal = mat3(uModel) * aNormal;
+    vWorldPos = (uModel * vec4(aPosition, 1.0)).xyz;
+    vColor = aColor;
+}
+)";
+
+const char* characterFragment = R"(#version 300 es
+precision mediump float;
+
+in vec3 vNormal;
+in vec3 vWorldPos;
+in vec3 vColor;
+
+out vec4 fragColor;
+
+uniform vec3 uLightDir;
+uniform vec3 uCameraPos;
+
+void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 lightDir = normalize(uLightDir);
+
+    float ambient = 0.4;
+    float diff = max(dot(normal, lightDir), 0.0);
+
+    vec3 viewDir = normalize(uCameraPos - vWorldPos);
+    vec3 reflectDir = reflect(-lightDir, normal);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 16.0) * 0.2;
+
+    vec3 finalColor = vColor * (ambient + diff * 0.6) + vec3(spec);
+
+    // Distance fog
+    float dist = length(uCameraPos - vWorldPos);
+    float fogFactor = 1.0 - exp(-dist * 0.0015);
+    vec3 fogColor = vec3(0.7, 0.8, 0.95);
+    finalColor = mix(finalColor, fogColor, fogFactor);
+
+    fragColor = vec4(finalColor, 1.0);
+}
+)";
+
 } // namespace Shaders

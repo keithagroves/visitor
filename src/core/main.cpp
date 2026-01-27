@@ -2,12 +2,14 @@
 #include <emscripten/html5.h>
 #include <GLES3/gl3.h>
 #include <cstdio>
+#include <cmath>
 
 #include "../math/vecmath.h"
 #include "../graphics/shader.h"
 #include "../graphics/shaders.h"
 #include "../world/chunked_terrain.h"
 #include "../world/water.h"
+#include "../world/character.h"
 #include "../input/camera.h"
 #include "../input/crosshair.h"
 #include "../input/input.h"
@@ -16,6 +18,14 @@
 // Application state
 // ============================================================================
 
+struct Player {
+    Vec3 position;
+    float rotation = 0.0f;  // Y-axis rotation (facing direction)
+
+    static constexpr float MOVE_SPEED = 6.0f;
+    static constexpr float ROTATION_SPEED = 5.0f;
+};
+
 struct App {
     // Rendering
     GLuint terrainProgram = 0;
@@ -23,12 +33,15 @@ struct App {
     GLuint crosshairProgram = 0;
     GLuint underwaterProgram = 0;
     GLuint underwaterOverlayProgram = 0;
+    GLuint characterProgram = 0;
 
     // Game objects
     ChunkedTerrain terrain;
     Water water;
     Camera camera;
     Crosshair crosshair;
+    Character character;
+    Player player;
 
     // Underwater overlay quad
     GLuint overlayVao = 0;
@@ -42,7 +55,7 @@ struct App {
     int width = 800;
     int height = 600;
     float aspectRatio = 800.0f / 600.0f;
-    float fov = 70.0f * 3.14159f / 180.0f;
+    float fov = 60.0f * 3.14159f / 180.0f;  // Slightly narrower for third-person
 };
 
 static App app;
@@ -58,6 +71,7 @@ void init() {
     app.crosshairProgram = Shader::createProgram(Shaders::crosshairVertex, Shaders::crosshairFragment);
     app.underwaterProgram = Shader::createProgram(Shaders::underwaterVertex, Shaders::underwaterFragment);
     app.underwaterOverlayProgram = Shader::createProgram(Shaders::underwaterOverlayVertex, Shaders::underwaterOverlayFragment);
+    app.characterProgram = Shader::createProgram(Shaders::characterVertex, Shaders::characterFragment);
 
     // Create fullscreen quad for underwater overlay
     float overlayQuad[] = {
@@ -84,10 +98,13 @@ void init() {
     app.water.generate(2000.0f);
     app.crosshair.generate(app.aspectRatio);
 
-    // Position camera
-    Vec3 startPos(0, 0, 0);
-    startPos.y = app.terrain.getHeightAt(0, 0) + Camera::DEFAULT_HEIGHT;
-    app.camera.setPosition(startPos);
+    // Generate character mesh
+    app.character.generate();
+
+    // Position player
+    app.player.position = Vec3(0, 0, 0);
+    app.player.position.y = app.terrain.getHeightAt(0, 0);
+    app.player.rotation = 0.0f;
 
     // Initialize input
     Input::init("#canvas");
@@ -102,50 +119,74 @@ void init() {
     app.startTime = emscripten_get_now() / 1000.0;
     app.lastFrameTime = app.startTime;
 
-    printf("=== Infinite Terrain Explorer ===\n");
-    printf("Click canvas to enable mouse look\n");
-    printf("WASD - Move | Mouse - Look | Space/Shift - Up/Down | ESC - Release\n");
+    printf("=== Third Person Explorer ===\n");
+    printf("Click canvas to enable controls\n");
+    printf("WASD - Move | Mouse - Camera | Scroll - Zoom | ESC - Release\n");
 }
 
 void update(float deltaTime) {
-    // Mouse look
+    // Camera rotation with mouse
     if (Input::isPointerLocked()) {
         app.camera.rotate(Input::getMouseDeltaX(), Input::getMouseDeltaY());
         Input::resetMouseDelta();
     }
 
-    // Movement direction
+    // Get camera-relative directions for movement
+    Vec3 camForward = app.camera.getForward();
+    Vec3 camRight = app.camera.getRight();
+
+    // Movement input
     Vec3 moveDir(0, 0, 0);
-    Vec3 forward = app.camera.getForward();
-    Vec3 right = app.camera.getRight();
+    bool isMoving = false;
 
-    if (Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP))
-        moveDir += forward;
-    if (Input::isKeyDown(Input::KEY_S) || Input::isKeyDown(Input::KEY_DOWN))
-        moveDir += forward * -1.0f;
-    if (Input::isKeyDown(Input::KEY_A) || Input::isKeyDown(Input::KEY_LEFT))
-        moveDir += right * -1.0f;
-    if (Input::isKeyDown(Input::KEY_D) || Input::isKeyDown(Input::KEY_RIGHT))
-        moveDir += right;
-
-    if (moveDir.length() > 0) {
-        moveDir = moveDir.normalize();
-        app.camera.move(moveDir, deltaTime);
+    if (Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP)) {
+        moveDir += camForward;
+        isMoving = true;
+    }
+    if (Input::isKeyDown(Input::KEY_S) || Input::isKeyDown(Input::KEY_DOWN)) {
+        moveDir += camForward * -1.0f;
+        isMoving = true;
+    }
+    if (Input::isKeyDown(Input::KEY_A) || Input::isKeyDown(Input::KEY_LEFT)) {
+        moveDir += camRight * -1.0f;
+        isMoving = true;
+    }
+    if (Input::isKeyDown(Input::KEY_D) || Input::isKeyDown(Input::KEY_RIGHT)) {
+        moveDir += camRight;
+        isMoving = true;
     }
 
-    // Vertical movement
-    if (Input::isKeyDown(Input::KEY_SPACE))
-        app.camera.moveVertical(1.0f, deltaTime);
-    if (Input::isKeyDown(Input::KEY_SHIFT))
-        app.camera.moveVertical(-1.0f, deltaTime);
+    // Move player
+    if (isMoving && moveDir.length() > 0) {
+        moveDir = moveDir.normalize();
 
-    // Update terrain chunks based on camera position
-    Vec3 pos = app.camera.getPosition();
-    app.terrain.update(pos.x, pos.z);
+        // Rotate character to face movement direction (add PI to face away from camera)
+        float targetRotation = atan2f(moveDir.x, moveDir.z);
+        float rotDiff = targetRotation - app.player.rotation;
 
-    // Terrain collision (no bounds - infinite terrain!)
-    float terrainHeight = app.terrain.getHeightAt(pos.x, pos.z);
-    app.camera.clampToTerrain(terrainHeight);
+        // Normalize rotation difference
+        while (rotDiff > 3.14159f) rotDiff -= 2.0f * 3.14159f;
+        while (rotDiff < -3.14159f) rotDiff += 2.0f * 3.14159f;
+
+        app.player.rotation += rotDiff * Player::ROTATION_SPEED * deltaTime;
+
+        // Move in movement direction
+        app.player.position += moveDir * Player::MOVE_SPEED * deltaTime;
+    }
+
+    // Update terrain chunks based on player position
+    app.terrain.update(app.player.position.x, app.player.position.z);
+
+    // Terrain collision - keep player on ground
+    float terrainHeight = app.terrain.getHeightAt(app.player.position.x, app.player.position.z);
+    app.player.position.y = terrainHeight;
+
+    // Update character
+    app.character.setPosition(app.player.position);
+    app.character.setRotation(app.player.rotation);
+
+    // Update camera to follow player
+    app.camera.setTarget(app.player.position, app.player.rotation);
 }
 
 void render(float time) {
@@ -162,15 +203,30 @@ void render(float time) {
     // Water matrix - centered on camera
     Mat4 waterModel;
     waterModel.identity();
-    // Translate water to follow camera (snapped to prevent swimming effect)
     waterModel.m[12] = floorf(cameraPos.x / 50.0f) * 50.0f;
     waterModel.m[14] = floorf(cameraPos.z / 50.0f) * 50.0f;
     Mat4 waterMvp = projection * view * waterModel;
 
+    // Character model matrix
+    Mat4 charModel;
+    charModel.identity();
+    // Translate to player position
+    charModel.m[12] = app.player.position.x;
+    charModel.m[13] = app.player.position.y;
+    charModel.m[14] = app.player.position.z;
+    // Rotate around Y axis
+    float cosR = cosf(app.player.rotation);
+    float sinR = sinf(app.player.rotation);
+    charModel.m[0] = cosR;
+    charModel.m[2] = -sinR;
+    charModel.m[8] = sinR;
+    charModel.m[10] = cosR;
+    Mat4 charMvp = projection * view * charModel;
+
     // Light direction
     Vec3 lightDir = Vec3(0.5f, 0.8f, 0.3f).normalize();
 
-    // Clear - darker blue when underwater
+    // Clear
     if (isUnderwater) {
         glClearColor(0.0f, 0.15f, 0.3f, 1.0f);
     } else {
@@ -181,9 +237,16 @@ void render(float time) {
     // Draw terrain
     app.terrain.render(app.terrainProgram, mvp, model, lightDir, cameraPos, time);
 
+    // Draw character
+    glUseProgram(app.characterProgram);
+    glUniformMatrix4fv(glGetUniformLocation(app.characterProgram, "uMVP"), 1, GL_FALSE, charMvp.m);
+    glUniformMatrix4fv(glGetUniformLocation(app.characterProgram, "uModel"), 1, GL_FALSE, charModel.m);
+    glUniform3f(glGetUniformLocation(app.characterProgram, "uLightDir"), lightDir.x, lightDir.y, lightDir.z);
+    glUniform3f(glGetUniformLocation(app.characterProgram, "uCameraPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+    app.character.render();
+
     // Draw water surface
     if (isUnderwater) {
-        // Underwater: render water surface from below (flip culling)
         glCullFace(GL_FRONT);
         glEnable(GL_CULL_FACE);
         glUseProgram(app.underwaterProgram);
@@ -193,7 +256,6 @@ void render(float time) {
         app.water.renderDirect();
         glDisable(GL_CULL_FACE);
     } else {
-        // Above water: normal water surface
         glUseProgram(app.waterProgram);
         glUniformMatrix4fv(glGetUniformLocation(app.waterProgram, "uMVP"), 1, GL_FALSE, waterMvp.m);
         glUniform3f(glGetUniformLocation(app.waterProgram, "uCameraPos"), cameraPos.x, cameraPos.y, cameraPos.z);
