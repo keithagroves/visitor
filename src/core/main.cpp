@@ -237,12 +237,18 @@ void render(float time) {
     // Draw terrain
     app.terrain.render(app.terrainProgram, mvp, model, lightDir, cameraPos, time);
 
-    // Draw character
+    // Draw character (blobby jelly)
     glUseProgram(app.characterProgram);
     glUniformMatrix4fv(glGetUniformLocation(app.characterProgram, "uMVP"), 1, GL_FALSE, charMvp.m);
     glUniformMatrix4fv(glGetUniformLocation(app.characterProgram, "uModel"), 1, GL_FALSE, charModel.m);
     glUniform3f(glGetUniformLocation(app.characterProgram, "uLightDir"), lightDir.x, lightDir.y, lightDir.z);
     glUniform3f(glGetUniformLocation(app.characterProgram, "uCameraPos"), cameraPos.x, cameraPos.y, cameraPos.z);
+    glUniform1f(glGetUniformLocation(app.characterProgram, "uTime"), time);
+    // Pass movement speed for extra squish when moving
+    Vec3 vel = app.player.position;  // We'll track this properly later
+    float speed = Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_S) ||
+                  Input::isKeyDown(Input::KEY_A) || Input::isKeyDown(Input::KEY_D) ? 1.0f : 0.0f;
+    glUniform1f(glGetUniformLocation(app.characterProgram, "uSpeed"), speed);
     app.character.render();
 
     // Draw water surface

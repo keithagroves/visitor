@@ -227,8 +227,10 @@ void main() {
 }
 )";
 
-// Character shader - uses vertex colors
+// Character shader - blobby jelly effect with vertex colors
 const char* characterVertex = R"(#version 300 es
+precision mediump float;
+
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec3 aColor;
@@ -239,11 +241,51 @@ out vec3 vColor;
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
+uniform float uTime;
+uniform float uSpeed;
 
 void main() {
-    gl_Position = uMVP * vec4(aPosition, 1.0);
-    vNormal = mat3(uModel) * aNormal;
-    vWorldPos = (uModel * vec4(aPosition, 1.0)).xyz;
+    vec3 pos = aPosition;
+
+    // Jelly wobble - different frequencies for organic feel
+    float wobble1 = sin(uTime * 4.0 + pos.y * 3.0) * 0.03;
+    float wobble2 = cos(uTime * 5.0 + pos.y * 2.0 + pos.x * 2.0) * 0.02;
+    float wobble3 = sin(uTime * 3.0 + pos.z * 4.0) * 0.02;
+
+    // Apply wobble to x and z (side-to-side jiggle)
+    pos.x += wobble1 + wobble2;
+    pos.z += wobble2 + wobble3;
+
+    // Squash and stretch based on height (bottom stays grounded)
+    float heightFactor = pos.y / 1.8;
+    float squash = sin(uTime * 6.0) * 0.08 * heightFactor;
+    float stretch = cos(uTime * 6.0) * 0.05;
+
+    pos.y += squash;
+    pos.x *= 1.0 + stretch * heightFactor;
+    pos.z *= 1.0 + stretch * heightFactor;
+
+    // Bounce effect when moving
+    float sinVal = sin(uTime * 8.0);
+    float bounce = (sinVal < 0.0 ? -sinVal : sinVal) * 0.05 * uSpeed;
+    pos.y += bounce * heightFactor;
+
+    // Bulge in middle (breathing effect)
+    float bulge = sin(uTime * 2.0) * 0.04 + 0.02;
+    float yDiff = pos.y - 0.9;
+    float midHeight = 1.0 - (yDiff < 0.0 ? -yDiff : yDiff) / 0.9;
+    pos.x *= 1.0 + bulge * midHeight;
+    pos.z *= 1.0 + bulge * midHeight;
+
+    gl_Position = uMVP * vec4(pos, 1.0);
+
+    // Wobbly normal for shiny jelly look
+    vec3 norm = aNormal;
+    norm.x += wobble1 * 2.0;
+    norm.z += wobble2 * 2.0;
+    vNormal = normalize(mat3(uModel) * norm);
+
+    vWorldPos = (uModel * vec4(pos, 1.0)).xyz;
     vColor = aColor;
 }
 )";
@@ -259,19 +301,37 @@ out vec4 fragColor;
 
 uniform vec3 uLightDir;
 uniform vec3 uCameraPos;
+uniform float uTime;
 
 void main() {
     vec3 normal = normalize(vNormal);
     vec3 lightDir = normalize(uLightDir);
 
-    float ambient = 0.4;
+    // Brighter ambient for jelly look
+    float ambient = 0.5;
     float diff = max(dot(normal, lightDir), 0.0);
 
     vec3 viewDir = normalize(uCameraPos - vWorldPos);
     vec3 reflectDir = reflect(-lightDir, normal);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 16.0) * 0.2;
 
-    vec3 finalColor = vColor * (ambient + diff * 0.6) + vec3(spec);
+    // Strong specular for shiny jelly surface
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0) * 0.6;
+
+    // Fresnel rim lighting for translucent jelly edge glow
+    float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 3.0);
+    vec3 rimColor = vColor * 1.5 + vec3(0.2, 0.3, 0.4);
+
+    // Subsurface scattering approximation - light from behind
+    float sss = max(dot(-viewDir, lightDir), 0.0) * 0.3;
+    vec3 sssColor = vColor * 1.2;
+
+    vec3 finalColor = vColor * (ambient + diff * 0.5);
+    finalColor += vec3(spec);  // Shiny highlights
+    finalColor += rimColor * fresnel * 0.4;  // Edge glow
+    finalColor += sssColor * sss;  // Backlight glow
+
+    // Slight color shift over time for extra jelly feel
+    finalColor += vec3(0.02) * sin(uTime * 2.0);
 
     // Distance fog
     float dist = length(uCameraPos - vWorldPos);
