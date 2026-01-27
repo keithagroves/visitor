@@ -32,6 +32,9 @@ SOURCES="
     $SRC_DIR/world/terrain.cpp
     $SRC_DIR/world/water.cpp
     $SRC_DIR/world/character.cpp
+    $SRC_DIR/world/skybox.cpp
+    $SRC_DIR/world/tree.cpp
+    $SRC_DIR/world/house.cpp
     $SRC_DIR/input/camera.cpp
     $SRC_DIR/input/crosshair.cpp
     $SRC_DIR/input/input.cpp

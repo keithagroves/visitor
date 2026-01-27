@@ -343,4 +343,168 @@ void main() {
 }
 )";
 
+// Skybox shader - procedural gradient sky with sun and clouds
+const char* skyboxVertex = R"(#version 300 es
+precision mediump float;
+
+layout(location = 0) in vec3 aPosition;
+
+out vec3 vDirection;
+
+uniform mat4 uMVP;
+
+void main() {
+    vDirection = aPosition;
+    vec4 pos = uMVP * vec4(aPosition, 1.0);
+    gl_Position = pos.xyww;  // Depth = 1.0 (far plane)
+}
+)";
+
+const char* skyboxFragment = R"(#version 300 es
+precision mediump float;
+
+in vec3 vDirection;
+out vec4 fragColor;
+
+uniform float uTime;
+uniform vec3 uSunDirection;
+
+// Simple noise for clouds
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i < 4; i++) {
+        sum += noise(p) * amp;
+        p *= 2.0;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+void main() {
+    vec3 dir = normalize(vDirection);
+
+    // Sky gradient
+    float y = dir.y * 0.5 + 0.5;
+    vec3 horizonColor = vec3(0.8, 0.85, 0.95);
+    vec3 zenithColor = vec3(0.4, 0.6, 0.9);
+    vec3 skyColor = mix(horizonColor, zenithColor, pow(y, 0.7));
+
+    // Sun
+    vec3 sunDir = normalize(uSunDirection);
+    float sunDot = max(dot(dir, sunDir), 0.0);
+    float sunDisc = smoothstep(0.995, 0.999, sunDot);
+    vec3 sunColor = vec3(1.0, 0.95, 0.8);
+    float sunGlow = pow(sunDot, 8.0) * 0.5;
+
+    // Clouds
+    if (dir.y > 0.0) {
+        vec2 cloudUV = dir.xz / (dir.y + 0.1) * 2.0;
+        cloudUV += uTime * 0.02;  // Slow cloud movement
+
+        float clouds = fbm(cloudUV * 1.5);
+        clouds = smoothstep(0.3, 0.7, clouds);
+
+        // Cloud color - white with slight blue tint in shadows
+        vec3 cloudColor = mix(vec3(0.9, 0.92, 0.95), vec3(1.0), clouds);
+        float cloudShadow = 1.0 - clouds * 0.3;
+
+        skyColor = mix(skyColor, cloudColor, clouds * 0.6 * smoothstep(0.0, 0.3, dir.y));
+    }
+
+    // Combine
+    skyColor += sunColor * sunDisc;
+    skyColor += sunColor * sunGlow;
+
+    // Slight fog near horizon
+    float horizonFog = 1.0 - smoothstep(0.0, 0.15, dir.y);
+    skyColor = mix(skyColor, horizonColor, horizonFog * 0.5);
+
+    fragColor = vec4(skyColor, 1.0);
+}
+)";
+
+// Tree shader - low poly trees with wind sway
+const char* treeVertex = R"(#version 300 es
+precision mediump float;
+
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec3 aColor;
+
+out vec3 vNormal;
+out vec3 vWorldPos;
+out vec3 vColor;
+
+uniform mat4 uMVP;
+uniform mat4 uModel;
+uniform float uTime;
+
+void main() {
+    vec3 pos = aPosition;
+
+    // Wind sway - stronger at top of tree
+    float windStrength = pos.y * 0.03;
+    float windX = sin(uTime * 1.5 + pos.x * 0.5) * windStrength;
+    float windZ = cos(uTime * 1.2 + pos.z * 0.5) * windStrength * 0.7;
+
+    pos.x += windX;
+    pos.z += windZ;
+
+    gl_Position = uMVP * vec4(pos, 1.0);
+    vNormal = mat3(uModel) * aNormal;
+    vWorldPos = (uModel * vec4(pos, 1.0)).xyz;
+    vColor = aColor;
+}
+)";
+
+const char* treeFragment = R"(#version 300 es
+precision mediump float;
+
+in vec3 vNormal;
+in vec3 vWorldPos;
+in vec3 vColor;
+
+out vec4 fragColor;
+
+uniform vec3 uLightDir;
+uniform vec3 uCameraPos;
+
+void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 lightDir = normalize(uLightDir);
+
+    // Ambient and diffuse
+    float ambient = 0.4;
+    float diff = max(dot(normal, lightDir), 0.0);
+
+    vec3 finalColor = vColor * (ambient + diff * 0.6);
+
+    // Distance fog
+    float dist = length(uCameraPos - vWorldPos);
+    float fogFactor = 1.0 - exp(-dist * 0.0015);
+    vec3 fogColor = vec3(0.7, 0.8, 0.95);
+    finalColor = mix(finalColor, fogColor, fogFactor);
+
+    fragColor = vec4(finalColor, 1.0);
+}
+)";
+
 } // namespace Shaders

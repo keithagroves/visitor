@@ -5,6 +5,8 @@
 #include <vector>
 #include "../math/vecmath.h"
 #include "../math/noise.h"
+#include "tree.h"
+#include "house.h"
 
 // Single terrain chunk
 class TerrainChunk {
@@ -21,6 +23,10 @@ public:
 
     int getChunkX() const { return chunkX; }
     int getChunkZ() const { return chunkZ; }
+
+    // Get raw height data for tree placement (0-1 range)
+    const float* getHeightData() const { return &heightMap[0][0]; }
+    static constexpr int getResolution() { return SIZE + 1; }
 
 private:
     int chunkX = 0;
@@ -56,10 +62,21 @@ public:
     void render(GLuint program, const Mat4& mvp, const Mat4& model,
                 const Vec3& lightDir, const Vec3& cameraPos, float time);
 
+    void renderTrees(GLuint program, const Mat4& viewProjection,
+                     const Vec3& lightDir, const Vec3& cameraPos, float time);
+
+    void renderHouses(GLuint program, const Mat4& viewProjection,
+                      const Vec3& lightDir, const Vec3& cameraPos, float time);
+
     float getHeightAt(float worldX, float worldZ) const;
+
+    TreeManager& getTreeManager() { return treeManager; }
+    HouseManager& getHouseManager() { return houseManager; }
 
 private:
     PerlinNoise noise;
+    TreeManager treeManager;
+    HouseManager houseManager;
     std::unordered_map<std::pair<int, int>, TerrainChunk*, ChunkCoordHash> chunks;
 
     int lastCameraChunkX = INT_MAX;

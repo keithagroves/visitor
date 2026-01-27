@@ -48,6 +48,40 @@ void TerrainChunk::generate(int cx, int cz, const PerlinNoise& noise) {
             h = (h + 1.0f) * 0.5f;
             h = powf(h, 1.5f);  // More contrast between valleys and peaks
 
+            // Make low areas more gradual while keeping mountains steep
+            // Raise the floor of valleys/low areas, compress the low range
+            float lowThreshold = 0.35f;  // Below this, terrain gets raised up
+            if (h < lowThreshold) {
+                // Raise low areas - this makes valleys shallower and slopes gentler
+                float t = h / lowThreshold;  // 0 to 1 range
+                // Square the ratio to compress lows more (raises them toward threshold)
+                float raised = t * t;
+                // Blend between raised value and a minimum floor
+                float minFloor = 0.08f;  // Minimum terrain height (keeps some water depth)
+                h = minFloor + raised * (lowThreshold - minFloor);
+            }
+
+            // Create variable shoreline steepness
+            // Use noise to vary how gradual the transition from water to land is
+            float shoreNoise = noise.octaveNoise(nx * 2 + 400, nz * 2 + 400, 2, 0.5f);
+            float shoreVariability = 0.3f + (shoreNoise + 1.0f) * 0.35f;  // Range 0.3 to 1.0
+
+            // Apply gradual shoreline - flatten terrain near water level
+            float waterLevel = 0.18f;  // Normalized water level
+            if (h < waterLevel + 0.15f && h > waterLevel - 0.1f) {
+                // Smoothly blend toward water level for gradual beaches
+                float distFromWater = h - waterLevel;
+                float beachWidth = 0.12f * shoreVariability;  // Variable beach width
+
+                if (distFromWater > 0 && distFromWater < beachWidth) {
+                    // Above water - create gradual slope up from beach
+                    float t = distFromWater / beachWidth;
+                    // Ease-in curve for gentle start, steeper further inland
+                    float easedT = t * t * (3.0f - 2.0f * t) * shoreVariability;
+                    h = waterLevel + easedT * beachWidth * 1.5f;
+                }
+            }
+
             // River generation - use separate noise layers for winding river paths
             // Rivers follow low-frequency noise patterns for natural meandering
             float riverNx = worldX * 0.001f;  // Very large scale for main river direction
@@ -61,23 +95,42 @@ void TerrainChunk::generate(int cx, int cz, const PerlinNoise& noise) {
             float river1 = noise.octaveNoise(riverNx * 3 + warpX, riverNz + warpZ, 2, 0.5f);
             float river2 = noise.octaveNoise(riverNx + warpZ, riverNz * 3 + warpX + 300, 2, 0.5f);
 
-            // Convert noise to river channel (sharp threshold for defined banks)
-            float riverWidth = 0.08f;  // Controls river width
-            float river1Strength = 1.0f - smoothstep(0.0f, riverWidth, fabsf(river1));
-            float river2Strength = 1.0f - smoothstep(0.0f, riverWidth, fabsf(river2));
-            float riverStrength = fmaxf(river1Strength, river2Strength);
+            // Wider river channels with gradual banks
+            float riverWidth = 0.06f;  // Core river width
+            float bankWidth = 0.12f;   // Gradual bank transition zone
+
+            // Calculate distance from river center (0 = center, 1 = edge of bank)
+            float dist1 = fabsf(river1);
+            float dist2 = fabsf(river2);
+
+            // River strength with gradual falloff for banks
+            // Core river (full strength) -> bank transition -> normal terrain
+            float river1Core = 1.0f - smoothstep(0.0f, riverWidth, dist1);
+            float river1Bank = 1.0f - smoothstep(riverWidth, riverWidth + bankWidth, dist1);
+            float river2Core = 1.0f - smoothstep(0.0f, riverWidth, dist2);
+            float river2Bank = 1.0f - smoothstep(riverWidth, riverWidth + bankWidth, dist2);
+
+            float riverCore = fmaxf(river1Core, river2Core);
+            float riverBank = fmaxf(river1Bank, river2Bank);
 
             // Only carve rivers in lower elevations (not through mountain peaks)
             float elevationFactor = 1.0f - smoothstep(0.4f, 0.7f, h);
-            riverStrength *= elevationFactor;
+            riverCore *= elevationFactor;
+            riverBank *= elevationFactor;
 
-            // Carve river into terrain - rivers cut down to water level
-            float riverDepth = 0.15f;  // How deep rivers cut
-            h = h - riverStrength * riverDepth;
+            // Gradual bank slopes - ease into the river
+            // Banks slope gently, core is flat at water level
+            float riverDepth = 0.12f;
+            float bankDepth = riverBank * riverDepth * 0.6f;  // Banks are shallower
+            float coreDepth = riverCore * riverDepth;
 
-            // Ensure river beds are below water level
-            if (riverStrength > 0.5f) {
-                h = fminf(h, 0.12f);  // Force below water line
+            // Apply smooth cubic easing for natural slope
+            float bankEased = riverBank * riverBank * (3.0f - 2.0f * riverBank);
+            h = h - bankEased * bankDepth - coreDepth;
+
+            // Ensure river core is below water level
+            if (riverCore > 0.6f) {
+                h = fminf(h, 0.10f);  // Force below water line
             }
 
             heightMap[z][x] = h;
@@ -208,6 +261,8 @@ ChunkedTerrain::~ChunkedTerrain() {
 
 void ChunkedTerrain::init(unsigned int seed) {
     noise = PerlinNoise(seed);
+    treeManager.init(seed);
+    houseManager.init(seed);
     printf("Chunked terrain initialized (seed: %u, render distance: %d chunks)\n",
            seed, RENDER_DISTANCE);
 }
@@ -227,6 +282,12 @@ void ChunkedTerrain::loadChunk(int chunkX, int chunkZ) {
     TerrainChunk* chunk = new TerrainChunk();
     chunk->generate(chunkX, chunkZ, noise);
     chunks[key] = chunk;
+
+    // Generate trees and houses for this chunk using raw height data (0-1 range)
+    const float* rawHeights = chunk->getHeightData();
+    int res = TerrainChunk::getResolution();
+    treeManager.updateForChunk(chunkX, chunkZ, rawHeights, res, TerrainChunk::WORLD_SIZE);
+    houseManager.updateForChunk(chunkX, chunkZ, rawHeights, res, TerrainChunk::WORLD_SIZE);
 }
 
 void ChunkedTerrain::unloadDistantChunks(int centerX, int centerZ) {
@@ -245,6 +306,8 @@ void ChunkedTerrain::unloadDistantChunks(int centerX, int centerZ) {
     for (auto& key : toRemove) {
         delete chunks[key];
         chunks.erase(key);
+        treeManager.clearChunk(key.first, key.second);
+        houseManager.clearChunk(key.first, key.second);
     }
 }
 
@@ -282,6 +345,16 @@ void ChunkedTerrain::render(GLuint program, const Mat4& mvp, const Mat4& model,
     for (auto& pair : chunks) {
         pair.second->render();
     }
+}
+
+void ChunkedTerrain::renderTrees(GLuint program, const Mat4& viewProjection,
+                                  const Vec3& lightDir, const Vec3& cameraPos, float time) {
+    treeManager.render(program, viewProjection, lightDir, cameraPos, time);
+}
+
+void ChunkedTerrain::renderHouses(GLuint program, const Mat4& viewProjection,
+                                   const Vec3& lightDir, const Vec3& cameraPos, float time) {
+    houseManager.render(program, viewProjection, lightDir, cameraPos, time);
 }
 
 float ChunkedTerrain::getHeightAt(float worldX, float worldZ) const {

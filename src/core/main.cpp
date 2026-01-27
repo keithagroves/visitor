@@ -10,6 +10,7 @@
 #include "../world/chunked_terrain.h"
 #include "../world/water.h"
 #include "../world/character.h"
+#include "../world/skybox.h"
 #include "../input/camera.h"
 #include "../input/crosshair.h"
 #include "../input/input.h"
@@ -38,6 +39,8 @@ struct App {
     GLuint underwaterProgram = 0;
     GLuint underwaterOverlayProgram = 0;
     GLuint characterProgram = 0;
+    GLuint skyboxProgram = 0;
+    GLuint treeProgram = 0;
 
     // Game objects
     ChunkedTerrain terrain;
@@ -45,6 +48,7 @@ struct App {
     Camera camera;
     Crosshair crosshair;
     Character character;
+    Skybox skybox;
     Player player;
 
     // Underwater overlay quad
@@ -76,6 +80,8 @@ void init() {
     app.underwaterProgram = Shader::createProgram(Shaders::underwaterVertex, Shaders::underwaterFragment);
     app.underwaterOverlayProgram = Shader::createProgram(Shaders::underwaterOverlayVertex, Shaders::underwaterOverlayFragment);
     app.characterProgram = Shader::createProgram(Shaders::characterVertex, Shaders::characterFragment);
+    app.skyboxProgram = Shader::createProgram(Shaders::skyboxVertex, Shaders::skyboxFragment);
+    app.treeProgram = Shader::createProgram(Shaders::treeVertex, Shaders::treeFragment);
 
     // Create fullscreen quad for underwater overlay
     float overlayQuad[] = {
@@ -104,6 +110,9 @@ void init() {
 
     // Generate character mesh
     app.character.generate();
+
+    // Generate skybox
+    app.skybox.generate();
 
     // Position player
     app.player.position = Vec3(0, 0, 0);
@@ -184,16 +193,25 @@ void update(float deltaTime) {
     // Get terrain height
     float terrainHeight = app.terrain.getHeightAt(app.player.position.x, app.player.position.z);
 
+    // Check if player walked off an edge (terrain dropped below them)
+    if (app.player.isGrounded && app.player.position.y > terrainHeight + 0.1f) {
+        app.player.isGrounded = false;
+        app.player.verticalVelocity = 0.0f;  // Start falling from current position
+    }
+
     // Jump input
     if (Input::isKeyDown(Input::KEY_SPACE) && app.player.isGrounded) {
         app.player.verticalVelocity = Player::JUMP_FORCE;
         app.player.isGrounded = false;
     }
 
-    // Apply gravity
+    // Apply gravity when not grounded
     if (!app.player.isGrounded) {
         app.player.verticalVelocity -= Player::GRAVITY * deltaTime;
         app.player.position.y += app.player.verticalVelocity * deltaTime;
+    } else {
+        // When grounded, follow terrain height smoothly
+        app.player.position.y = terrainHeight;
     }
 
     // Ground collision
@@ -256,8 +274,26 @@ void render(float time) {
     }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    // Draw skybox first (only if above water)
+    if (!isUnderwater) {
+        // Skybox needs view matrix without translation
+        Mat4 skyView = view;
+        skyView.m[12] = 0;  // Remove translation
+        skyView.m[13] = 0;
+        skyView.m[14] = 0;
+        Mat4 skyMvp = projection * skyView;
+        app.skybox.render(app.skyboxProgram, skyMvp, lightDir, time);
+    }
+
     // Draw terrain
     app.terrain.render(app.terrainProgram, mvp, model, lightDir, cameraPos, time);
+
+    // Draw trees
+    Mat4 viewProjection = projection * view;
+    app.terrain.renderTrees(app.treeProgram, viewProjection, lightDir, cameraPos, time);
+
+    // Draw houses (using tree shader - works for any vertex-colored mesh)
+    app.terrain.renderHouses(app.treeProgram, viewProjection, lightDir, cameraPos, time);
 
     // Draw character (blobby jelly)
     glUseProgram(app.characterProgram);
