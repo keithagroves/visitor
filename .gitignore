@@ -1,0 +1,31 @@
+# Build output
+build/
+*.wasm
+*.js
+!build.sh
+
+# Emscripten SDK (large, install separately)
+emsdk/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Object files
+*.o
+*.obj
+
+# Debug
+*.dSYM/
+emsdk
