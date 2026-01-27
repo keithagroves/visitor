@@ -240,7 +240,7 @@ void TreeManager::updateForChunk(int chunkX, int chunkZ, const float* heightData
     float worldOffsetZ = chunkZ * chunkSize;
 
     // Scatter trees using deterministic random
-    int treesPerChunk = 2000;  // Dense but not overwhelming
+    int treesPerChunk = 900;  // Moderate forest density
     float spacing = chunkSize / 60.0f;  // Slightly more spread out
 
     for (int i = 0; i < treesPerChunk * 3; i++) {  // Try more times than needed
