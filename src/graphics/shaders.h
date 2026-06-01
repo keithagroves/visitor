@@ -134,6 +134,28 @@ void main() {
 }
 )";
 
+// Debug line shader for 3D lines
+const char* debugLineVertex = R"(#version 300 es
+layout(location = 0) in vec3 aPosition;
+
+uniform mat4 uMVP;
+
+void main() {
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+}
+)";
+
+const char* debugLineFragment = R"(#version 300 es
+precision mediump float;
+out vec4 fragColor;
+
+uniform vec3 uColor;
+
+void main() {
+    fragColor = vec4(uColor, 1.0);
+}
+)";
+
 // Underwater surface - view from below
 const char* underwaterVertex = R"(#version 300 es
 layout(location = 0) in vec3 aPosition;
@@ -452,6 +474,7 @@ layout(location = 2) in vec3 aColor;
 out vec3 vNormal;
 out vec3 vWorldPos;
 out vec3 vColor;
+out vec3 vLocalPos;
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
@@ -471,6 +494,7 @@ void main() {
     gl_Position = uMVP * vec4(pos, 1.0);
     vNormal = mat3(uModel) * aNormal;
     vWorldPos = (uModel * vec4(pos, 1.0)).xyz;
+    vLocalPos = aPosition;  // Original local position for texturing
     vColor = aColor;
 }
 )";
@@ -481,27 +505,194 @@ precision mediump float;
 in vec3 vNormal;
 in vec3 vWorldPos;
 in vec3 vColor;
+in vec3 vLocalPos;
 
 out vec4 fragColor;
 
 uniform vec3 uLightDir;
 uniform vec3 uCameraPos;
+uniform float uTime;
+uniform float uHighlight;
+
+// Pseudo-random hash functions
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float hash(vec3 p) {
+    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+// Value noise
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);  // Smoothstep
+    
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float noise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    
+    float n = mix(
+        mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x),
+            mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+        mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+            mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y),
+        f.z);
+    return n;
+}
+
+// Fractal Brownian Motion
+float fbm(vec2 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    for (int i = 0; i < octaves; i++) {
+        value += amplitude * noise(p);
+        p *= 2.0;
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
+float fbm(vec3 p, int octaves) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    for (int i = 0; i < octaves; i++) {
+        value += amplitude * noise(p);
+        p *= 2.0;
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
+// Bark texture - vertical grooves with noise
+vec3 barkTexture(vec3 pos) {
+    // Base bark colors
+    vec3 darkBark = vec3(0.25, 0.15, 0.08);
+    vec3 lightBark = vec3(0.45, 0.30, 0.18);
+    vec3 midBark = vec3(0.35, 0.22, 0.12);
+    
+    // Vertical groove pattern
+    float angle = atan(pos.z, pos.x);
+    float grooves = sin(angle * 12.0 + pos.y * 3.0) * 0.5 + 0.5;
+    grooves = pow(grooves, 0.7);
+    
+    // Add noise for natural variation
+    float n1 = fbm(pos * 8.0, 3);
+    float n2 = fbm(pos * 20.0 + 100.0, 2);
+    
+    // Horizontal rings (subtle)
+    float rings = sin(pos.y * 15.0 + n1 * 2.0) * 0.5 + 0.5;
+    rings = smoothstep(0.3, 0.7, rings) * 0.3;
+    
+    // Combine patterns
+    float pattern = grooves * 0.6 + n1 * 0.3 + rings;
+    pattern += n2 * 0.15;  // Fine detail
+    
+    // Mix colors based on pattern
+    vec3 color = mix(darkBark, lightBark, pattern);
+    color = mix(color, midBark, n1 * 0.5);
+    
+    return color;
+}
+
+// Leaf/foliage texture - clustered look with variation
+vec3 foliageTexture(vec3 pos, vec3 baseColor) {
+    // Determine if this is green (foliage) by checking the base color
+    float greenness = baseColor.g - max(baseColor.r, baseColor.b);
+    
+    // Multi-scale noise for leaf clusters
+    float n1 = fbm(pos * 5.0, 3);
+    float n2 = noise(pos * 15.0);
+    float n3 = noise(pos * 30.0);
+    
+    // Create leaf cluster pattern
+    float clusters = smoothstep(0.3, 0.7, n1);
+    
+    // Color variations for leaves
+    vec3 darkGreen = vec3(0.08, 0.28, 0.06);
+    vec3 midGreen = vec3(0.12, 0.38, 0.10);
+    vec3 lightGreen = vec3(0.18, 0.48, 0.14);
+    vec3 yellowGreen = vec3(0.25, 0.45, 0.12);
+    
+    // Mix greens based on noise
+    vec3 leafColor = mix(darkGreen, midGreen, n1);
+    leafColor = mix(leafColor, lightGreen, n2 * 0.5);
+    leafColor = mix(leafColor, yellowGreen, smoothstep(0.6, 0.9, n3) * 0.3);
+    
+    // Add subtle highlights on outer edges (fake subsurface)
+    float edge = 1.0 - abs(dot(normalize(pos), vec3(0, 1, 0)));
+    leafColor += vec3(0.05, 0.08, 0.02) * edge * n2;
+    
+    // Small dark spots (depth/shadow between leaves)
+    float spots = smoothstep(0.4, 0.45, n3);
+    leafColor = mix(leafColor, darkGreen * 0.7, spots * 0.4);
+    
+    return leafColor;
+}
 
 void main() {
     vec3 normal = normalize(vNormal);
     vec3 lightDir = normalize(uLightDir);
+    
+    // Detect if trunk (brown) or foliage (green) based on vertex color
+    float isTrunk = step(vColor.g, vColor.r + 0.1);  // Brown has more red than green
+    
+    // Apply procedural textures
+    vec3 texColor;
+    if (isTrunk > 0.5) {
+        texColor = barkTexture(vLocalPos);
+    } else {
+        texColor = foliageTexture(vLocalPos + vWorldPos * 0.1, vColor);
+    }
 
-    // Ambient and diffuse
-    float ambient = 0.4;
+    // Lighting
+    float ambient = 0.35;
     float diff = max(dot(normal, lightDir), 0.0);
+    
+    // Softer shadows for foliage (fake subsurface scattering)
+    if (isTrunk < 0.5) {
+        diff = diff * 0.7 + 0.3;  // Lift shadows on leaves
+    }
 
-    vec3 finalColor = vColor * (ambient + diff * 0.6);
+    vec3 finalColor = texColor * (ambient + diff * 0.65);
+    
+    // Subtle rim lighting for depth
+    vec3 viewDir = normalize(uCameraPos - vWorldPos);
+    float rim = 1.0 - max(dot(viewDir, normal), 0.0);
+    rim = pow(rim, 3.0) * 0.15;
+    finalColor += rim * vec3(0.6, 0.7, 0.5);
 
     // Distance fog
     float dist = length(uCameraPos - vWorldPos);
     float fogFactor = 1.0 - exp(-dist * 0.0015);
     vec3 fogColor = vec3(0.7, 0.8, 0.95);
     finalColor = mix(finalColor, fogColor, fogFactor);
+
+    // Highlight effect when targeted
+    if (uHighlight > 0.5) {
+        // Pulsing glow effect
+        float pulse = sin(uTime * 4.0) * 0.5 + 0.5;
+
+        // Bright outline/glow
+        vec3 highlightColor = vec3(1.0, 0.9, 0.5);  // Golden yellow
+
+        // Add glow to the whole tree
+        finalColor = mix(finalColor, highlightColor, 0.3 + pulse * 0.2);
+
+        // Extra bright rim
+        float highlightRim = pow(rim, 1.5) * 0.8;
+        finalColor += highlightColor * highlightRim * (0.8 + pulse * 0.4);
+    }
 
     fragColor = vec4(finalColor, 1.0);
 }

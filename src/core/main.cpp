@@ -41,6 +41,11 @@ struct App {
     GLuint characterProgram = 0;
     GLuint skyboxProgram = 0;
     GLuint treeProgram = 0;
+    GLuint debugLineProgram = 0;
+
+    // Debug ray visualization
+    GLuint debugLineVao = 0;
+    GLuint debugLineVbo = 0;
 
     // Game objects
     ChunkedTerrain terrain;
@@ -82,6 +87,16 @@ void init() {
     app.characterProgram = Shader::createProgram(Shaders::characterVertex, Shaders::characterFragment);
     app.skyboxProgram = Shader::createProgram(Shaders::skyboxVertex, Shaders::skyboxFragment);
     app.treeProgram = Shader::createProgram(Shaders::treeVertex, Shaders::treeFragment);
+    app.debugLineProgram = Shader::createProgram(Shaders::debugLineVertex, Shaders::debugLineFragment);
+
+    // Create debug line VAO/VBO (will update vertices each frame)
+    glGenVertexArrays(1, &app.debugLineVao);
+    glGenBuffers(1, &app.debugLineVbo);
+    glBindVertexArray(app.debugLineVao);
+    glBindBuffer(GL_ARRAY_BUFFER, app.debugLineVbo);
+    glBufferData(GL_ARRAY_BUFFER, 6 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
 
     // Create fullscreen quad for underwater overlay
     float overlayQuad[] = {
@@ -288,9 +303,46 @@ void render(float time) {
     // Draw terrain
     app.terrain.render(app.terrainProgram, mvp, model, lightDir, cameraPos, time);
 
+    // Get look direction for tree targeting
+    Vec3 lookDir = app.camera.getLookDirection();
+
+    // Find tree in crosshairs - start from player position, not camera
+    // Use player eye level (position + some height offset)
+    Vec3 playerEyePos = Vec3(
+        app.player.position.x,
+        app.player.position.y + 1.5f,  // Eye level
+        app.player.position.z
+    );
+    bool hasTargetedTree = false;
+    float rayLength = 5.0f;
+    Vec3 targetedTreePos = app.terrain.findTreeInCrosshairs(playerEyePos, lookDir, rayLength, hasTargetedTree);
+
+    // Draw debug ray
+    {
+        Vec3 rayEnd = Vec3(
+            playerEyePos.x + lookDir.x * rayLength,
+            playerEyePos.y + lookDir.y * rayLength,
+            playerEyePos.z + lookDir.z * rayLength
+        );
+        float lineVertices[] = {
+            playerEyePos.x, playerEyePos.y, playerEyePos.z,
+            rayEnd.x, rayEnd.y, rayEnd.z
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, app.debugLineVbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(lineVertices), lineVertices);
+
+        glUseProgram(app.debugLineProgram);
+        glUniformMatrix4fv(glGetUniformLocation(app.debugLineProgram, "uMVP"), 1, GL_FALSE, mvp.m);
+        glUniform3f(glGetUniformLocation(app.debugLineProgram, "uColor"), 1.0f, 0.0f, 0.0f);  // Red ray
+
+        glBindVertexArray(app.debugLineVao);
+        glLineWidth(2.0f);
+        glDrawArrays(GL_LINES, 0, 2);
+    }
+
     // Draw trees
     Mat4 viewProjection = projection * view;
-    app.terrain.renderTrees(app.treeProgram, viewProjection, lightDir, cameraPos, time);
+    app.terrain.renderTrees(app.treeProgram, viewProjection, lightDir, cameraPos, time, targetedTreePos, hasTargetedTree);
 
     // Draw houses (using tree shader - works for any vertex-colored mesh)
     app.terrain.renderHouses(app.treeProgram, viewProjection, lightDir, cameraPos, time);

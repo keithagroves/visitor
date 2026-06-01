@@ -38,10 +38,13 @@ public:
     void init(unsigned int seed);
     void updateForChunk(int chunkX, int chunkZ, const float* heightData, int resolution, float chunkSize);
     void render(GLuint program, const Mat4& viewProjection, const Vec3& lightDir,
-                const Vec3& cameraPos, float time);
+                const Vec3& cameraPos, float time, const Vec3& highlightPos, bool hasHighlight);
 
     // Clear trees for a chunk
     void clearChunk(int chunkX, int chunkZ);
+
+    // Find tree in crosshairs (returns position, sets found flag)
+    Vec3 findTreeInCrosshairs(const Vec3& cameraPos, const Vec3& lookDir, float maxDist, bool& found);
 
 private:
     Tree treeMesh;

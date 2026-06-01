@@ -348,8 +348,13 @@ void ChunkedTerrain::render(GLuint program, const Mat4& mvp, const Mat4& model,
 }
 
 void ChunkedTerrain::renderTrees(GLuint program, const Mat4& viewProjection,
-                                  const Vec3& lightDir, const Vec3& cameraPos, float time) {
-    treeManager.render(program, viewProjection, lightDir, cameraPos, time);
+                                  const Vec3& lightDir, const Vec3& cameraPos, float time,
+                                  const Vec3& highlightPos, bool hasHighlight) {
+    treeManager.render(program, viewProjection, lightDir, cameraPos, time, highlightPos, hasHighlight);
+}
+
+Vec3 ChunkedTerrain::findTreeInCrosshairs(const Vec3& cameraPos, const Vec3& lookDir, float maxDist, bool& found) {
+    return treeManager.findTreeInCrosshairs(cameraPos, lookDir, maxDist, found);
 }
 
 void ChunkedTerrain::renderHouses(GLuint program, const Mat4& viewProjection,

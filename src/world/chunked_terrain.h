@@ -63,7 +63,11 @@ public:
                 const Vec3& lightDir, const Vec3& cameraPos, float time);
 
     void renderTrees(GLuint program, const Mat4& viewProjection,
-                     const Vec3& lightDir, const Vec3& cameraPos, float time);
+                     const Vec3& lightDir, const Vec3& cameraPos, float time,
+                     const Vec3& highlightPos, bool hasHighlight);
+
+    // Find tree in crosshairs
+    Vec3 findTreeInCrosshairs(const Vec3& cameraPos, const Vec3& lookDir, float maxDist, bool& found);
 
     void renderHouses(GLuint program, const Mat4& viewProjection,
                       const Vec3& lightDir, const Vec3& cameraPos, float time);

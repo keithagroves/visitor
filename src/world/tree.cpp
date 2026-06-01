@@ -319,8 +319,45 @@ void TreeManager::updateForChunk(int chunkX, int chunkZ, const float* heightData
     }
 }
 
+Vec3 TreeManager::findTreeInCrosshairs(const Vec3& cameraPos, const Vec3& lookDir, float maxDist, bool& found) {
+    found = false;
+    Vec3 bestTree;
+    float bestDist = maxDist;
+
+    for (const auto& chunkPair : chunkTrees) {
+        for (const auto& tree : chunkPair.second.trees) {
+            // Vector from camera to tree base
+            Vec3 toTree = Vec3(tree.position.x - cameraPos.x,
+                               tree.position.y + 2.0f * tree.scale - cameraPos.y,  // Aim at tree center
+                               tree.position.z - cameraPos.z);
+
+            float dist = sqrtf(toTree.x * toTree.x + toTree.y * toTree.y + toTree.z * toTree.z);
+            if (dist > maxDist || dist < 1.0f) continue;
+
+            // Normalize toTree
+            Vec3 toTreeNorm = Vec3(toTree.x / dist, toTree.y / dist, toTree.z / dist);
+
+            // Dot product with look direction
+            float dot = lookDir.x * toTreeNorm.x + lookDir.y * toTreeNorm.y + lookDir.z * toTreeNorm.z;
+
+            // Check if tree is roughly in crosshairs (within ~5 degree cone)
+            // cos(5 degrees) ≈ 0.996, but we'll be more generous
+            float threshold = 0.97f - (dist / maxDist) * 0.05f;  // Easier to hit closer trees
+
+            if (dot > threshold && dist < bestDist) {
+                bestDist = dist;
+                bestTree = tree.position;
+                found = true;
+            }
+        }
+    }
+
+    return bestTree;
+}
+
 void TreeManager::render(GLuint program, const Mat4& viewProjection,
-                         const Vec3& lightDir, const Vec3& cameraPos, float time) {
+                         const Vec3& lightDir, const Vec3& cameraPos, float time,
+                         const Vec3& highlightPos, bool hasHighlight) {
     glUseProgram(program);
 
     glUniform3f(glGetUniformLocation(program, "uLightDir"), lightDir.x, lightDir.y, lightDir.z);
@@ -329,6 +366,7 @@ void TreeManager::render(GLuint program, const Mat4& viewProjection,
 
     GLint mvpLoc = glGetUniformLocation(program, "uMVP");
     GLint modelLoc = glGetUniformLocation(program, "uModel");
+    GLint highlightLoc = glGetUniformLocation(program, "uHighlight");
 
     // Render each tree instance
     for (const auto& chunkPair : chunkTrees) {
@@ -338,6 +376,16 @@ void TreeManager::render(GLuint program, const Mat4& viewProjection,
             float dz = tree.position.z - cameraPos.z;
             float distSq = dx * dx + dz * dz;
             if (distSq > 500.0f * 500.0f) continue;  // Skip distant trees
+
+            // Check if this tree is highlighted
+            float isHighlighted = 0.0f;
+            if (hasHighlight) {
+                float hdx = tree.position.x - highlightPos.x;
+                float hdz = tree.position.z - highlightPos.z;
+                if (hdx * hdx + hdz * hdz < 1.0f) {
+                    isHighlighted = 1.0f;
+                }
+            }
 
             // Build model matrix
             Mat4 model;
@@ -376,6 +424,7 @@ void TreeManager::render(GLuint program, const Mat4& viewProjection,
 
             glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, mvp.m);
             glUniformMatrix4fv(modelLoc, 1, GL_FALSE, sr.m);
+            glUniform1f(highlightLoc, isHighlighted);
 
             treeMesh.render();
         }
