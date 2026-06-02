@@ -30,4 +30,8 @@ float getMouseDeltaX();
 float getMouseDeltaY();
 void resetMouseDelta();
 
+// Accumulated wheel delta (deltaY) since the last reset, for manual zoom.
+float getWheelDelta();
+void resetWheelDelta();
+
 } // namespace Input

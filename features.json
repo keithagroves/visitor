@@ -1,0 +1,122 @@
+{
+  "project": "Cow Abductor — C++/WebGL port",
+  "source_app": "/Users/keithgroves/projects/games/cow-abductor (p5.js)",
+  "status_legend": {
+    "done": "Implemented and verified",
+    "partial": "Basic version in place; missing pieces noted",
+    "todo": "Not started"
+  },
+  "categories": [
+    {
+      "name": "Engine & Rendering",
+      "features": [
+        { "id": "build-pipeline",   "title": "C++ -> Emscripten -> WebGL2/WASM build", "status": "done" },
+        { "id": "renderer-2d",      "title": "Batched 2D renderer (transform stack, blend modes)", "status": "done" },
+        { "id": "gradient-tris",    "title": "Per-vertex color triangles for soft gradients", "status": "done" },
+        { "id": "math-lib",         "title": "Vec2 / Mat3 affine / degree trig", "status": "done" },
+        { "id": "game-loop",        "title": "Main loop + game-state machine", "status": "partial", "note": "Has PLAYING/LANDED/CRASHED; missing WAITING start screen and GAMEOVER/win." },
+        { "id": "starfield",        "title": "Starfield background", "status": "partial", "note": "Static screen-space stars only; original adds parallax depth, static bg layer, constellations, star-temperature colors." }
+      ]
+    },
+    {
+      "name": "Flight Physics",
+      "features": [
+        { "id": "gravity",          "title": "1/r^2 gravity", "status": "partial", "note": "Single planet; multi-body summation is stubbed for one body." },
+        { "id": "thrust-rotate",    "title": "Thrust + smoothed rotation", "status": "done" },
+        { "id": "atmo-drag",        "title": "Atmospheric drag with substepping", "status": "done" },
+        { "id": "vel-clamp",        "title": "Top-speed clamp", "status": "done" },
+        { "id": "trajectory",       "title": "Coast trajectory prediction", "status": "done", "note": "Long-horizon predictor; shown as space aid." },
+        { "id": "hull-heat",        "title": "Hull heat / re-entry burn / burn-through crash", "status": "todo" },
+        { "id": "parachute",        "title": "Parachute descent brake (C key)", "status": "todo" },
+        { "id": "orbits",           "title": "Planet orbits (kinematic + gravity-driven)", "status": "todo" }
+      ]
+    },
+    {
+      "name": "World",
+      "features": [
+        { "id": "planet-terrain",   "title": "Procedural terrain (mountain ranges, inverse-CDF sampling)", "status": "done" },
+        { "id": "atmosphere",       "title": "Atmosphere shell + Rayleigh/Mie arc-ring shader", "status": "done", "note": "Fullscreen shader pass: Gaussian arc/ring band, day/night terminator drift, blue Rayleigh + warm Mie sunset. Sun lens-flare not ported; multi-planet covered by solar-system." },
+        { "id": "surface-texture",  "title": "Surface texture (snow caps / grass / rock by altitude)", "status": "todo" },
+        { "id": "water",            "title": "Sea level + water rendering + underwater state", "status": "todo" },
+        { "id": "bg-ridges",        "title": "Parallax background ridge silhouettes", "status": "todo" },
+        { "id": "clouds",           "title": "FBM cloud shader layer", "status": "done", "note": "Fullscreen shader pass: FBM density in a low-altitude band, Beer's-law opacity, sun-direction shading, gentle drift." },
+        { "id": "solar-system",     "title": "Multiple planets + moon + sun", "status": "todo" },
+        { "id": "base",             "title": "Home base / launch pad", "status": "todo" }
+      ]
+    },
+    {
+      "name": "Camera",
+      "features": [
+        { "id": "follow",           "title": "Velocity-predictive follow", "status": "done" },
+        { "id": "roll",             "title": "Auto-roll so gravity points screen-down", "status": "done" },
+        { "id": "altitude-zoom",    "title": "Altitude-based framing", "status": "done" },
+        { "id": "user-zoom",        "title": "Manual zoom (wheel + keys)", "status": "done" },
+        { "id": "overview-mode",    "title": "Overview/system map mode (M)", "status": "todo" }
+      ]
+    },
+    {
+      "name": "Entities",
+      "features": [
+        { "id": "lander",           "title": "Player lander (hull + flame)", "status": "done" },
+        { "id": "cow",              "title": "Cow (onGround/carried/falling/stowed)", "status": "done" },
+        { "id": "plant",            "title": "Plant (growable, abductable)", "status": "todo" },
+        { "id": "mineral",          "title": "Mineral (intact/abductable)", "status": "todo" },
+        { "id": "stick-person",     "title": "Stick person abductable", "status": "todo" },
+        { "id": "alien",            "title": "Decorative ground alien", "status": "todo" },
+        { "id": "terrisaur",        "title": "Terrisaur enemy (spear thrower)", "status": "todo" }
+      ]
+    },
+    {
+      "name": "Gameplay Loop",
+      "features": [
+        { "id": "tractor-beam",     "title": "Tractor beam abduction", "status": "done" },
+        { "id": "cargo",            "title": "Cargo / max-cargo capacity", "status": "done" },
+        { "id": "score",            "title": "Score", "status": "done" },
+        { "id": "landing-crash",    "title": "Safe-landing vs crash judgment (speed/tilt/slope)", "status": "done" },
+        { "id": "fuel",             "title": "Fuel burn + out-of-fuel handling", "status": "done" },
+        { "id": "deliver",          "title": "Deliver cargo at base + refuel", "status": "todo" },
+        { "id": "research",         "title": "Research / delivered counters + delivery goal (win)", "status": "todo" },
+        { "id": "shop",             "title": "Upgrades / shop (fuel, beam, cargo)", "status": "todo" },
+        { "id": "discoveries",      "title": "Body discovery on approach", "status": "todo" },
+        { "id": "laser",            "title": "Click-to-zap laser", "status": "todo" },
+        { "id": "spears",           "title": "Terrisaur spears (incoming hazards)", "status": "todo" },
+        { "id": "time-scale",       "title": "Time-scale control slider", "status": "todo" }
+      ]
+    },
+    {
+      "name": "Effects",
+      "features": [
+        { "id": "thrust-flame",     "title": "Thruster flame", "status": "done", "note": "Particle/vector flame; original also has fluid plume." },
+        { "id": "beam-fx",          "title": "Tractor beam visuals (gradient cone, stripes, dust, splat)", "status": "done" },
+        { "id": "ship-beacon",      "title": "Far-view blinking ship beacon", "status": "done", "note": "Port addition for the zoomed-out view." },
+        { "id": "heading-arrow",    "title": "Far-view heading arrow (while steering)", "status": "done", "note": "Port addition." },
+        { "id": "crash-debris",     "title": "Crash particles / hull debris", "status": "todo" },
+        { "id": "splash",           "title": "Water splash particles", "status": "todo" },
+        { "id": "fluid-plume",      "title": "Stable-fluids exhaust plume (GPU)", "status": "todo" },
+        { "id": "burn-fluid",       "title": "Re-entry burn wake (GPU fluid)", "status": "todo" },
+        { "id": "ship-shader",      "title": "Shader-rendered alien hull", "status": "todo" }
+      ]
+    },
+    {
+      "name": "HUD & UI",
+      "features": [
+        { "id": "fuel-gauge",       "title": "Fuel gauge", "status": "done" },
+        { "id": "readouts-core",    "title": "Altitude / velocity / cargo / score readouts", "status": "done" },
+        { "id": "status-msg",       "title": "LANDED / CRASHED status messages", "status": "done" },
+        { "id": "debug-panel",      "title": "Live debug tuning panel (localStorage)", "status": "partial", "note": "9 core knobs; original has more (heat, burn, fluid toggles, spacing, etc.)." },
+        { "id": "heat-gauge",       "title": "Hull-heat gauge", "status": "todo" },
+        { "id": "atmo-readout",     "title": "Atmosphere % + drag readout", "status": "todo" },
+        { "id": "minimap",          "title": "Minimap with trajectory", "status": "todo" },
+        { "id": "objective-hud",    "title": "Objective + nearest-body + event messages", "status": "todo" },
+        { "id": "start-screen",     "title": "WAITING start screen", "status": "todo" }
+      ]
+    },
+    {
+      "name": "Audio",
+      "features": [
+        { "id": "thruster-sound",   "title": "WebAudio thruster synth", "status": "todo" },
+        { "id": "music",            "title": "Background music", "status": "todo" }
+      ]
+    }
+  ]
+}

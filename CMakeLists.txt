@@ -4,9 +4,15 @@ project(WebGLGame)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Source files
+# Source files (build.sh is the primary build; this mirrors its source list)
 set(SOURCES
-    src/main.cpp
+    src/core/main.cpp
+    src/graphics/shader.cpp
+    src/graphics/renderer2d.cpp
+    src/world/planet.cpp
+    src/entities/lander.cpp
+    src/entities/cow.cpp
+    src/input/input.cpp
 )
 
 add_executable(game ${SOURCES})

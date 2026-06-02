@@ -53,10 +53,256 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        /* ---- HUD overlay (driven from C++ via window.updateHUD) ---- */
+        #hud {
+            position: fixed;
+            top: 14px;
+            left: 14px;
+            padding: 12px 14px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+            font-size: 13px;
+            color: #e8eef5;
+            pointer-events: none;
+            user-select: none;
+            z-index: 50;
+            min-width: 200px;
+        }
+        #hud .gauge {
+            width: 200px;
+            height: 12px;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            overflow: hidden;
+            margin: 4px 0 10px;
+        }
+        #hud .gauge-fill {
+            height: 100%;
+            width: 100%;
+            background: #50c878;
+            transition: width 0.08s linear;
+        }
+        #hud .row { display: flex; justify-content: space-between; line-height: 1.5; }
+        #hud .label { color: #9fb3c8; }
+
+        #message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 26px;
+            font-weight: 700;
+            text-align: center;
+            color: #fff;
+            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+            pointer-events: none;
+            user-select: none;
+            z-index: 60;
+            display: none;
+            line-height: 1.4;
+        }
+        #message .sub { font-size: 16px; font-weight: 400; opacity: 0.85; }
+
+        /* ---- Debug panel ---- */
+        #debug-toggle {
+            position: fixed;
+            bottom: 14px;
+            left: 14px;
+            z-index: 70;
+            background: rgba(0, 0, 0, 0.55);
+            color: #cfe3f5;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            padding: 6px 11px;
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        #debug-toggle:hover { background: rgba(0, 0, 0, 0.75); }
+        #debug-panel {
+            position: fixed;
+            bottom: 50px;
+            left: 14px;
+            z-index: 70;
+            width: 290px;
+            max-height: 72vh;
+            overflow-y: auto;
+            background: rgba(10, 14, 20, 0.93);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 12px 14px;
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+            font-size: 12px;
+            color: #dde6f0;
+            display: none;
+        }
+        #debug-panel h3 {
+            font-size: 12px; font-weight: 600; letter-spacing: 0.6px;
+            color: #9fb3c8; margin-bottom: 10px;
+        }
+        .dbg-row { margin-bottom: 11px; }
+        .dbg-head { display: flex; justify-content: space-between; margin-bottom: 3px; }
+        .dbg-head .val { color: #7fd3ff; }
+        .dbg-row input[type=range] { width: 100%; accent-color: #50c0e0; }
+        #debug-reset {
+            margin-top: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            color: #dde6f0;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 5px;
+            padding: 6px 9px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+        }
+        #debug-reset:hover { background: rgba(255, 255, 255, 0.16); }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
+
+    <div id="hud">
+        <div class="label">FUEL <span id="hud-fuel">0/0</span></div>
+        <div class="gauge"><div id="hud-fuel-fill" class="gauge-fill"></div></div>
+        <div class="row"><span class="label">Altitude</span><span id="hud-alt">0</span></div>
+        <div class="row"><span class="label">Velocity</span><span id="hud-vel">0.0</span></div>
+        <div class="row"><span class="label">Cargo</span><span id="hud-cargo">0/3</span></div>
+        <div class="row"><span class="label">Score</span><span id="hud-score">0</span></div>
+        <div class="row"><span class="label">Status</span><span id="hud-status">FLYING</span></div>
+    </div>
+
+    <div id="message"></div>
+
+    <button id="debug-toggle">&#9776; Debug</button>
+    <div id="debug-panel">
+        <h3>DEBUG</h3>
+        <div id="debug-rows"></div>
+        <button id="debug-reset">Reset to defaults</button>
+    </div>
+
+    <script>
+        // window.DBG holds the live tunables; main.cpp reads it each frame via
+        // EM_ASM. Defined immediately (before the wasm runtime starts) so the
+        // first frame already sees real values. Persisted to localStorage.
+        (function () {
+            var DEFAULTS = {
+                thrust: 0.15, maxFuel: 250, beamRange: 300, beamWidth: 20,
+                planetDensity: 0.03, atmosphereScale: 1.0, atmosphereDrag: 0.015,
+                atmRayleighH: 1.0, atmMieH: 11.0, atmSunIntensity: 20.0, atmExtinction: 8.0,
+                cameraGroundZoom: 2.0, cameraFraming: 0.4
+            };
+            var PARAMS = [
+                { key: 'thrust',           label: 'Thrust',               min: 0.01,  max: 0.5,  step: 0.005 },
+                { key: 'maxFuel',          label: 'Max Fuel',             min: 100,   max: 1000, step: 25 },
+                { key: 'beamRange',        label: 'Beam Range',           min: 50,    max: 800,  step: 10 },
+                { key: 'beamWidth',        label: 'Beam Width',           min: 5,     max: 200,  step: 1 },
+                { key: 'planetDensity',    label: 'Planet Density (gravity)', min: 0.005, max: 0.2, step: 0.005 },
+                { key: 'atmosphereScale',  label: 'Atmosphere Thickness', min: 0.1,   max: 3.0,  step: 0.05 },
+                { key: 'atmosphereDrag',   label: 'Atmosphere Drag',      min: 0,     max: 0.2,  step: 0.005 },
+                { key: 'atmRayleighH',     label: 'Sky: Rayleigh Falloff',min: 1,     max: 12,   step: 0.5 },
+                { key: 'atmMieH',          label: 'Sky: Haze Falloff',    min: 2,     max: 20,   step: 0.5 },
+                { key: 'atmSunIntensity',  label: 'Sky: Sun Intensity',   min: 5,     max: 60,   step: 1 },
+                { key: 'atmExtinction',    label: 'Sky: Sunset Extinction',min: 1,    max: 20,   step: 0.5 },
+                { key: 'cameraGroundZoom', label: 'Cam Ground Zoom',      min: 0.2,   max: 4.0,  step: 0.05 },
+                { key: 'cameraFraming',    label: 'Cam Framing',          min: 0.05,  max: 1.5,  step: 0.05 }
+            ];
+            var STORE_KEY = 'rocket:debug';
+
+            var DBG = Object.assign({}, DEFAULTS);
+            try {
+                var saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+                for (var k in DEFAULTS) if (typeof saved[k] === 'number') DBG[k] = saved[k];
+            } catch (e) {}
+            window.DBG = DBG;
+
+            function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(DBG)); } catch (e) {} }
+            function fmt(v) { return (Math.round(v * 1000) / 1000).toString(); }
+
+            function build() {
+                var rows = document.getElementById('debug-rows');
+                PARAMS.forEach(function (p) {
+                    var row = document.createElement('div'); row.className = 'dbg-row';
+                    var head = document.createElement('div'); head.className = 'dbg-head';
+                    var lab = document.createElement('span'); lab.textContent = p.label;
+                    var val = document.createElement('span'); val.className = 'val'; val.textContent = fmt(DBG[p.key]);
+                    head.appendChild(lab); head.appendChild(val);
+                    var inp = document.createElement('input');
+                    inp.type = 'range'; inp.min = p.min; inp.max = p.max; inp.step = p.step; inp.value = DBG[p.key];
+                    inp.addEventListener('input', function () {
+                        DBG[p.key] = parseFloat(inp.value); val.textContent = fmt(DBG[p.key]); save();
+                    });
+                    p._input = inp; p._val = val;
+                    row.appendChild(head); row.appendChild(inp); rows.appendChild(row);
+                });
+                document.getElementById('debug-toggle').addEventListener('click', function () {
+                    var panel = document.getElementById('debug-panel');
+                    panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+                });
+                document.getElementById('debug-reset').addEventListener('click', function () {
+                    PARAMS.forEach(function (p) {
+                        DBG[p.key] = DEFAULTS[p.key];
+                        p._input.value = DEFAULTS[p.key];
+                        p._val.textContent = fmt(DEFAULTS[p.key]);
+                    });
+                    save();
+                });
+            }
+            if (document.readyState !== 'loading') build();
+            else document.addEventListener('DOMContentLoaded', build);
+        })();
+    </script>
+
+    <script>
+        (function () {
+            var fuelEl = null, fuelFill = null, altEl = null, velEl = null,
+                cargoEl = null, scoreEl = null, statusEl = null, msgEl = null;
+            function cache() {
+                fuelEl = document.getElementById('hud-fuel');
+                fuelFill = document.getElementById('hud-fuel-fill');
+                altEl = document.getElementById('hud-alt');
+                velEl = document.getElementById('hud-vel');
+                cargoEl = document.getElementById('hud-cargo');
+                scoreEl = document.getElementById('hud-score');
+                statusEl = document.getElementById('hud-status');
+                msgEl = document.getElementById('message');
+            }
+            // state: 0 = playing, 1 = landed, 2 = crashed
+            window.updateHUD = function (fuel, maxFuel, altitude, velocity, state, cargo, maxCargo, score) {
+                if (!fuelEl) cache();
+                var f = Math.max(0, Math.round(fuel));
+                var mf = Math.round(maxFuel);
+                var frac = mf > 0 ? f / mf : 0;
+                fuelEl.textContent = f + '/' + mf;
+                fuelFill.style.width = (frac * 100) + '%';
+                // Green when full, ambering as it drains, red near empty.
+                fuelFill.style.background =
+                    frac > 0.5 ? '#50c878' : frac > 0.2 ? '#e6a23c' : '#e05a4a';
+                altEl.textContent = Math.round(altitude);
+                velEl.textContent = velocity.toFixed(1);
+                cargoEl.textContent = cargo + '/' + maxCargo;
+                scoreEl.textContent = score;
+
+                if (state === 1) {
+                    statusEl.textContent = 'LANDED';
+                    statusEl.style.color = '#7fe3a0';
+                    msgEl.style.display = 'block';
+                    msgEl.innerHTML = 'LANDED SAFELY<div class="sub">press W to lift off</div>';
+                } else if (state === 2) {
+                    statusEl.textContent = 'CRASHED';
+                    statusEl.style.color = '#ff7a6c';
+                    msgEl.style.display = 'block';
+                    msgEl.innerHTML = 'CRASHED<div class="sub">press R to restart</div>';
+                } else {
+                    statusEl.textContent = 'FLYING';
+                    statusEl.style.color = '#e8eef5';
+                    msgEl.style.display = 'none';
+                }
+            };
+        })();
+    </script>
 
     <div id="status">
         <span class="spinner"></span>

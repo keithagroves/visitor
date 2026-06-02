@@ -28,15 +28,10 @@ mkdir -p "$BUILD_DIR"
 SOURCES="
     $SRC_DIR/core/main.cpp
     $SRC_DIR/graphics/shader.cpp
-    $SRC_DIR/world/chunked_terrain.cpp
-    $SRC_DIR/world/terrain.cpp
-    $SRC_DIR/world/water.cpp
-    $SRC_DIR/world/character.cpp
-    $SRC_DIR/world/skybox.cpp
-    $SRC_DIR/world/tree.cpp
-    $SRC_DIR/world/house.cpp
-    $SRC_DIR/input/camera.cpp
-    $SRC_DIR/input/crosshair.cpp
+    $SRC_DIR/graphics/renderer2d.cpp
+    $SRC_DIR/world/planet.cpp
+    $SRC_DIR/entities/lander.cpp
+    $SRC_DIR/entities/cow.cpp
     $SRC_DIR/input/input.cpp
 "
 

@@ -7,6 +7,111 @@ using std::sinf;
 using std::cosf;
 using std::floorf;
 using std::powf;
+using std::atan2f;
+using std::acosf;
+
+// Degrees-based trig so the port can keep the original p5.js angle conventions
+// (angleMode(DEGREES)) one-to-one. The world is a 2D plane with +y pointing
+// DOWN on screen, exactly like p5: rotate(deg) then reads as clockwise.
+static constexpr float DEG2RAD = 3.14159265358979323846f / 180.0f;
+static constexpr float RAD2DEG = 180.0f / 3.14159265358979323846f;
+inline float sind(float deg) { return sinf(deg * DEG2RAD); }
+inline float cosd(float deg) { return cosf(deg * DEG2RAD); }
+inline float atan2d(float y, float x) { return atan2f(y, x) * RAD2DEG; }
+inline float acosd(float c) {
+    if (c < -1.0f) c = -1.0f;
+    if (c > 1.0f) c = 1.0f;
+    return acosf(c) * RAD2DEG;
+}
+
+struct Vec2 {
+    float x, y;
+
+    Vec2(float x = 0, float y = 0) : x(x), y(y) {}
+
+    Vec2 operator+(const Vec2& v) const { return Vec2(x + v.x, y + v.y); }
+    Vec2 operator-(const Vec2& v) const { return Vec2(x - v.x, y - v.y); }
+    Vec2 operator*(float s) const { return Vec2(x * s, y * s); }
+    Vec2 operator-() const { return Vec2(-x, -y); }
+    Vec2& operator+=(const Vec2& v) { x += v.x; y += v.y; return *this; }
+    Vec2& operator-=(const Vec2& v) { x -= v.x; y -= v.y; return *this; }
+    Vec2& operator*=(float s) { x *= s; y *= s; return *this; }
+
+    float length() const { return sqrtf(x * x + y * y); }
+    float lengthSq() const { return x * x + y * y; }
+
+    Vec2 normalize() const {
+        float len = length();
+        return len > 0 ? Vec2(x / len, y / len) : Vec2();
+    }
+
+    float dot(const Vec2& v) const { return x * v.x + y * v.y; }
+};
+
+inline float dist(float ax, float ay, float bx, float by) {
+    float dx = bx - ax, dy = by - ay;
+    return sqrtf(dx * dx + dy * dy);
+}
+
+// 3x3 affine matrix for 2D transforms (row-major). Bottom row is implicitly
+// (0,0,1). Point transform applies p' = M * [x, y, 1]. Composition follows the
+// p5/canvas convention: current = current * op, so the most-recently-pushed
+// transform applies first to a vertex (innermost local space).
+struct Mat3 {
+    float m[9];
+
+    Mat3() { identity(); }
+
+    void identity() {
+        m[0] = 1; m[1] = 0; m[2] = 0;
+        m[3] = 0; m[4] = 1; m[5] = 0;
+        m[6] = 0; m[7] = 0; m[8] = 1;
+    }
+
+    static Mat3 translation(float tx, float ty) {
+        Mat3 r;
+        r.m[2] = tx;
+        r.m[5] = ty;
+        return r;
+    }
+
+    static Mat3 scaling(float sx, float sy) {
+        Mat3 r;
+        r.m[0] = sx;
+        r.m[4] = sy;
+        return r;
+    }
+
+    // Rotation by degrees (clockwise on screen because +y is down).
+    static Mat3 rotation(float deg) {
+        float c = cosd(deg), s = sind(deg);
+        Mat3 r;
+        r.m[0] = c; r.m[1] = -s;
+        r.m[3] = s; r.m[4] = c;
+        return r;
+    }
+
+    Mat3 operator*(const Mat3& b) const {
+        Mat3 r;
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 3; col++) {
+                r.m[row * 3 + col] =
+                    m[row * 3 + 0] * b.m[0 * 3 + col] +
+                    m[row * 3 + 1] * b.m[1 * 3 + col] +
+                    m[row * 3 + 2] * b.m[2 * 3 + col];
+            }
+        }
+        return r;
+    }
+
+    Vec2 transform(float x, float y) const {
+        return Vec2(
+            m[0] * x + m[1] * y + m[2],
+            m[3] * x + m[4] * y + m[5]
+        );
+    }
+    Vec2 transform(const Vec2& p) const { return transform(p.x, p.y); }
+};
 
 struct Vec3 {
     float x, y, z;
