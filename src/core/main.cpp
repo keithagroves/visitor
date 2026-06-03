@@ -45,9 +45,12 @@ uniform float u_atmoRadius[MAX_PLANETS];
 uniform vec2 u_sunPos;
 uniform float u_time;
 uniform float u_rayleighH;
+uniform float u_rimH;
 uniform float u_mieH;
 uniform float u_sunIntensity;
 uniform float u_extinction;
+uniform float u_diskFill;   // 0 = sky ring around the planet; 1 = fill the planet disk (from space)
+uniform float u_overlay;    // disk-fill strength (0 near the surface -> 1 in space)
 out vec4 fragColor;
 
 // Scattering coefficients (relative), adapted from Maxime Heckel's sky article.
@@ -74,13 +77,23 @@ void main() {
     float r = u_planetRadius[i];
     float ra = u_atmoRadius[i];
     float dist = length(d);
-    if (dist >= ra || dist <= r) continue;
+    if (dist >= ra) continue;
+    bool inDisk = dist <= r;
+    // Two render modes for the same sky: the ring pass (u_diskFill 0) draws the
+    // sky around/behind the planet; the disk pass (u_diskFill 1) continues that
+    // same sky inward over the planet face so, from space, it reads as a full
+    // atmosphere sphere. Each pass skips the other's region.
+    if (u_diskFill < 0.5 && inDisk) continue;
+    if (u_diskFill > 0.5 && !inDisk) continue;
 
-    // Altitude through the slab, with separate Rayleigh/Mie density profiles:
-    // blue air thins slowly with height, haze hugs the surface. This is the
-    // "all the layers" banding.
-    float h = (dist - r) / max(ra - r, 0.0001);
-    float densR = exp(-h * u_rayleighH);
+    // Altitude through the slab. Rayleigh blue is the sum of two bands: a
+    // surface-dense one (blue overhead near the ground, falloff u_rayleighH) and
+    // an inverted rim-dense one (blue toward space, falloff u_rimH). Tune the two
+    // falloffs to set where each sits and where they meet in the middle. Mie haze
+    // hugs the surface (warm band / sunset low). Over the disk we sit at the
+    // surface (h = 0), the densest, bluest sky.
+    float h = inDisk ? 0.0 : (dist - r) / max(ra - r, 0.0001);
+    float densR = exp(-h * u_rayleighH) + exp(-(1.0 - h) * u_rimH);
     float densM = exp(-h * u_mieH);
 
     // Directional sun: the light arrives as parallel rays from the sun's
@@ -110,7 +123,32 @@ void main() {
     // Opacity comes from how much lit air is in front (density on the day side),
     // so the bright day sky fully hides the stars and thins to clear up high and
     // on the night side.
-    float opacity = clamp(dayNight * (densR * 0.8 + densM * 0.6) * 1.8, 0.0, 1.0);
+    float opacity = dayNight * (densR * 0.8 + densM * 0.6) * 1.8;
+
+    // Night side: a faint, almost-transparent dark blue (shaped by the same
+    // density) so the atmosphere shell stays visible against space instead of
+    // going fully black — you can see where the atmosphere ends.
+    float night = 1.0 - dayNight;
+    col += vec3(0.03, 0.06, 0.14) * densR * night;
+    opacity += night * clamp(densR, 0.0, 1.0) * 0.22;
+
+    opacity = clamp(opacity, 0.0, 1.0);
+    // Over the planet disk we paint a CLEAN, COMPLETE sky sphere rather than
+    // reusing the edge-on scattering (whose Mie glint + terminator band smear an
+    // ugly streak across a flat face). A smooth day/night blue, a gentle
+    // sun-facing brightening, and a brighter atmospheric limb that melds into the
+    // halo ring so there's no hard seam. Coverage is the altitude crossfade
+    // itself (uniform), so the planet dissolves into a solid sky sphere.
+    if (inDisk) {
+      float dr = dist / r;                       // 0 at center .. 1 at the limb
+      float sunFace = clamp(sunDot, 0.0, 1.0);
+      vec3 dayCol   = vec3(0.30, 0.50, 0.95);
+      vec3 nightCol = vec3(0.02, 0.04, 0.10);
+      vec3 base = mix(nightCol, dayCol, dayNight) * (0.75 + 0.45 * sunFace);
+      base += vec3(0.18, 0.32, 0.60) * smoothstep(0.82, 1.0, dr);  // limb glow
+      col = base * u_overlay;
+      opacity = u_overlay;
+    }
     accumCol += min(col, vec3(1.3)) * (1.0 - accumA);
     accumA   += opacity * (1.0 - accumA);
   }
@@ -132,6 +170,9 @@ uniform vec2 u_planetPos[MAX_PLANETS];
 uniform float u_planetInnerR[MAX_PLANETS];
 uniform float u_planetOuterR[MAX_PLANETS];
 uniform vec2 u_sunPos;
+uniform float u_coverage;   // 0 = clear sky, 1 = overcast
+uniform float u_falloff;    // how much coverage thins with altitude (0 = none, 1 = clears up high)
+uniform float u_overlay;    // cloud deck over the planet disk (0 near surface -> 1 in space)
 out vec4 fragColor;
 
 const float CLOUD_DRIFT = 0.004;
@@ -162,13 +203,36 @@ void main() {
     vec2 d = world - u_planetPos[i];
     float dist = length(d);
     float innerR = u_planetInnerR[i], outerR = u_planetOuterR[i];
-    if (dist <= innerR || dist >= outerR) continue;
+    if (dist >= outerR) continue;
+    bool inDisk = dist <= innerR;
+    // Over the planet disk the cloud band has no thickness to traverse, so we
+    // render it as a deck seen from above, faded in with altitude (u_overlay) so
+    // the clouds continue across the planet face only once you're out in space.
+    if (inDisk && u_overlay <= 0.0) continue;
 
-    float h = (dist - innerR) / (outerR - innerR);
-    float altDensity = smoothstep(0.0, 0.25, h) * (1.0 - smoothstep(0.7, 1.0, h));
+    float h = inDisk ? 0.5 : (dist - innerR) / (outerR - innerR);
+    // Disk deck fades IN with altitude; the edge-on shell band fades OUT, so from
+    // space you see clouds over the planet face, not a ring floating in space.
+    float altDensity = inDisk
+        ? u_overlay
+        : smoothstep(0.0, 0.25, h) * (1.0 - smoothstep(0.7, 1.0, h)) * (1.0 - u_overlay);
     vec2 local = d;
     float density = fbm(local * 0.0008 + vec2(u_time * CLOUD_DRIFT, u_time * CLOUD_DRIFT * 0.4));
-    density = smoothstep(0.50, 0.74, density) * altDensity;
+    // Large-scale, slowly-drifting "weather" field so coverage isn't uniform
+    // around the planet: big clear patches and overcast regions. u_coverage is
+    // the average; the weather term pushes local coverage above/below it.
+    float weather = fbm(local * 0.00011 + vec2(u_time * CLOUD_DRIFT * 0.18, 7.3));
+    weather = smoothstep(0.30, 0.72, weather);
+    float localCoverage = clamp(u_coverage * (0.25 + 1.6 * weather), 0.0, 1.0);
+    // Coverage peaks in the mid cloud band and thins toward BOTH the surface and
+    // the top of the band, so clouds don't pile up on the ground or up high.
+    // u_falloff sets how strongly the two edges thin out.
+    float bump = 4.0 * h * (1.0 - h);   // 1.0 at mid-band, 0.0 at both edges
+    localCoverage *= mix(1.0, bump, u_falloff);
+    // Coverage shifts the noise threshold: high coverage lets more of the FBM
+    // field through (overcast); low coverage keeps only the densest puffs.
+    float lo = mix(0.78, 0.22, localCoverage);
+    density = smoothstep(lo, lo + 0.24, density) * altDensity;
     if (density <= 0.0) continue;
 
     float alpha = 1.0 - exp(-density * 3.5);
@@ -380,6 +444,25 @@ static Vec2 sunWorldPos(float t) {
     return Vec2(p.center.x + dir.x * R, p.center.y + dir.y * R);
 }
 
+// How strongly the sky + clouds fill the planet disk, as a function of the
+// ship's altitude: 0 near the surface (so the ground stays clear in front of
+// you) ramping to gDebug.spaceHaze once you're clearly out in space. This makes
+// the atmosphere read as a full sphere with the planet showing through.
+static float spaceOverlay() {
+    const Planet& p = app.planet;
+    float dx = app.lander.pos.x - p.center.x;
+    float dy = app.lander.pos.y - p.center.y;
+    float distC = sqrtf(dx * dx + dy * dy);
+    float thickness = p.atmosphereOuterRadius() - p.baseRadius;
+    float altFrac = (distC - p.baseRadius) / (thickness > 1.0f ? thickness : 1.0f);
+    // Crossfade across the upper atmosphere so the sky is a complete circle right
+    // as you exit at the atmosphere top (altFrac ~ 1.0).
+    float ramp = altFrac <= 0.55f ? 0.0f
+               : altFrac >= 1.0f  ? 1.0f
+               : (altFrac - 0.55f) / (1.0f - 0.55f);
+    return ramp * gDebug.spaceHaze;
+}
+
 static void drawCloudsPass(float t) {
     const int N = SHADER_MAX_PLANETS;
     float pos[N * 2] = {0}, innerR[N] = {0}, outerR[N] = {0};
@@ -387,7 +470,7 @@ static void drawCloudsPass(float t) {
     pos[0] = p.center.x; pos[1] = p.center.y;
     float mountainTop = p.baseRadius + p.noiseIntensity * 1.05f;
     innerR[0] = p.baseRadius;
-    outerR[0] = mountainTop + (p.atmosphereOuterRadius() - mountainTop) * 0.35f;
+    outerR[0] = mountainTop + (p.atmosphereOuterRadius() - mountainTop) * gDebug.cloudHeight;
 
     GLuint pr = app.cloudProgram;
     glUseProgram(pr);
@@ -397,6 +480,9 @@ static void drawCloudsPass(float t) {
     glUniform2fv(glGetUniformLocation(pr, "u_planetPos"), N, pos);
     glUniform1fv(glGetUniformLocation(pr, "u_planetInnerR"), N, innerR);
     glUniform1fv(glGetUniformLocation(pr, "u_planetOuterR"), N, outerR);
+    glUniform1f(glGetUniformLocation(pr, "u_coverage"), gDebug.cloudCoverage);
+    glUniform1f(glGetUniformLocation(pr, "u_falloff"), gDebug.cloudFalloff);
+    glUniform1f(glGetUniformLocation(pr, "u_overlay"), spaceOverlay());
     Vec2 sunW = sunWorldPos(t);
     glUniform2f(glGetUniformLocation(pr, "u_sunPos"), sunW.x, sunW.y);  // sun on the atmosphere edge
 
@@ -406,14 +492,17 @@ static void drawCloudsPass(float t) {
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-static void drawAtmospherePass(float t) {
+// diskFill: false = sky ring around/behind the planet (drawn before the planet);
+// true = continue that sky over the planet disk (drawn after it), altitude-gated.
+static void drawAtmospherePass(float t, bool diskFill) {
     const int N = SHADER_MAX_PLANETS;
     float pos[N * 2] = {0}, prad[N] = {0}, arad[N] = {0};
     const Planet& p = app.planet;
     pos[0] = p.center.x; pos[1] = p.center.y;
     // Slab runs from the base radius (so the sky gradient reaches the surface)
-    // up to the atmosphere top.
-    prad[0] = p.baseRadius;
+    // up to the atmosphere top. The disk pass fills to the mountain top instead,
+    // so the jagged terrain rim is covered too and the planet reads as a sphere.
+    prad[0] = diskFill ? (p.baseRadius + p.noiseIntensity * 1.05f) : p.baseRadius;
     arad[0] = p.atmosphereOuterRadius();
 
     GLuint pr = app.atmoProgram;
@@ -425,9 +514,12 @@ static void drawAtmospherePass(float t) {
     glUniform1fv(glGetUniformLocation(pr, "u_planetRadius"), N, prad);
     glUniform1fv(glGetUniformLocation(pr, "u_atmoRadius"), N, arad);
     glUniform1f(glGetUniformLocation(pr, "u_rayleighH"), gDebug.atmRayleighH);
+    glUniform1f(glGetUniformLocation(pr, "u_rimH"), gDebug.atmRimH);
     glUniform1f(glGetUniformLocation(pr, "u_mieH"), gDebug.atmMieH);
     glUniform1f(glGetUniformLocation(pr, "u_sunIntensity"), gDebug.atmSunIntensity);
     glUniform1f(glGetUniformLocation(pr, "u_extinction"), gDebug.atmExtinction);
+    glUniform1f(glGetUniformLocation(pr, "u_diskFill"), diskFill ? 1.0f : 0.0f);
+    glUniform1f(glGetUniformLocation(pr, "u_overlay"), diskFill ? spaceOverlay() : 0.0f);
     Vec2 sunW = sunWorldPos(t);
     glUniform2f(glGetUniformLocation(pr, "u_sunPos"), sunW.x, sunW.y);  // sun on the atmosphere edge
 
@@ -661,9 +753,14 @@ static void syncDebugFromJS() {
     gDebug.atmosphereScale  = EM_ASM_DOUBLE({ return window.DBG.atmosphereScale; });
     gDebug.atmosphereDrag   = EM_ASM_DOUBLE({ return window.DBG.atmosphereDrag; });
     gDebug.atmRayleighH     = EM_ASM_DOUBLE({ return window.DBG.atmRayleighH; });
+    gDebug.atmRimH          = EM_ASM_DOUBLE({ return window.DBG.atmRimH; });
     gDebug.atmMieH          = EM_ASM_DOUBLE({ return window.DBG.atmMieH; });
     gDebug.atmSunIntensity  = EM_ASM_DOUBLE({ return window.DBG.atmSunIntensity; });
     gDebug.atmExtinction    = EM_ASM_DOUBLE({ return window.DBG.atmExtinction; });
+    gDebug.cloudHeight      = EM_ASM_DOUBLE({ return window.DBG.cloudHeight; });
+    gDebug.cloudCoverage    = EM_ASM_DOUBLE({ return window.DBG.cloudCoverage; });
+    gDebug.cloudFalloff     = EM_ASM_DOUBLE({ return window.DBG.cloudFalloff; });
+    gDebug.spaceHaze        = EM_ASM_DOUBLE({ return window.DBG.spaceHaze; });
     gDebug.cameraGroundZoom = EM_ASM_DOUBLE({ return window.DBG.cameraGroundZoom; });
     gDebug.cameraFraming    = EM_ASM_DOUBLE({ return window.DBG.cameraFraming; });
 
@@ -753,21 +850,30 @@ static void mainLoop() {
     drawStars();
     app.renderer.end();
 
-    // 2) Atmosphere gradient — this is the SKY, so it sits behind the planet,
-    //    ship, and clouds (over the stars it washes out).
-    drawAtmospherePass(shaderTime);
+    // 2) Atmosphere sky RING — behind the planet, around its limb (the planet
+    //    body draws over the lower sky / mountains as before).
+    drawAtmospherePass(shaderTime, false);
 
-    // 3) Solid scene + ship, in front of the sky.
+    // 3) Solid planet + surface, in front of the sky.
     app.renderer.begin(viewMat, app.width, app.height);
     app.planet.draw(app.renderer);
     for (const Cow& cow : app.cows) cow.draw(app.renderer, app.planet);
+    app.renderer.end();
+
+    // 3b) Atmosphere sky DISK — continue that same sky over the planet face so,
+    //     from space, it reads as a full sphere with the planet showing through.
+    //     Altitude-gated, so on the surface the ground stays clear.
+    drawAtmospherePass(shaderTime, true);
+
+    // 3c) Ship + space aids stay crisp on top of the sky.
+    app.renderer.begin(viewMat, app.width, app.height);
     if (spaceAids) drawTrajectory();
     app.lander.drawBeam(app.renderer);
+    app.lander.draw(app.renderer);   // always draw the actual ship
     if (spaceAids) {
+        // In space the ship is sub-pixel, so overlay a locator beacon on top of it.
         drawShipBeacon();
         if (steering) drawHeadingArrow();
-    } else {
-        app.lander.draw(app.renderer);
     }
     app.renderer.end();
 
@@ -775,7 +881,7 @@ static void mainLoop() {
     drawCloudsPass(shaderTime);
 
     // 5) The sun, glowing on the atmosphere's sunward limb (additive, on top).
-    drawSun(shaderTime, viewMat);
+    // drawSun(shaderTime, viewMat);
 
     // Push HUD state to the DOM overlay (defined in shell.html).
     EM_ASM({

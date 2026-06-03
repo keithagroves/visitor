@@ -313,6 +313,7 @@ void Lander::predictTrajectory(const Planet& planet, std::vector<Vec2>& out) con
     float terrainReach = planet.baseRadius + planet.noiseIntensity;
 
     Vec2 sp = pos, sv = vel;
+    out.push_back(sp);   // anchor the line at the ship itself
     // Don't terminate on the body we're currently inside the bounding radius of
     // (e.g. just after lift-off); only stop once we've left it and re-entered.
     bool outside = dist(sp.x, sp.y, planet.center.x, planet.center.y) > planet.baseRadius;

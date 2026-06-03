@@ -189,10 +189,11 @@
         // first frame already sees real values. Persisted to localStorage.
         (function () {
             var DEFAULTS = {
-                thrust: 0.15, maxFuel: 250, beamRange: 300, beamWidth: 20,
-                planetDensity: 0.03, atmosphereScale: 1.0, atmosphereDrag: 0.015,
-                atmRayleighH: 1.0, atmMieH: 11.0, atmSunIntensity: 20.0, atmExtinction: 8.0,
-                cameraGroundZoom: 2.0, cameraFraming: 0.4
+                thrust: 0.07, maxFuel: 250, beamRange: 300, beamWidth: 20,
+                planetDensity: 0.025, atmosphereScale: 0.4, atmosphereDrag: 0.015,
+                atmRayleighH: 1.5, atmRimH: 7.5, atmMieH: 2.0, atmSunIntensity: 44.0, atmExtinction: 4.5,
+                cloudHeight: 0.8, cloudCoverage: 1.0, cloudFalloff: 0.65, spaceHaze: 1.0,
+                cameraGroundZoom: 0.2, cameraFraming: 0.4
             };
             var PARAMS = [
                 { key: 'thrust',           label: 'Thrust',               min: 0.01,  max: 0.5,  step: 0.005 },
@@ -202,11 +203,16 @@
                 { key: 'planetDensity',    label: 'Planet Density (gravity)', min: 0.005, max: 0.2, step: 0.005 },
                 { key: 'atmosphereScale',  label: 'Atmosphere Thickness', min: 0.1,   max: 3.0,  step: 0.05 },
                 { key: 'atmosphereDrag',   label: 'Atmosphere Drag',      min: 0,     max: 0.2,  step: 0.005 },
-                { key: 'atmRayleighH',     label: 'Sky: Rayleigh Falloff',min: 1,     max: 12,   step: 0.5 },
-                { key: 'atmMieH',          label: 'Sky: Haze Falloff',    min: 2,     max: 20,   step: 0.5 },
+                { key: 'atmRayleighH',     label: 'Sky: Surface Blue Falloff', min: 1, max: 12,  step: 0.5 },
+                { key: 'atmRimH',          label: 'Sky: Space Blue Falloff',   min: 1, max: 12,  step: 0.5 },
+                { key: 'atmMieH',          label: 'Sky: Haze Falloff',    min: 0.5,   max: 20,   step: 0.5 },
                 { key: 'atmSunIntensity',  label: 'Sky: Sun Intensity',   min: 5,     max: 60,   step: 1 },
                 { key: 'atmExtinction',    label: 'Sky: Sunset Extinction',min: 1,    max: 20,   step: 0.5 },
-                { key: 'cameraGroundZoom', label: 'Cam Ground Zoom',      min: 0.2,   max: 4.0,  step: 0.05 },
+                { key: 'cloudHeight',      label: 'Cloud Height',         min: 0.05,  max: 1.0,  step: 0.05 },
+                { key: 'cloudCoverage',    label: 'Cloud Coverage',       min: 0.0,   max: 1.0,  step: 0.05 },
+                { key: 'cloudFalloff',     label: 'Cloud Edge Falloff',   min: 0.0,   max: 1.0,  step: 0.05 },
+                { key: 'spaceHaze',        label: 'Space Sky Fill (over planet)', min: 0.0, max: 1.0, step: 0.05 },
+                { key: 'cameraGroundZoom', label: 'Cam Ground Zoom',      min: 0.05,  max: 4.0,  step: 0.05 },
                 { key: 'cameraFraming',    label: 'Cam Framing',          min: 0.05,  max: 1.5,  step: 0.05 }
             ];
             var STORE_KEY = 'rocket:debug';
