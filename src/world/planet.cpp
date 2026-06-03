@@ -105,6 +105,14 @@ float Planet::surfaceRadius(float angle) const {
     return baseRadius;
 }
 
+float Planet::maxSurfaceRadius() const {
+    float maxR = baseRadius;
+    for (const auto& p : landscape) {
+        if (p.r > maxR) maxR = p.r;
+    }
+    return maxR;
+}
+
 float Planet::atmosphericDensity(float x, float y) const {
     float dx = x - center.x;
     float dy = y - center.y;

@@ -23,6 +23,9 @@ struct Debug {
     float cloudCoverage = 1.0f;    // cloud density / coverage (0 = clear, 1 = overcast)
     float cloudFalloff = 0.65f;    // how strongly coverage thins toward both band edges (0 = none, 1 = clouds only mid-band)
     float spaceHaze = 1.0f;        // max strength of the sky/cloud fill over the planet disk from space (1 = solid sky circle, 0 = planet stays bare)
+    // Day/night terminator on the planet body (see the terminator shader in main.cpp).
+    float nightDarkness = 0.16f;   // brightness of the deepest night side (0 = pitch black, 1 = no darkening)
+    float nightSoftness = 0.30f;   // half-width of the terminator band in sunDot units (higher = softer, more gradual)
     float cameraGroundZoom = 0.2f;
     float cameraFraming = 0.4f;
 };

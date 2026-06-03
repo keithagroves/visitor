@@ -30,6 +30,7 @@ public:
     // Surface radius at a given angle (degrees), interpolated along the
     // silhouette. Mirrors getSurfaceRadius() in sketch.js.
     float surfaceRadius(float angleDeg) const;
+    float maxSurfaceRadius() const;
 
     // 0..1 atmospheric density at a world point (1 at surface, 0 at the top).
     float atmosphericDensity(float x, float y) const;

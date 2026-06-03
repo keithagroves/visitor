@@ -49,9 +49,24 @@ uniform float u_rimH;
 uniform float u_mieH;
 uniform float u_sunIntensity;
 uniform float u_extinction;
-uniform float u_diskFill;   // 0 = sky ring around the planet; 1 = fill the planet disk (from space)
-uniform float u_overlay;    // disk-fill strength (0 near the surface -> 1 in space)
+uniform float u_overlay;        // planet-face sky fill (0 near the surface -> 1 in space)
+uniform sampler2D u_terrainTex; // 2048x1: terrain radius per angle (the silhouette)
 out vec4 fragColor;
+
+#define TERRAIN_N 2048
+
+// Terrain (surface) radius at a given outward direction, sampled from the
+// silhouette LUT with linear wrap so the sky meets the ground exactly.
+float terrainRadius(vec2 outward) {
+  float ang = degrees(atan(outward.y, outward.x));
+  if (ang < 0.0) ang += 360.0;
+  float fidx = ang / 360.0 * float(TERRAIN_N);
+  int i0 = int(fidx) % TERRAIN_N;
+  int i1 = (i0 + 1) % TERRAIN_N;
+  float frac = fract(fidx);
+  return mix(texelFetch(u_terrainTex, ivec2(i0, 0), 0).r,
+             texelFetch(u_terrainTex, ivec2(i1, 0), 0).r, frac);
+}
 
 // Scattering coefficients (relative), adapted from Maxime Heckel's sky article.
 const vec3 BETA_R = vec3(0.0058, 0.0135, 0.0331);    // Rayleigh: blue scatters most
@@ -74,81 +89,68 @@ void main() {
     if (i >= u_planetCount) break;
     vec2 pc = u_planetPos[i];
     vec2 d = world - pc;
-    float r = u_planetRadius[i];
-    float ra = u_atmoRadius[i];
+    float baseR = u_planetRadius[i];      // base radius (sky-gradient reference)
+    float atmoR = u_atmoRadius[i];        // top of the atmosphere
     float dist = length(d);
-    if (dist >= ra) continue;
-    bool inDisk = dist <= r;
-    // Two render modes for the same sky: the ring pass (u_diskFill 0) draws the
-    // sky around/behind the planet; the disk pass (u_diskFill 1) continues that
-    // same sky inward over the planet face so, from space, it reads as a full
-    // atmosphere sphere. Each pass skips the other's region.
-    if (u_diskFill < 0.5 && inDisk) continue;
-    if (u_diskFill > 0.5 && !inDisk) continue;
+    if (dist >= atmoR) continue;          // outside the atmosphere disk -> space
 
-    // Altitude through the slab. Rayleigh blue is the sum of two bands: a
-    // surface-dense one (blue overhead near the ground, falloff u_rayleighH) and
-    // an inverted rim-dense one (blue toward space, falloff u_rimH). Tune the two
-    // falloffs to set where each sits and where they meet in the middle. Mie haze
-    // hugs the surface (warm band / sunset low). Over the disk we sit at the
-    // surface (h = 0), the densest, bluest sky.
-    float h = inDisk ? 0.0 : (dist - r) / max(ra - r, 0.0001);
-    float densR = exp(-h * u_rayleighH) + exp(-(1.0 - h) * u_rimH);
-    float densM = exp(-h * u_mieH);
-
-    // Directional sun: the light arrives as parallel rays from the sun's
-    // direction (sun position taken relative to the planet center), so the lit
+    // Directional sun: parallel rays from the sun's direction, so the lit
     // hemisphere is the side facing the sun.
     vec2 outward = d / max(dist, 0.0001);
     vec2 toSun = normalize(u_sunPos - pc);
     float sunDot = dot(outward, toSun);
+    float dayNight = smoothstep(-0.25, 0.30, sunDot);
 
-    // Air-mass of the sunlight reaching this point: ~1 overhead, large at the
-    // terminator. Wavelength extinction (blue removed first, ozone tinting
-    // twilight) reddens that sunlight, so the sunset color *emerges* here
-    // rather than being hand-painted.
+    // The actual terrain line at this angle: above it is open sky, below it is
+    // the planet face. It only controls GATING (not color), so it never shows as
+    // a color seam — at the surface it's where sky meets ground; from space the
+    // face fills in with the very same sky and the boundary disappears.
+    float surfaceR = terrainRadius(outward);
+
+    // ---- ONE sky color for the whole disk -----------------------------------
+    // Radial position through the atmosphere: 0 at/below the surface, 1 at the
+    // top. Over the planet face it pins to 0 (the surface sky continued inward).
+    // Rayleigh blue is two bands: surface-dense (u_rayleighH) + inverted rim-dense
+    // (u_rimH); Mie haze hugs the surface.
+    float h = clamp((dist - baseR) / max(atmoR - baseR, 0.0001), 0.0, 1.0);
+    float densR = exp(-h * u_rayleighH) + exp(-(1.0 - h) * u_rimH);
+    float densM = exp(-h * u_mieH);
+
+    // Air-mass of the sunlight (~1 overhead, large at the terminator); extinction
+    // reddens it so sunsets *emerge*.
     float airmass = 1.0 / max(sunDot * 0.9 + 0.1, 0.05);
     vec3 extBeta = BETA_R + BETA_M + BETA_O;
     vec3 sunlight = exp(-extBeta * max(airmass - 1.0, 0.0) * u_extinction);
 
-    // Mie forward glow (sun glint on the sunward limb) + warm haze band that
-    // hugs the terminator. The haze takes on the reddened sunlight color.
-    float mieGlow = 1.0 + 2.0 * pow(max(sunDot, 0.0), 16.0);
-    float termBand = exp(-pow(sunDot * 2.0, 2.0) * 4.0);
+    // Sun glint + warm sunset band are limb-only (faded out toward the disk
+    // centre by limbW) so they never smear a streak across the flat planet face.
+    // They belong to the open-sky shell ABOVE the terrain only: over the planet
+    // face (incl. mountain tops, which have a small nonzero h) we force limbW to 0
+    // so the bright sunset band can't light up the peaks like snow at dusk.
+    float limbW = smoothstep(0.05, 0.45, h);
+    if (dist < surfaceR) limbW = 0.0;
+    float mieGlow = 1.0 + 2.0 * pow(max(sunDot, 0.0), 16.0) * limbW;
+    float termBand = exp(-pow(sunDot * 2.0, 2.0) * 4.0) * limbW;
     vec3 rayleigh = BETA_R * densR;
     vec3 mie = BETA_M * densM * (mieGlow * 0.4 + termBand * 1.6 + 0.25);
 
-    float dayNight = smoothstep(-0.25, 0.30, sunDot);
     vec3 col = u_sunIntensity * sunlight * (rayleigh + mie) * dayNight;
-    // Opacity comes from how much lit air is in front (density on the day side),
-    // so the bright day sky fully hides the stars and thins to clear up high and
-    // on the night side.
     float opacity = dayNight * (densR * 0.8 + densM * 0.6) * 1.8;
 
-    // Night side: a faint, almost-transparent dark blue (shaped by the same
-    // density) so the atmosphere shell stays visible against space instead of
-    // going fully black — you can see where the atmosphere ends.
+    // Night side: a faint, almost-transparent dark blue so the shell stays
+    // visible against space instead of going fully black.
     float night = 1.0 - dayNight;
     col += vec3(0.03, 0.06, 0.14) * densR * night;
     opacity += night * clamp(densR, 0.0, 1.0) * 0.22;
-
     opacity = clamp(opacity, 0.0, 1.0);
-    // Over the planet disk we paint a CLEAN, COMPLETE sky sphere rather than
-    // reusing the edge-on scattering (whose Mie glint + terminator band smear an
-    // ugly streak across a flat face). A smooth day/night blue, a gentle
-    // sun-facing brightening, and a brighter atmospheric limb that melds into the
-    // halo ring so there's no hard seam. Coverage is the altitude crossfade
-    // itself (uniform), so the planet dissolves into a solid sky sphere.
-    if (inDisk) {
-      float dr = dist / r;                       // 0 at center .. 1 at the limb
-      float sunFace = clamp(sunDot, 0.0, 1.0);
-      vec3 dayCol   = vec3(0.30, 0.50, 0.95);
-      vec3 nightCol = vec3(0.02, 0.04, 0.10);
-      vec3 base = mix(nightCol, dayCol, dayNight) * (0.75 + 0.45 * sunFace);
-      base += vec3(0.18, 0.32, 0.60) * smoothstep(0.82, 1.0, dr);  // limb glow
-      col = base * u_overlay;
-      opacity = u_overlay;
+
+    // Below the terrain line = planet face: only fill it with sky once you've
+    // climbed out toward space, so the ground stays visible from up close.
+    if (dist < surfaceR) {
+      col *= u_overlay;
+      opacity *= u_overlay;
     }
+
     accumCol += min(col, vec3(1.3)) * (1.0 - accumA);
     accumA   += opacity * (1.0 - accumA);
   }
@@ -173,9 +175,26 @@ uniform vec2 u_sunPos;
 uniform float u_coverage;   // 0 = clear sky, 1 = overcast
 uniform float u_falloff;    // how much coverage thins with altitude (0 = none, 1 = clears up high)
 uniform float u_overlay;    // cloud deck over the planet disk (0 near surface -> 1 in space)
+uniform float u_nightDarkness; // brightness of clouds on the deepest night side
+uniform float u_softness;      // terminator half-width in sunDot units (matches the body)
+uniform sampler2D u_terrainTex; // 2048x1: terrain radius per angle (the silhouette)
 out vec4 fragColor;
 
 const float CLOUD_DRIFT = 0.004;
+
+#define TERRAIN_N 2048
+// Terrain radius at a given outward direction (matches the atmosphere shader), so
+// the cloud deck meets the planet silhouette exactly instead of a smaller circle.
+float terrainRadius(vec2 outward) {
+  float ang = degrees(atan(outward.y, outward.x));
+  if (ang < 0.0) ang += 360.0;
+  float fidx = ang / 360.0 * float(TERRAIN_N);
+  int i0 = int(fidx) % TERRAIN_N;
+  int i1 = (i0 + 1) % TERRAIN_N;
+  float frac = fract(fidx);
+  return mix(texelFetch(u_terrainTex, ivec2(i0, 0), 0).r,
+             texelFetch(u_terrainTex, ivec2(i1, 0), 0).r, frac);
+}
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p) {
@@ -204,8 +223,12 @@ void main() {
     float dist = length(d);
     float innerR = u_planetInnerR[i], outerR = u_planetOuterR[i];
     if (dist >= outerR) continue;
-    bool inDisk = dist <= innerR;
-    // Over the planet disk the cloud band has no thickness to traverse, so we
+    // The disk (deck over the planet face) reaches the actual terrain silhouette,
+    // so it lines up with the atmosphere face instead of stopping at a circle.
+    vec2 outwardDir = d / max(dist, 0.0001);
+    float surfaceR = terrainRadius(outwardDir);
+    bool inDisk = dist <= surfaceR;
+    // Over the planet face the cloud band has no thickness to traverse, so we
     // render it as a deck seen from above, faded in with altitude (u_overlay) so
     // the clouds continue across the planet face only once you're out in space.
     if (inDisk && u_overlay <= 0.0) continue;
@@ -238,14 +261,82 @@ void main() {
     float alpha = 1.0 - exp(-density * 3.5);
     vec2 outward = d / max(dist, 0.0001);
     vec2 toSun = normalize(u_sunPos - u_planetPos[i]);   // directional sun
-    float lit = smoothstep(-0.25, 0.45, dot(outward, toSun));
+    float sunDot = dot(outward, toSun);
+    float lit = smoothstep(-0.25, 0.45, sunDot);
     vec3 cloudColor = mix(vec3(0.45, 0.5, 0.6), vec3(1.0, 0.98, 0.94), lit);
+    // Same day/night terminator as the planet body, so clouds on the dark side go
+    // dark too instead of staying bright white.
+    float dayNight = smoothstep(-u_softness, u_softness, sunDot);
+    cloudColor *= mix(u_nightDarkness, 1.0, dayNight);
 
     // Premultiplied "over" composite (drawn with GL_ONE, GL_ONE_MINUS_SRC_ALPHA).
     accum.rgb += cloudColor * alpha * (1.0 - accum.a);
     accum.a   += alpha * (1.0 - accum.a);
   }
   fragColor = accum;
+}
+)";
+
+// Day/night terminator over the planet body. A screen-space multiply pass (drawn
+// with GL_ZERO, GL_SRC_COLOR) that darkens the hemisphere of the planet facing
+// away from the sun, so the night side actually goes dark instead of relying on
+// the sky dimming around it. This is the 2D equivalent of "shade by direction to
+// the light" from Maxime Heckel's atmosphere/volumetric-light articles: the lit
+// side stays full brightness, the far side falls toward u_nightDarkness. Outside
+// the terrain silhouette it emits white (x1) so it leaves the sky/stars alone.
+static const char* kTerminatorFrag = R"(#version 300 es
+precision highp float;
+#define MAX_PLANETS 10
+uniform vec2 u_resolution;
+uniform vec2 u_viewFocus;
+uniform vec2 u_screenCenter;
+uniform float u_viewScale;
+uniform float u_viewRotation;
+uniform int u_planetCount;
+uniform vec2 u_planetPos[MAX_PLANETS];
+uniform float u_planetMaxR[MAX_PLANETS];   // generous radius bound for early-out
+uniform vec2 u_sunPos;
+uniform float u_nightDarkness;             // brightness floor of the deepest night side
+uniform float u_softness;                  // terminator half-width in sunDot units
+uniform sampler2D u_terrainTex;            // 2048x1: terrain radius per angle (the silhouette)
+out vec4 fragColor;
+
+#define TERRAIN_N 2048
+float terrainRadius(vec2 outward) {
+  float ang = degrees(atan(outward.y, outward.x));
+  if (ang < 0.0) ang += 360.0;
+  float fidx = ang / 360.0 * float(TERRAIN_N);
+  int i0 = int(fidx) % TERRAIN_N;
+  int i1 = (i0 + 1) % TERRAIN_N;
+  float frac = fract(fidx);
+  return mix(texelFetch(u_terrainTex, ivec2(i0, 0), 0).r,
+             texelFetch(u_terrainTex, ivec2(i1, 0), 0).r, frac);
+}
+
+void main() {
+  vec2 pixel = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+  vec2 centered = pixel - u_screenCenter;
+  float c = cos(-u_viewRotation), s = sin(-u_viewRotation);
+  vec2 unrot = vec2(c * centered.x - s * centered.y, s * centered.x + c * centered.y);
+  vec2 world = unrot / u_viewScale + u_viewFocus;
+
+  float shade = 1.0;   // x1 by default -> leaves everything outside the planet untouched
+  for (int i = 0; i < MAX_PLANETS; i++) {
+    if (i >= u_planetCount) break;
+    vec2 d = world - u_planetPos[i];
+    float dist = length(d);
+    if (dist >= u_planetMaxR[i]) continue;     // clearly outside the body
+    vec2 outward = d / max(dist, 0.0001);
+    if (dist > terrainRadius(outward)) continue;  // above the terrain line = sky, not body
+
+    // Directional sun: the lit hemisphere faces the sun. dayNight ramps across the
+    // terminator band (width set by u_softness) so there's a soft dusk gradient.
+    vec2 toSun = normalize(u_sunPos - u_planetPos[i]);
+    float sunDot = dot(outward, toSun);
+    float dayNight = smoothstep(-u_softness, u_softness, sunDot);
+    shade = mix(u_nightDarkness, 1.0, dayNight);
+  }
+  fragColor = vec4(vec3(shade), 1.0);
 }
 )";
 
@@ -303,7 +394,9 @@ struct App {
     // Fullscreen shader passes (atmosphere + clouds).
     GLuint atmoProgram = 0;
     GLuint cloudProgram = 0;
+    GLuint terminatorProgram = 0;   // day/night darkening over the planet body
     GLuint fsVao = 0, fsVbo = 0;
+    GLuint terrainTex = 0;          // 2048x1 R32F: terrain radius per angle (the silhouette)
 
     // Previous-frame key states for edge-triggered actions (lift off / restart).
     bool prevThrustKey = false;
@@ -413,6 +506,7 @@ static void updateContact() {
 static void initShaderPasses() {
     app.atmoProgram = Shader::createProgram(kFsVert, kAtmoFrag);
     app.cloudProgram = Shader::createProgram(kFsVert, kCloudFrag);
+    app.terminatorProgram = Shader::createProgram(kFsVert, kTerminatorFrag);
 
     float quad[] = { -1, -1,  1, -1,  -1, 1,  -1, 1,  1, -1,  1, 1 };
     glGenVertexArrays(1, &app.fsVao);
@@ -422,6 +516,31 @@ static void initShaderPasses() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+
+    // 2048x1 float texture holding the terrain radius per angle (the silhouette),
+    // so the atmosphere shader knows exactly where the ground meets the sky.
+    // High resolution (>> the ~255-vertex terrain polygon) so the sampled
+    // silhouette faithfully follows the real peaks instead of aliasing against
+    // them and cutting the tips short (which left an undarkened grey rim).
+    glGenTextures(1, &app.terrainTex);
+    glBindTexture(GL_TEXTURE_2D, app.terrainTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 2048, 1, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+// Resample the planet silhouette onto a uniform 2048-angle grid and upload it to
+// the terrain texture. Call after the planet's terrain changes.
+static void uploadTerrainLUT() {
+    const int N = 2048;
+    float lut[N];
+    for (int k = 0; k < N; k++) {
+        lut[k] = app.planet.surfaceRadius(k * (360.0f / N));
+    }
+    glBindTexture(GL_TEXTURE_2D, app.terrainTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, N, 1, GL_RED, GL_FLOAT, lut);
 }
 
 // Shared uniform setup: camera reconstruction params common to both passes.
@@ -468,7 +587,7 @@ static void drawCloudsPass(float t) {
     float pos[N * 2] = {0}, innerR[N] = {0}, outerR[N] = {0};
     const Planet& p = app.planet;
     pos[0] = p.center.x; pos[1] = p.center.y;
-    float mountainTop = p.baseRadius + p.noiseIntensity * 1.05f;
+    float mountainTop = p.maxSurfaceRadius();
     innerR[0] = p.baseRadius;
     outerR[0] = mountainTop + (p.atmosphereOuterRadius() - mountainTop) * gDebug.cloudHeight;
 
@@ -483,8 +602,13 @@ static void drawCloudsPass(float t) {
     glUniform1f(glGetUniformLocation(pr, "u_coverage"), gDebug.cloudCoverage);
     glUniform1f(glGetUniformLocation(pr, "u_falloff"), gDebug.cloudFalloff);
     glUniform1f(glGetUniformLocation(pr, "u_overlay"), spaceOverlay());
+    glUniform1f(glGetUniformLocation(pr, "u_nightDarkness"), gDebug.nightDarkness);
+    glUniform1f(glGetUniformLocation(pr, "u_softness"), gDebug.nightSoftness);
     Vec2 sunW = sunWorldPos(t);
     glUniform2f(glGetUniformLocation(pr, "u_sunPos"), sunW.x, sunW.y);  // sun on the atmosphere edge
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, app.terrainTex);
+    glUniform1i(glGetUniformLocation(pr, "u_terrainTex"), 0);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   // premultiplied "over"
@@ -492,17 +616,53 @@ static void drawCloudsPass(float t) {
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-// diskFill: false = sky ring around/behind the planet (drawn before the planet);
-// true = continue that sky over the planet disk (drawn after it), altitude-gated.
-static void drawAtmospherePass(float t, bool diskFill) {
+// Darkens the planet body on the side facing away from the sun (day/night
+// terminator). Drawn right after the planet body as a multiply pass so the night
+// side actually goes dark; the atmosphere pass then adds its faint sky glow on
+// top. Runs before the cows so abductable cows stay readable even at night.
+static void drawTerminatorPass(float t) {
+    const int N = SHADER_MAX_PLANETS;
+    float pos[N * 2] = {0}, maxR[N] = {0};
+    const Planet& p = app.planet;
+    pos[0] = p.center.x; pos[1] = p.center.y;
+    // Bound the multiply pass by the generated silhouette. Mountain ranges can
+    // exceed the raw noise intensity, so an estimate can leave tall night-side
+    // peaks undarkened.
+    maxR[0] = p.maxSurfaceRadius() + 2.0f;
+
+    GLuint pr = app.terminatorProgram;
+    glUseProgram(pr);
+    setPassViewUniforms(pr);
+    glUniform1i(glGetUniformLocation(pr, "u_planetCount"), 1);
+    glUniform2fv(glGetUniformLocation(pr, "u_planetPos"), N, pos);
+    glUniform1fv(glGetUniformLocation(pr, "u_planetMaxR"), N, maxR);
+    glUniform1f(glGetUniformLocation(pr, "u_nightDarkness"), gDebug.nightDarkness);
+    glUniform1f(glGetUniformLocation(pr, "u_softness"), gDebug.nightSoftness);
+    Vec2 sunW = sunWorldPos(t);
+    glUniform2f(glGetUniformLocation(pr, "u_sunPos"), sunW.x, sunW.y);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, app.terrainTex);
+    glUniform1i(glGetUniformLocation(pr, "u_terrainTex"), 0);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ZERO, GL_SRC_COLOR);   // framebuffer *= shade (multiply)
+    glBindVertexArray(app.fsVao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   // restore the default "over"
+}
+
+// One atmosphere disk (radius = atmosphere top), drawn once after the planet.
+// The shader splits it by radius: above the mountain tops it's the scattering
+// horizon sky / limb halo; over the planet face it's the clean, altitude-gated
+// sky sphere. So the sky reads as a single circle with the planet underneath.
+static void drawAtmospherePass(float t) {
     const int N = SHADER_MAX_PLANETS;
     float pos[N * 2] = {0}, prad[N] = {0}, arad[N] = {0};
     const Planet& p = app.planet;
     pos[0] = p.center.x; pos[1] = p.center.y;
-    // Slab runs from the base radius (so the sky gradient reaches the surface)
-    // up to the atmosphere top. The disk pass fills to the mountain top instead,
-    // so the jagged terrain rim is covered too and the planet reads as a sphere.
-    prad[0] = diskFill ? (p.baseRadius + p.noiseIntensity * 1.05f) : p.baseRadius;
+    // baseR is the sky-gradient reference; atmoR is the atmosphere top. The actual
+    // ground/sky boundary per angle comes from the terrain texture in the shader.
+    prad[0] = p.baseRadius;
     arad[0] = p.atmosphereOuterRadius();
 
     GLuint pr = app.atmoProgram;
@@ -518,10 +678,12 @@ static void drawAtmospherePass(float t, bool diskFill) {
     glUniform1f(glGetUniformLocation(pr, "u_mieH"), gDebug.atmMieH);
     glUniform1f(glGetUniformLocation(pr, "u_sunIntensity"), gDebug.atmSunIntensity);
     glUniform1f(glGetUniformLocation(pr, "u_extinction"), gDebug.atmExtinction);
-    glUniform1f(glGetUniformLocation(pr, "u_diskFill"), diskFill ? 1.0f : 0.0f);
-    glUniform1f(glGetUniformLocation(pr, "u_overlay"), diskFill ? spaceOverlay() : 0.0f);
+    glUniform1f(glGetUniformLocation(pr, "u_overlay"), spaceOverlay());
     Vec2 sunW = sunWorldPos(t);
     glUniform2f(glGetUniformLocation(pr, "u_sunPos"), sunW.x, sunW.y);  // sun on the atmosphere edge
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, app.terrainTex);
+    glUniform1i(glGetUniformLocation(pr, "u_terrainTex"), 0);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   // premultiplied "over": emits + occludes stars
@@ -536,6 +698,7 @@ static void init() {
     // One starter planet, ported tuning: radiusScale 4.0 * 8000 base, density
     // 0.03, big noise span and dense sampling for a jagged silhouette.
     app.planet.generate(Vec2(0, 0), 8000.0f * 4.0f, 2000.0f, 255, gDebug.planetDensity, 1337);
+    uploadTerrainLUT();   // seed the silhouette texture for the atmosphere shader
 
     // Static clip-space starfield (drawn behind everything).
     unsigned int s = 9871;
@@ -761,6 +924,8 @@ static void syncDebugFromJS() {
     gDebug.cloudCoverage    = EM_ASM_DOUBLE({ return window.DBG.cloudCoverage; });
     gDebug.cloudFalloff     = EM_ASM_DOUBLE({ return window.DBG.cloudFalloff; });
     gDebug.spaceHaze        = EM_ASM_DOUBLE({ return window.DBG.spaceHaze; });
+    gDebug.nightDarkness    = EM_ASM_DOUBLE({ return window.DBG.nightDarkness; });
+    gDebug.nightSoftness    = EM_ASM_DOUBLE({ return window.DBG.nightSoftness; });
     gDebug.cameraGroundZoom = EM_ASM_DOUBLE({ return window.DBG.cameraGroundZoom; });
     gDebug.cameraFraming    = EM_ASM_DOUBLE({ return window.DBG.cameraFraming; });
 
@@ -850,20 +1015,23 @@ static void mainLoop() {
     drawStars();
     app.renderer.end();
 
-    // 2) Atmosphere sky RING — behind the planet, around its limb (the planet
-    //    body draws over the lower sky / mountains as before).
-    drawAtmospherePass(shaderTime, false);
-
-    // 3) Solid planet + surface, in front of the sky.
+    // 2) Solid planet + surface.
     app.renderer.begin(viewMat, app.width, app.height);
     app.planet.draw(app.renderer);
+    app.renderer.end();
+
+    // 2b) Day/night terminator: darken the planet body's far-from-sun hemisphere
+    //     (multiply pass) before the cows go down, so cows stay readable at night.
+    drawTerminatorPass(shaderTime);
+
+    app.renderer.begin(viewMat, app.width, app.height);
     for (const Cow& cow : app.cows) cow.draw(app.renderer, app.planet);
     app.renderer.end();
 
-    // 3b) Atmosphere sky DISK — continue that same sky over the planet face so,
-    //     from space, it reads as a full sphere with the planet showing through.
-    //     Altitude-gated, so on the surface the ground stays clear.
-    drawAtmospherePass(shaderTime, true);
+    // 3) Atmosphere — one disk over the planet: horizon sky above the mountains,
+    //    and (from space) the clean sky sphere over the planet face. The ground
+    //    stays clear at low altitude (the face fill is gated by altitude).
+    drawAtmospherePass(shaderTime);
 
     // 3c) Ship + space aids stay crisp on top of the sky.
     app.renderer.begin(viewMat, app.width, app.height);
