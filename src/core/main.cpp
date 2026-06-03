@@ -169,7 +169,6 @@ uniform float u_viewRotation;
 uniform float u_time;
 uniform int u_planetCount;
 uniform vec2 u_planetPos[MAX_PLANETS];
-uniform float u_planetInnerR[MAX_PLANETS];
 uniform float u_planetOuterR[MAX_PLANETS];
 uniform vec2 u_sunPos;
 uniform float u_coverage;   // 0 = clear sky, 1 = overcast
@@ -221,7 +220,7 @@ void main() {
     if (i >= u_planetCount) break;
     vec2 d = world - u_planetPos[i];
     float dist = length(d);
-    float innerR = u_planetInnerR[i], outerR = u_planetOuterR[i];
+    float outerR = u_planetOuterR[i];
     if (dist >= outerR) continue;
     // The disk (deck over the planet face) reaches the actual terrain silhouette,
     // so it lines up with the atmosphere face instead of stopping at a circle.
@@ -233,12 +232,22 @@ void main() {
     // the clouds continue across the planet face only once you're out in space.
     if (inDisk && u_overlay <= 0.0) continue;
 
-    float h = inDisk ? 0.5 : (dist - innerR) / (outerR - innerR);
-    // Disk deck fades IN with altitude; the edge-on shell band fades OUT, so from
-    // space you see clouds over the planet face, not a ring floating in space.
-    float altDensity = inDisk
-        ? u_overlay
-        : smoothstep(0.0, 0.25, h) * (1.0 - smoothstep(0.7, 1.0, h)) * (1.0 - u_overlay);
+    // Use the actual terrain silhouette as the handoff point between the
+    // top-down cloud deck over the planet face and the edge-on atmospheric band.
+    // They intentionally overlap around that line, which prevents a detached
+    // "cloud disk plus separate cloud ring" look when viewed from space.
+    float shellSpan = max(outerR - surfaceR, 1.0);
+    float signedSurfaceAlt = dist - surfaceR;
+    float shellHRaw = signedSurfaceAlt / shellSpan;
+    float shellH = clamp(shellHRaw, 0.0, 1.0);
+    float edgeFeather = max(shellSpan * 0.06, 32.0);
+    float edgeT = smoothstep(-edgeFeather, edgeFeather, signedSurfaceAlt);
+    float h = mix(0.5, shellH, edgeT);
+
+    float deckDensity = u_overlay * (1.0 - smoothstep(0.0, edgeFeather, signedSurfaceAlt));
+    float shellBand = smoothstep(-0.06, 0.22, shellHRaw) *
+                      (1.0 - smoothstep(0.82, 1.0, shellH));
+    float altDensity = max(deckDensity, shellBand);
     vec2 local = d;
     float density = fbm(local * 0.0008 + vec2(u_time * CLOUD_DRIFT, u_time * CLOUD_DRIFT * 0.4));
     // Large-scale, slowly-drifting "weather" field so coverage isn't uniform
@@ -584,11 +593,10 @@ static float spaceOverlay() {
 
 static void drawCloudsPass(float t) {
     const int N = SHADER_MAX_PLANETS;
-    float pos[N * 2] = {0}, innerR[N] = {0}, outerR[N] = {0};
+    float pos[N * 2] = {0}, outerR[N] = {0};
     const Planet& p = app.planet;
     pos[0] = p.center.x; pos[1] = p.center.y;
     float mountainTop = p.maxSurfaceRadius();
-    innerR[0] = p.baseRadius;
     outerR[0] = mountainTop + (p.atmosphereOuterRadius() - mountainTop) * gDebug.cloudHeight;
 
     GLuint pr = app.cloudProgram;
@@ -597,7 +605,6 @@ static void drawCloudsPass(float t) {
     glUniform1f(glGetUniformLocation(pr, "u_time"), t);
     glUniform1i(glGetUniformLocation(pr, "u_planetCount"), 1);
     glUniform2fv(glGetUniformLocation(pr, "u_planetPos"), N, pos);
-    glUniform1fv(glGetUniformLocation(pr, "u_planetInnerR"), N, innerR);
     glUniform1fv(glGetUniformLocation(pr, "u_planetOuterR"), N, outerR);
     glUniform1f(glGetUniformLocation(pr, "u_coverage"), gDebug.cloudCoverage);
     glUniform1f(glGetUniformLocation(pr, "u_falloff"), gDebug.cloudFalloff);
