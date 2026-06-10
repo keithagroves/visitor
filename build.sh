@@ -30,6 +30,7 @@ SOURCES="
     $SRC_DIR/graphics/shader.cpp
     $SRC_DIR/graphics/renderer2d.cpp
     $SRC_DIR/world/planet.cpp
+    $SRC_DIR/world/terrain_field.cpp
     $SRC_DIR/entities/lander.cpp
     $SRC_DIR/entities/cow.cpp
     $SRC_DIR/input/input.cpp

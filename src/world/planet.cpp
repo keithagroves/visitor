@@ -1,6 +1,11 @@
 #include "planet.h"
 #include <cmath>
 
+// Crust tuning: the destructible shell spans [baseRadius - SHELL_DEPTH .. peaks];
+// everything below is the always-solid core. CELL is the dig/mesh granularity.
+static constexpr float SHELL_DEPTH = 9000.0f;
+static constexpr float CELL = 250.0f;
+
 namespace {
 // Small deterministic RNG so each planet's terrain is stable for a given seed
 // (stands in for the original's reliance on a globally seeded noise field).
@@ -86,9 +91,42 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
     }
     // Close the loop.
     if (!landscape.empty()) landscape.push_back(landscape.front());
+
+    // Seed the destructible crust from the silhouette, then bake the surface LUT.
+    float coreR = baseRadius - SHELL_DEPTH;
+    if (coreR < baseRadius * 0.25f) coreR = baseRadius * 0.25f;
+    float outerR = maxSurfaceRadius() + CELL * 2.0f;
+    const int SEED_N = 4096;
+    std::vector<float> seedLUT(SEED_N);
+    for (int k = 0; k < SEED_N; k++) seedLUT[k] = seedRadius(k * (360.0f / SEED_N));
+    field.generate(center, coreR, outerR, CELL, seedLUT);
+    rebuildSurfaceLUT();
+}
+
+void Planet::rebuildSurfaceLUT() {
+    surfaceLUT.resize(LUT_N);
+    for (int k = 0; k < LUT_N; k++)
+        surfaceLUT[k] = field.outerSurfaceRadius(k * (360.0f / LUT_N));
+}
+
+void Planet::dig(Vec2 world, float radius) {
+    field.dig(world, radius);
+    rebuildSurfaceLUT();
 }
 
 float Planet::surfaceRadius(float angle) const {
+    int n = (int)surfaceLUT.size();
+    if (n == 0) return baseRadius;
+    while (angle < 0.0f) angle += 360.0f;
+    while (angle >= 360.0f) angle -= 360.0f;
+    float f = angle / 360.0f * n;
+    int i0 = (int)f % n;
+    int i1 = (i0 + 1) % n;
+    float frac = f - (float)((int)f);
+    return surfaceLUT[i0] * (1.0f - frac) + surfaceLUT[i1] * frac;
+}
+
+float Planet::seedRadius(float angle) const {
     if (landscape.size() < 2) return baseRadius;
     if (angle < 0) angle += 360.0f;
     for (size_t i = 0; i + 1 < landscape.size(); i++) {
@@ -122,19 +160,4 @@ float Planet::atmosphericDensity(float x, float y) const {
     if (altitude >= thickness) return 0.0f;
     if (altitude <= 0) return 1.0f;
     return 1.0f - altitude / thickness;
-}
-
-void Planet::draw(Renderer2D& r) const {
-    // The sky/atmosphere is now drawn entirely by the atmosphere shader pass
-    // (a smooth gradient with day/night + Rayleigh), so the body just draws the
-    // terrain silhouette here.
-    // --- Planet body: fan the star-shaped terrain silhouette from the center. ---
-    std::vector<Vec2> pts;
-    pts.reserve(landscape.size());
-    for (const auto& p : landscape) {
-        pts.push_back(Vec2(center.x + p.r * cosd(p.angle),
-                           center.y + p.r * sind(p.angle)));
-    }
-    r.fill(110.0f / 255.0f, 105.0f / 255.0f, 100.0f / 255.0f, 1.0f);
-    r.fanPolygon(center.x, center.y, pts.data(), (int)pts.size(), false);
 }

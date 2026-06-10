@@ -349,6 +349,28 @@ void main() {
 }
 )";
 
+// Planet body mesh (marching-squares terrain). Geometry is world-space triangles
+// rebuilt on the CPU only when the crust is dug; this pass just transforms them
+// to clip space via the same row-major view matrix the 2D renderer uses, and
+// fills with the flat rock colour (the terminator pass darkens it afterwards).
+static const char* kTerrainVert = R"(#version 300 es
+layout(location = 0) in vec2 a_pos;   // world coords
+uniform vec3 u_row0;                   // view matrix row 0 (m0,m1,m2)
+uniform vec3 u_row1;                   // view matrix row 1 (m3,m4,m5)
+void main() {
+  float cx = dot(u_row0, vec3(a_pos, 1.0));
+  float cy = dot(u_row1, vec3(a_pos, 1.0));
+  gl_Position = vec4(cx, cy, 0.0, 1.0);
+}
+)";
+
+static const char* kTerrainFrag = R"(#version 300 es
+precision highp float;
+uniform vec3 u_color;
+out vec4 fragColor;
+void main() { fragColor = vec4(u_color, 1.0); }
+)";
+
 // ============================================================================
 // Camera / view — ports updateView() from sketch.js: altitude-based framing,
 // velocity-predictive follow, and an auto-roll that keeps gravity pointing
@@ -405,6 +427,9 @@ struct App {
     GLuint cloudProgram = 0;
     GLuint terminatorProgram = 0;   // day/night darkening over the planet body
     GLuint fsVao = 0, fsVbo = 0;
+    GLuint terrainProgram = 0;      // marching-squares planet body mesh
+    GLuint terrainVao = 0, terrainVbo = 0;
+    int terrainVertCount = 0;
     GLuint terrainTex = 0;          // 2048x1 R32F: terrain radius per angle (the silhouette)
 
     // Previous-frame key states for edge-triggered actions (lift off / restart).
@@ -538,6 +563,25 @@ static void initShaderPasses() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Planet body mesh (marching-squares terrain): its own VBO + shader so the
+    // potentially-large, static-between-digs geometry is transformed on the GPU.
+    app.terrainProgram = Shader::createProgram(kTerrainVert, kTerrainFrag);
+    glGenVertexArrays(1, &app.terrainVao);
+    glGenBuffers(1, &app.terrainVbo);
+    glBindVertexArray(app.terrainVao);
+    glBindBuffer(GL_ARRAY_BUFFER, app.terrainVbo);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+}
+
+// Re-upload the planet body mesh after the crust changes (generate or dig).
+static void uploadTerrainMesh() {
+    const std::vector<float>& m = app.planet.field.mesh();
+    app.terrainVertCount = (int)(m.size() / 2);
+    glBindBuffer(GL_ARRAY_BUFFER, app.terrainVbo);
+    glBufferData(GL_ARRAY_BUFFER, m.size() * sizeof(float),
+                 m.empty() ? nullptr : m.data(), GL_DYNAMIC_DRAW);
 }
 
 // Resample the planet silhouette onto a uniform 2048-angle grid and upload it to
@@ -559,6 +603,22 @@ static void setPassViewUniforms(GLuint pr) {
     glUniform2f(glGetUniformLocation(pr, "u_screenCenter"), app.width * 0.5f, app.height * 0.5f);
     glUniform1f(glGetUniformLocation(pr, "u_viewScale"), app.view.scale);
     glUniform1f(glGetUniformLocation(pr, "u_viewRotation"), app.view.rotation * DEG2RAD);
+}
+
+// Draw the planet body mesh (opaque) straight into the framebuffer, occluding
+// the stars. Vertices are world coords transformed by the view matrix on the
+// GPU; the terminator pass darkens the night side afterwards.
+static void drawTerrainPass(const Mat3& view) {
+    if (app.terrainVertCount <= 0) return;
+    GLuint pr = app.terrainProgram;
+    glUseProgram(pr);
+    glUniform3f(glGetUniformLocation(pr, "u_row0"), view.m[0], view.m[1], view.m[2]);
+    glUniform3f(glGetUniformLocation(pr, "u_row1"), view.m[3], view.m[4], view.m[5]);
+    glUniform3f(glGetUniformLocation(pr, "u_color"), 110.0f / 255.0f, 105.0f / 255.0f, 100.0f / 255.0f);
+    glDisable(GL_BLEND);
+    glBindVertexArray(app.terrainVao);
+    glDrawArrays(GL_TRIANGLES, 0, app.terrainVertCount);
+    glEnable(GL_BLEND);
 }
 
 // World position of the sun, sitting on the planet's sunward atmosphere edge
@@ -706,6 +766,7 @@ static void init() {
     // 0.03, big noise span and dense sampling for a jagged silhouette.
     app.planet.generate(Vec2(0, 0), 8000.0f * 4.0f, 2000.0f, 255, gDebug.planetDensity, 1337);
     uploadTerrainLUT();   // seed the silhouette texture for the atmosphere shader
+    uploadTerrainMesh();  // build the marching-squares planet body mesh
 
     // Static clip-space starfield (drawn behind everything).
     unsigned int s = 9871;
@@ -727,6 +788,26 @@ static void init() {
     printf("W/Up - thrust | A/D or Left/Right - rotate\n");
 }
 
+// Carve the crust just under the ship's belly, then refresh the body mesh +
+// silhouette LUT. Carving at the belly (not at the surface line) means a held
+// press makes one crater; you deepen a shaft only by flying down into it, so the
+// hole stays controllable instead of drilling to the core in one go.
+static constexpr float DIG_RADIUS = 150.0f;
+static void doDig() {
+    Lander& l = app.lander;
+    Planet& p = app.planet;
+    Vec2 toShip = l.pos - p.center;
+    float dist = toShip.length();
+    if (dist < 1.0f) return;
+    float ang = atan2d(toShip.y, toShip.x);
+    if (dist - p.surfaceRadius(ang) > 3000.0f) return;   // too high to reach rock
+    Vec2 up = toShip * (1.0f / dist);
+    Vec2 belly = l.pos - up * (l.radius + DIG_RADIUS * 0.4f);  // just beneath the hull
+    p.dig(belly, DIG_RADIUS);
+    uploadTerrainLUT();
+    uploadTerrainMesh();
+}
+
 static void pollInput(float timeScale) {
     Lander& l = app.lander;
 
@@ -740,6 +821,9 @@ static void pollInput(float timeScale) {
 
     // Tractor beam fires straight down the ship's local axis while space is held.
     l.abducting = Input::isKeyDown(Input::KEY_SPACE);
+
+    // Excavate the crust beneath the ship while E is held.
+    if (Input::isKeyDown(Input::KEY_E)) doDig();
 }
 
 // Decide each frame whether each loose cow is inside the active beam cone and
@@ -886,15 +970,21 @@ static void drawHeadingArrow() {
     Vec2 nose = app.lander.noseDir();
     Vec2 perp(-nose.y, nose.x);
     float s = 1.0f / app.view.scale;          // world units per screen pixel
-    Vec2 base = app.lander.pos + nose * (12.0f * s);
-    Vec2 shaftEnd = base + nose * (26.0f * s);
-    Vec2 tip = shaftEnd + nose * (16.0f * s);
-    Vec2 hl = shaftEnd + perp * (11.0f * s);
-    Vec2 hr = shaftEnd - perp * (11.0f * s);
+    Vec2 tip = app.lander.pos + nose * (20.0f * s);
+    Vec2 hl  = tip - nose * (12.0f * s) + perp * (14.0f * s);
+    Vec2 hr  = tip - nose * (12.0f * s) - perp * (14.0f * s);
 
-    r.fill(1.0f, 0.22f, 0.16f, 0.95f);
-    r.line(base.x, base.y, shaftEnd.x, shaftEnd.y, 4.0f * s);
-    r.triangle(tip.x, tip.y, hl.x, hl.y, hr.x, hr.y);
+    r.setBlend(Renderer2D::Blend::Additive);
+    r.fill(1.0f, 1.0f, 1.0f, 0.15f);   // outer halo
+    r.line(tip.x, tip.y, hl.x, hl.y, 7.0f * s);
+    r.line(tip.x, tip.y, hr.x, hr.y, 7.0f * s);
+    r.fill(1.0f, 1.0f, 1.0f, 0.45f);   // mid glow
+    r.line(tip.x, tip.y, hl.x, hl.y, 3.5f * s);
+    r.line(tip.x, tip.y, hr.x, hr.y, 3.5f * s);
+    r.fill(1.0f, 1.0f, 1.0f, 0.95f);   // bright core
+    r.line(tip.x, tip.y, hl.x, hl.y, 1.5f * s);
+    r.line(tip.x, tip.y, hr.x, hr.y, 1.5f * s);
+    r.setBlend(Renderer2D::Blend::Normal);
 }
 
 static void drawStars() {
@@ -1022,10 +1112,8 @@ static void mainLoop() {
     drawStars();
     app.renderer.end();
 
-    // 2) Solid planet + surface.
-    app.renderer.begin(viewMat, app.width, app.height);
-    app.planet.draw(app.renderer);
-    app.renderer.end();
+    // 2) Solid planet body (marching-squares terrain mesh).
+    drawTerrainPass(viewMat);
 
     // 2b) Day/night terminator: darken the planet body's far-from-sun hemisphere
     //     (multiply pass) before the cows go down, so cows stay readable at night.
