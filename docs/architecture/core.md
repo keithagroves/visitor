@@ -1,6 +1,6 @@
 ---
 name: core
-description: The game loop and orchestration in main.cpp — the App singleton, the PLAYING/LANDED/CRASHED state machine, the View camera, and the inline fullscreen shader passes (atmosphere, clouds, terminator, terrain mesh). Plus the gDebug live-tunables struct.
+description: The game loop and orchestration in main.cpp — the App singleton, the PLAYING/LANDED/CRASHED state machine, the View camera, and the inline fullscreen shader passes (planet body, atmosphere, clouds). Plus the gDebug live-tunables struct.
 tags: [core, game-loop, camera, shaders, emscripten]
 ---
 
@@ -19,8 +19,8 @@ flowchart TD
     App["App (global)<br/>renderer · planet · lander · cows · astronaut · view · state"]
     View["View<br/>altitude framing · follow · auto-roll"]
     Debug["gDebug / syncDebugFromJS()<br/>live tunables from window.DBG"]
-    Passes["Shader passes<br/>atmosphere · clouds · terminator · terrain mesh"]
-    LUT["Terrain LUT + mesh upload<br/>2048x1 silhouette texture · marching-squares VBO"]
+    Passes["Shader passes<br/>planet body · atmosphere · clouds"]
+    LUT["Terrain LUT + field upload<br/>2048x1 silhouette texture · R16F density texture"]
 
     main --> init --> loop
     loop --> App
@@ -43,8 +43,11 @@ flowchart TD
 ## Responsibilities
 
 - **App singleton** — aggregates every subsystem object: the `Renderer2D`, the
-  `Planet`, the `Lander`, the cow herd, the `Astronaut`, the `View`, plus GL
-  handles for the shader passes, the starfield, cargo/score, and timing.
+  planet vector (sun + home + moon; `dominantIdx` picks the body with the
+  strongest pull at the ship for camera/contact/beam, `activeFieldIdx` tracks
+  the one live destructible field), the `Lander`, the cow herd, the
+  `Astronaut`, the `View`, plus GL handles for the shader passes, the
+  starfield, cargo/score, and timing.
 - **State machine** — `GameState` is `PLAYING`, `LANDED`, or `CRASHED`.
   `updateContact()` judges ground contact as a safe landing (slow + upright +
   flat, via `terrainFlat()`/`pointInTriangle()`) or a crash. Edge-triggered keys
@@ -55,12 +58,16 @@ flowchart TD
   predictive follow, and an auto-roll that keeps net gravity pointing screen-down.
   `updateZoom` layers manual scroll/key zoom on top.
 - **Fullscreen shader passes** — GLSL sources and their draw calls are defined
-  here: the **atmosphere** (Rayleigh/Mie scattering disk), the **clouds** (FBM
-  density band), the **terminator** (day/night multiply darkening), and the
-  **terrain** mesh (marching-squares planet body). All reconstruct the world
-  point under each pixel from the camera transform and share a `sunWorldPos()`
-  light. A 2048×1 R32F **terrain LUT texture** feeds them the per-angle
-  silhouette so sky, clouds, and ground line up exactly.
+  here: the **planet body** (fills rock from the R16F density-field texture
+  with fwidth-smoothed iso-line edges, altitude-banded material, slope lighting
+  from the SDF gradient, the merged day/night terminator, and a dark
+  cave-interior backdrop), the **atmosphere** (Rayleigh/Mie scattering disk),
+  and the **clouds** (FBM density band). All reconstruct the world point under
+  each pixel from the camera transform and share a `sunWorldPos()` light. A
+  2048×1 R32F **terrain LUT texture** feeds them the per-angle silhouette so
+  sky, clouds, and ground line up exactly; digging re-uploads just the brush's
+  dirty rect of the field texture (`uploadFieldRegion`). CPU-side helpers draw
+  the **ridge silhouettes** behind the body and **blob shadows** under entities.
 - **Live tunables** — `syncDebugFromJS()` pulls `window.DBG` sliders into the
   `gDebug` struct each frame (see [debug.h](../../src/core/debug.h)); planet
   density is re-applied only when it changes.

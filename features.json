@@ -28,7 +28,7 @@
         { "id": "trajectory",       "title": "Coast trajectory prediction", "status": "done", "note": "Long-horizon predictor; shown as space aid." },
         { "id": "hull-heat",        "title": "Hull heat / re-entry burn / burn-through crash", "status": "todo" },
         { "id": "parachute",        "title": "Parachute descent brake (C key)", "status": "todo" },
-        { "id": "orbits",           "title": "Planet orbits (kinematic + gravity-driven)", "status": "todo" }
+        { "id": "orbits",           "title": "Planet orbits (kinematic + gravity-driven)", "status": "partial", "note": "Kinematic circular orbits (moon around home, sun's day-cycle orbit); gravity-driven orbits + eccentricity still todo. Lander gravity/drag/trajectory sum over all bodies; landing speed is judged relative to the body." }
       ]
     },
     {
@@ -36,11 +36,11 @@
       "features": [
         { "id": "planet-terrain",   "title": "Procedural terrain (mountain ranges, inverse-CDF sampling)", "status": "done" },
         { "id": "atmosphere",       "title": "Atmosphere shell + Rayleigh/Mie arc-ring shader", "status": "done", "note": "Fullscreen shader pass: Gaussian arc/ring band, day/night terminator drift, blue Rayleigh + warm Mie sunset. Sun lens-flare not ported; multi-planet covered by solar-system." },
-        { "id": "surface-texture",  "title": "Surface texture (snow caps / grass / rock by altitude)", "status": "todo" },
+        { "id": "surface-texture",  "title": "Surface texture (snow caps / rock by altitude)", "status": "done", "note": "Live in the body shader pass (altitude bands + FBM grain + slope lighting from the SDF gradient) instead of a baked texture. Grass/water band arrives with archetypes." },
         { "id": "water",            "title": "Sea level + water rendering + underwater state", "status": "todo" },
-        { "id": "bg-ridges",        "title": "Parallax background ridge silhouettes", "status": "todo" },
+        { "id": "bg-ridges",        "title": "Parallax background ridge silhouettes", "status": "done", "note": "Two haze-tinted layers following 0.68/0.84 of the player's surface angle, with per-vertex night shading." },
         { "id": "clouds",           "title": "FBM cloud shader layer", "status": "done", "note": "Fullscreen shader pass: FBM density in a low-altitude band, Beer's-law opacity, sun-direction shading, gentle drift." },
-        { "id": "solar-system",     "title": "Multiple planets + moon + sun", "status": "todo" },
+        { "id": "solar-system",     "title": "Multiple planets + moon + sun", "status": "partial", "note": "Sun (corona-rendered star) + home + airless moon; all shader passes multi-planet (silhouette LUT rows); destructible fields are lazy (nearest planet only, digs replayed). Moon landing not yet play-tested; more worlds + variety in Stage 4." },
         { "id": "base",             "title": "Home base / launch pad", "status": "todo" }
       ]
     },
@@ -89,6 +89,7 @@
         { "id": "thrust-flame",     "title": "Thruster flame", "status": "done", "note": "Particle/vector flame; original also has fluid plume." },
         { "id": "beam-fx",          "title": "Tractor beam visuals (gradient cone, stripes, dust, splat)", "status": "done" },
         { "id": "ship-beacon",      "title": "Far-view blinking ship beacon", "status": "done", "note": "Port addition for the zoomed-out view." },
+        { "id": "blob-shadows",     "title": "Ground blob shadows under ship/astronaut/cows", "status": "done", "note": "Port addition: sun-offset soft ellipses fading with altitude." },
         { "id": "heading-arrow",    "title": "Far-view heading arrow (while steering)", "status": "done", "note": "Port addition." },
         { "id": "crash-debris",     "title": "Crash particles / hull debris", "status": "todo" },
         { "id": "splash",           "title": "Water splash particles", "status": "todo" },

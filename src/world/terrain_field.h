@@ -31,6 +31,18 @@ public:
     // Returns true if any corner changed (digRect() then bounds the change).
     bool dig(Vec2 world, float radius);
 
+    // Translate the whole grid (e.g. the planet moved along its orbit). Pure
+    // origin shift: corner data is center-relative by construction.
+    void moveTo(Vec2 newCenter) {
+        ox_ += newCenter.x - center_.x;
+        oy_ += newCenter.y - center_.y;
+        center_ = newCenter;
+    }
+
+    // Free the grid memory (lazy fields: planet left behind). generate() again
+    // to rebuild.
+    void release() { d_.clear(); d_.shrink_to_fit(); nx_ = ny_ = 0; }
+
     bool solidAt(Vec2 world) const { return densityAt(world) >= 0.0f; }
 
     // Radius of the outermost rock surface along an angle (degrees): marches in

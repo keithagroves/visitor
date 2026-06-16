@@ -197,11 +197,16 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     float ang   = atan2d(pdy, pdx);
     float surfR = planet.surfaceRadius(ang);
 
-    grounded = d <= surfR + RADIUS + 2.0f;
+    // Stand with the feet sunk below the terrain silhouette line, on the blob
+    // shadow's contact point (the ~40 degree ground-view angle — see
+    // drawBlobShadow). Feet are 30*SCALE below center. The grounded threshold
+    // is anchored to the stand height (not the silhouette) so jump/jetpack
+    // escape velocity doesn't change with the visual sink.
+    float stand = surfR + RADIUS - 10.0f;
+    grounded = d <= stand + 2.0f;
     if (grounded) {
-        // Push out to surface.
-        pos.x = planet.center.x + outX * (surfR + RADIUS);
-        pos.y = planet.center.y + outY * (surfR + RADIUS);
+        pos.x = planet.center.x + outX * stand;
+        pos.y = planet.center.y + outY * stand;
 
         // Kill inward radial velocity.
         float radVel = vel.x * outX + vel.y * outY;
@@ -295,8 +300,9 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     float idleBob = walking ? 0.0f : sinf(idleAnim) * 0.8f;
 
     // Shadow/ground contact keeps the little sprite readable against terrain.
+    // Same ~64% ground-ellipse ratio as the blob shadows (~40 degree view).
     r.fill(0.02f, 0.03f, 0.05f, grounded ? 0.28f : 0.12f);
-    r.ellipse(0, 30, 18, 4, 16);
+    r.ellipse(0, 30, 18, 11, 16);
 
     // Flame — drawn behind the sprite so the suit silhouette stays crisp.
     if (jetting) {

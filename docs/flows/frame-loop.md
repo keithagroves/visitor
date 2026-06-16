@@ -1,6 +1,6 @@
 ---
 name: frame-loop
-description: What mainLoop() does every tick — sync tunables, edge-trigger E/R/thrust keys, run the state machine (input → physics → contact → beam → cows), move the astronaut, update camera, then the layered render (stars → terrain → terminator → cows → atmosphere → ship → clouds) and the HUD push.
+description: What mainLoop() does every tick — sync tunables, edge-trigger E/R/thrust keys, run the state machine (input → physics → contact → beam → cows), move the astronaut, update camera, then the layered render (stars → ridges → body pass → shadows/cows → atmosphere → ship → clouds) and the HUD push.
 tags: [flow, game-loop, render-order, update]
 ---
 
@@ -53,17 +53,17 @@ Drawn in this order so each layer composites correctly over the last:
 ```mermaid
 flowchart LR
     Clear["glClear + view matrix"] --> Stars["1. Starfield<br/>(screen-space)"]
-    Stars --> Terrain["2. Planet body<br/>marching-squares mesh"]
-    Terrain --> Term["2b. Terminator<br/>multiply: darken night side"]
-    Term --> Cows["2c. Cows"]
+    Stars --> Ridges["1b. Ridge silhouettes<br/>hazy horizon layers"]
+    Ridges --> Terrain["2. Planet body pass<br/>SDF fill · material · slope light · terminator"]
+    Terrain --> Cows["2b. Ground shadows + cows"]
     Cows --> Atmo["3. Atmosphere disk<br/>Rayleigh/Mie, occludes stars"]
     Atmo --> Ship["3c. Ship + astronaut<br/>+ trajectory/beacon aids"]
     Ship --> Clouds["4. Clouds<br/>FBM band, in front of all"]
     Clouds --> HUD["updateHUD() → DOM overlay"]
 
     click Stars call navigate("../../src/core/main.cpp")
+    click Ridges call navigate("../../src/core/main.cpp")
     click Terrain call navigate("../../src/core/main.cpp")
-    click Term call navigate("../../src/core/main.cpp")
     click Cows call navigate("../../src/entities/cow.cpp")
     click Atmo call navigate("../../src/core/main.cpp")
     click Ship call navigate("../../src/entities/lander.cpp")
@@ -73,8 +73,14 @@ flowchart LR
 
 Key ordering reasons (from the comments in `mainLoop`):
 
-- The **terminator** runs *before* the cows so abductable cows stay readable at
-  night.
+- **Ridge silhouettes** draw before the body pass, so only peaks poking above
+  the main silhouette stay visible as distant horizon mountains.
+- The **body pass** (one fullscreen draw) fills the rock from the destructible
+  density-field texture, applies the altitude-banded material, slope lighting
+  from the SDF gradient, the day/night terminator, and the dark cave-interior
+  backdrop. It runs *before* the cows so abductable cows stay readable at night.
+- **Ground blob shadows** draw between the body and the entities, grounding the
+  ship/astronaut/cows on the surface.
 - The **atmosphere** is one disk drawn after the planet body; the shader splits
   it by radius (horizon sky above the mountains, altitude-gated sky sphere over
   the planet face), so the ground stays clear up close.

@@ -1,6 +1,6 @@
 ---
 name: overview
-description: Entry map for Cow Abductor — a C++/WebGL (Emscripten) 2D game with a procedural destructible planet, a lander, abductable cows, a spacewalking astronaut, and fullscreen atmosphere/cloud/terminator shader passes.
+description: Entry map for Cow Abductor — a C++/WebGL (Emscripten) 2D game with a procedural destructible planet, a lander, abductable cows, a spacewalking astronaut, and fullscreen body/atmosphere/cloud shader passes.
 tags: [entry, overview, architecture, webgl, emscripten]
 ---
 
@@ -54,14 +54,14 @@ ordering of updates and draw passes — the part that ties them together — is 
 own flow:
 
 - [The frame loop](flows/frame-loop.md) — what `mainLoop()` does each tick:
-  input → physics → camera, then the layered render (stars → terrain →
-  terminator → cows → atmosphere → ship → clouds) and the HUD push.
+  input → physics → camera, then the layered render (stars → ridges → body
+  pass → shadows/cows → atmosphere → ship → clouds) and the HUD push.
 
 ## Architecture docs
 
 - [Core / game loop](architecture/core.md) — the `App` singleton, the
   `PLAYING/LANDED/CRASHED` state machine, the `View` camera, and the fullscreen
-  shader passes (atmosphere, clouds, terminator, terrain mesh) defined inline in
+  shader passes (planet body, atmosphere, clouds) defined inline in
   `main.cpp`.
 - [Entities](architecture/entities.md) — the player [Lander](../src/entities/lander.h),
   the abductable [Cow](../src/entities/cow.h), and the spacewalking
@@ -78,6 +78,11 @@ own flow:
   [Perlin noise](../src/math/noise.h).
 
 ## Conventions & host page
+
+- **Art style** — [art-style.md](art-style.md): limited palette, five flat
+  terrain tones, three cel light steps, soft computed skies, flat ridge
+  layers, and the 10-16% ground-ellipse rule. Every new visual feature follows
+  it.
 
 - **Coordinate system** — world is a 2D plane with **+y pointing down** on
   screen, matching p5.js. All trig is **degrees-based** (`sind`/`cosd`/`atan2d`

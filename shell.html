@@ -240,12 +240,15 @@
         // first frame already sees real values. Persisted to localStorage.
         (function () {
             var DEFAULTS = {
-                thrust: 0.07, maxFuel: 250, beamRange: 300, beamWidth: 20,
+                // thrust 0.15 = the original game's tuning: thrust-to-weight
+                // ~1.25 at the home surface, enough to climb out to space.
+                thrust: 0.15, maxFuel: 250, beamRange: 300, beamWidth: 20,
                 planetDensity: 0.025, atmosphereScale: 0.4, atmosphereDrag: 0.015,
                 atmRayleighH: 1.5, atmRimH: 7.5, atmMieH: 2.0, atmSunIntensity: 44.0, atmExtinction: 4.5,
                 cloudHeight: 0.8, cloudCoverage: 1.0, cloudFalloff: 0.65, spaceHaze: 1.0,
                 nightDarkness: 0.16, nightSoftness: 0.30,
-                cameraGroundZoom: 0.2, cameraFraming: 0.4
+                cameraGroundZoom: 0.2, cameraFraming: 0.4,
+                sunOverride: -5
             };
             var PARAMS = [
                 { key: 'thrust',           label: 'Thrust',               min: 0.01,  max: 0.5,  step: 0.005 },
@@ -267,7 +270,8 @@
                 { key: 'nightDarkness',    label: 'Night Side Darkness',  min: 0.0,   max: 1.0,  step: 0.02 },
                 { key: 'nightSoftness',    label: 'Terminator Softness',  min: 0.05,  max: 0.8,  step: 0.05 },
                 { key: 'cameraGroundZoom', label: 'Cam Ground Zoom',      min: 0.05,  max: 4.0,  step: 0.05 },
-                { key: 'cameraFraming',    label: 'Cam Framing',          min: 0.05,  max: 1.5,  step: 0.05 }
+                { key: 'cameraFraming',    label: 'Cam Framing',          min: 0.05,  max: 1.5,  step: 0.05 },
+                { key: 'sunOverride',      label: 'Sun Angle (-5 = auto, 270 = noon)', min: -5, max: 360, step: 1 }
             ];
             var STORE_KEY = 'rocket:debug';
 

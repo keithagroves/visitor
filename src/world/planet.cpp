@@ -34,10 +34,53 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
 
     Rng rng(seed);
     PerlinNoise perlin(seed);
-    // Remap this noise field to roughly 0..1 to match p5's noise() output.
-    auto noise01 = [&perlin](float x) {
-        float n = perlin.noise(x, 0.0f) * 0.5f + 0.5f;
-        return n < 0 ? 0 : (n > 1 ? 1 : n);
+    // Seamless noise around the silhouette: sample 2D Perlin on a circle of
+    // radius `freq` so angle 0 and 360 meet exactly (the old linear walk left a
+    // small cliff at the seam). Returns roughly [-1, 1].
+    auto circNoise = [&perlin](float angleDeg, float freq, float ox, float oy) {
+        float a = angleDeg * (3.14159265f / 180.0f);
+        return perlin.noise(cosf(a) * freq + ox, sinf(a) * freq + oy);
+    };
+
+    // Per-octave decorrelation offsets, fixed for this planet's seed.
+    float octOx[6], octOy[6];
+    for (int o = 0; o < 6; o++) {
+        octOx[o] = rng.range(-100.0f, 100.0f);
+        octOy[o] = rng.range(-100.0f, 100.0f);
+    }
+
+    // Rolling fBm: gentle 3-octave hills for the basins. ~[0, 1].
+    auto rollingFbm = [&](float angleDeg) {
+        float sum = 0, amp = 1.0f, freq = 1.6f, norm = 0;
+        for (int o = 0; o < 3; o++) {
+            sum += (circNoise(angleDeg, freq, octOx[o], octOy[o]) * 0.5f + 0.5f) * amp;
+            norm += amp;
+            amp *= 0.5f;
+            freq *= 2.0f;
+        }
+        return sum / norm;
+    };
+
+    // Ridged multifractal (Musgrave): fold the noise at its zero crossings
+    // (1 - |n|) into sharp V-creases, square to pinch the summits, and weight
+    // each octave by the one below it so detail piles onto crests while
+    // valley floors stay smooth. This is the same construction the classic
+    // 3D heightmap mountains use, evaluated around the circle. ~[0, 1].
+    auto ridgedFbm = [&](float angleDeg) {
+        float sum = 0, amp = 0.55f, freq = 2.2f, w = 1.0f, norm = 0;
+        for (int o = 0; o < 5; o++) {
+            float p = circNoise(angleDeg, freq, octOx[o], octOy[o]);
+            float r = 1.0f - std::fabs(p) * 1.6f;
+            if (r < 0) r = 0;
+            r = r * r * w;
+            w = r * 1.8f;
+            if (w > 1) w = 1;
+            sum += r * amp;
+            norm += amp;
+            amp *= 0.5f;
+            freq *= 2.15f;
+        }
+        return sum / norm;
     };
 
     // 1-2 mountain "range" centers. Angles near these cluster more sample
@@ -79,15 +122,19 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
         return (idx + frac) * (360.0f / BUCKETS);
     };
 
+    // Height profile: rolling fBm in the basins, ridged multifractal inside the
+    // range clusters (blended by rangeWeight), with the ranges also getting an
+    // amplitude boost. Ridged peaks push altFrac toward 1, which is where the
+    // body shader's snow band lives — so the high ranges cap with snow while
+    // the basins stay in the dark tones.
     landscape.clear();
-    float noiseOffset = rng.range(0.0f, 1000.0f);
     for (int i = 0; i < numPoints; i++) {
         float angle = angleAt((float)i / numPoints);
         float w = rangeWeight(angle);
+        float mountain = w / (w + 0.8f);   // 0 in basins -> ~1 at range centers
+        float h = rollingFbm(angle) * (1.0f - mountain) + ridgedFbm(angle) * mountain;
         float amp = noiseIntensity * (1.0f + w * 0.6f);
-        float r = baseRadius + noise01(noiseOffset) * amp;
-        noiseOffset += 0.1f;
-        landscape.push_back({angle, r});
+        landscape.push_back({angle, baseRadius + h * amp});
     }
     // Close the loop.
     if (!landscape.empty()) landscape.push_back(landscape.front());
@@ -96,34 +143,137 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
     // uniform-angle silhouettes with smaller amplitude than the main terrain so
     // they mostly hide behind it, poking above only as distant horizon peaks.
     // Far layer first; tuning (follow/lift/alpha/skyMix) carried over 1:1.
+    // Only worlds with air get hazy horizons (set atmosphere/isSun BEFORE
+    // calling generate).
     ridges.clear();
-    struct RidgeSpec { float ampScale, noiseStep, seedBias, follow, liftScale, alpha, skyMix; };
-    const RidgeSpec specs[] = {
-        {0.50f, 0.035f, 900.0f, 0.68f, 0.13f, 125.0f / 255.0f, 0.76f},
-        {0.82f, 0.055f, 500.0f, 0.84f, 0.07f, 205.0f / 255.0f, 0.55f},
-    };
-    for (const RidgeSpec& s : specs) {
-        Ridge layer;
-        layer.follow = s.follow;
-        layer.lift = noiseIntensity * s.liftScale;
-        layer.alpha = s.alpha;
-        layer.skyMix = s.skyMix;
-        // 3x the main terrain's resolution: finer silhouette detail without
-        // affecting collision/landing (which read the field LUT).
-        int count = numPoints * 3;
-        float ridgeOffset = rng.range(0.0f, 1000.0f) + s.seedBias;
-        float amplitude = noiseIntensity * s.ampScale;
-        layer.points.reserve(count + 1);
-        for (int i = 0; i < count; i++) {
-            float angle = i * (360.0f / count);
-            layer.points.push_back({angle, baseRadius + noise01(ridgeOffset) * amplitude});
-            ridgeOffset += s.noiseStep;
+    if (atmosphere && !isSun) {
+        struct RidgeSpec {
+            float ampScale, noiseStep, seedBias, follow, liftScale, alpha, skyMix;
+            float tintR, tintG, tintB;
+            bool fg;   // foreground framing plane (drawn OVER the terrain)
+        };
+        // Far-to-near. Amplitudes/steps/haze carry the p5 tuning; the lifts are
+        // raised from the original because our spawn terrain isn't flattened to
+        // the valley floor like p5's landing pads were — without the lift the
+        // ranges hide below the local ground and the horizon reads empty.
+        //
+        // Six BACKGROUND layers form a smooth atmospheric-perspective ramp
+        // (Summer Afternoon-style): far ranges are pale lavender, high-follow
+        // (slide slowest), nearly dissolved into the sky haze; near ranges are
+        // warm/dark, low-follow (slide faster), crisp. Stacking many planes at
+        // a smooth depth gradient is what reads as a deep 3D scene rather than
+        // a flat horizon.
+        //
+        // follow: fraction of the player's angle the layer tracks. HIGHER =
+        // moves less relative to the camera = reads farther away. So the far
+        // hazy layer gets the biggest follow and the near layer the smallest.
+        //
+        // The final entry (fg = true) is a single dark, fast (low-follow),
+        // chunky FOREGROUND plane drawn OVER the terrain — the near framing
+        // silhouette that passes across the bottom of the frame and shoves
+        // everything behind it into depth (the Dave-the-Diver move).
+        const RidgeSpec specs[] = {
+            {0.26f, 0.018f, 1700.0f, 0.91f, 0.58f, 110.0f / 255.0f, 0.93f, 0.66f, 0.66f, 0.78f, false},
+            {0.33f, 0.024f, 1400.0f, 0.84f, 0.48f, 135.0f / 255.0f, 0.85f, 0.60f, 0.60f, 0.72f, false},
+            {0.43f, 0.032f, 1150.0f, 0.76f, 0.39f, 165.0f / 255.0f, 0.74f, 0.54f, 0.53f, 0.63f, false},
+            {0.55f, 0.041f,  900.0f, 0.67f, 0.30f, 195.0f / 255.0f, 0.61f, 0.49f, 0.48f, 0.55f, false},
+            {0.68f, 0.050f,  680.0f, 0.58f, 0.22f, 222.0f / 255.0f, 0.47f, 0.43f, 0.44f, 0.48f, false},
+            {0.84f, 0.058f,  460.0f, 0.49f, 0.15f, 242.0f / 255.0f, 0.34f, 0.39f, 0.42f, 0.44f, false},
+            // Foreground framing planes — dark, low-follow, big chunky lumps.
+            // Two of them at different speeds so the near edge reads as THICK,
+            // not a single cutout: a mid-dark one, then a closer/darker/faster
+            // one right at the camera.
+            {0.62f, 0.019f,  220.0f, 0.30f, 0.06f, 255.0f / 255.0f, 0.00f, 0.17f, 0.18f, 0.22f, true},
+            {0.80f, 0.014f,   60.0f, 0.20f, 0.02f, 255.0f / 255.0f, 0.00f, 0.09f, 0.10f, 0.13f, true},
+        };
+        for (const RidgeSpec& s : specs) {
+            Ridge layer;
+            layer.foreground = s.fg;
+            layer.follow = s.follow;
+            layer.lift = noiseIntensity * s.liftScale;
+            layer.alpha = s.alpha;
+            layer.skyMix = s.skyMix;
+            layer.tintR = s.tintR;
+            layer.tintG = s.tintG;
+            layer.tintB = s.tintB;
+            // 3x the main terrain's resolution: finer silhouette detail without
+            // affecting collision/landing (which read the field LUT).
+            int count = numPoints * 3;
+            float amplitude = noiseIntensity * s.ampScale;
+            // Match the old walk's bump count: it covered count*noiseStep noise
+            // units per revolution; the circle sampler covers 2*pi*freq.
+            float baseFreq = count * s.noiseStep / 6.2831853f;
+            float lOx[3], lOy[3];
+            for (int o = 0; o < 3; o++) {
+                lOx[o] = rng.range(-100.0f, 100.0f) + s.seedBias;
+                lOy[o] = rng.range(-100.0f, 100.0f);
+            }
+            layer.points.reserve(count + 1);
+            for (int i = 0; i < count; i++) {
+                float angle = i * (360.0f / count);
+                // 3-octave ridged fBm so the horizon reads as peaks, not swells.
+                float sum = 0, amp = 1.0f, freq = baseFreq, wgt = 1.0f, norm = 0;
+                for (int o = 0; o < 3; o++) {
+                    float p = circNoise(angle, freq, lOx[o], lOy[o]);
+                    float r = 1.0f - std::fabs(p) * 1.6f;
+                    if (r < 0) r = 0;
+                    r = r * r * wgt;
+                    wgt = r * 1.8f;
+                    if (wgt > 1) wgt = 1;
+                    sum += r * amp;
+                    norm += amp;
+                    amp *= 0.5f;
+                    freq *= 2.1f;
+                }
+                layer.points.push_back({angle, baseRadius + (sum / norm) * amplitude});
+            }
+            layer.points.push_back(layer.points.front());
+            layer.topR = baseRadius + layer.lift;
+            for (const LandPoint& pt : layer.points)
+                if (pt.r + layer.lift > layer.topR) layer.topR = pt.r + layer.lift;
+            ridges.push_back(std::move(layer));
         }
-        layer.points.push_back(layer.points.front());
-        ridges.push_back(std::move(layer));
+
+        // Silhouette clutter: foreground props on the near framing plane plus
+        // ground tufts scattered on the surface. Spread evenly around the
+        // planet with jitter so flying reveals a steady stream of them.
+        props.clear();
+        const float nearFollow = 0.20f;  // matches the closest foreground ridge
+        int fgCount = 220;
+        for (int i = 0; i < fgCount; i++) {
+            Prop pr{};
+            pr.foreground = true;
+            pr.angle = (float)i / fgCount * 360.0f + rng.range(-0.6f, 0.6f);
+            pr.scale = rng.range(0.7f, 1.8f);
+            pr.phase = rng.range(0.0f, 6.2831853f);
+            pr.follow = nearFollow;
+            pr.radialFrac = rng.range(0.02f, 0.14f);   // low, at the bottom edge
+            pr.kind = rng.range(0.0f, 1.0f) < 0.5f ? 0 : 1;
+            props.push_back(pr);
+        }
+        int tuftCount = 320;
+        for (int i = 0; i < tuftCount; i++) {
+            Prop pr{};
+            pr.foreground = false;
+            pr.angle = (float)i / tuftCount * 360.0f + rng.range(-0.5f, 0.5f);
+            pr.scale = rng.range(0.5f, 1.2f);
+            pr.phase = rng.range(0.0f, 6.2831853f);
+            pr.follow = 0.0f;        // no parallax shift: pinned to the surface
+            pr.radialFrac = 0.0f;
+            pr.kind = 1;             // small fronds/tufts
+            props.push_back(pr);
+        }
     }
 
-    // Seed the destructible crust from the silhouette, then bake the surface LUT.
+    // The destructible field is LAZY (built on approach via ensureField); until
+    // then the surface LUT comes straight from the analytic silhouette.
+    fieldReady_ = false;
+    digOps_.clear();
+    rebuildSurfaceLUT();
+}
+
+void Planet::ensureField() {
+    if (fieldReady_) return;
     float coreR = baseRadius - SHELL_DEPTH;
     if (coreR < baseRadius * 0.25f) coreR = baseRadius * 0.25f;
     float outerR = maxSurfaceRadius() + CELL * 2.0f;
@@ -131,19 +281,60 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
     std::vector<float> seedLUT(SEED_N);
     for (int k = 0; k < SEED_N; k++) seedLUT[k] = seedRadius(k * (360.0f / SEED_N));
     field.generate(center, coreR, outerR, CELL, seedLUT);
+    // Replay recorded digs (stored planet-local) so craters survive reloads.
+    for (const DigOp& op : digOps_)
+        field.dig(Vec2(center.x + op.local.x, center.y + op.local.y), op.radius);
+    fieldReady_ = true;
     rebuildSurfaceLUT();
+}
+
+void Planet::releaseField() {
+    if (!fieldReady_) return;
+    field.release();
+    fieldReady_ = false;
+    rebuildSurfaceLUT();   // falls back to the analytic silhouette + nothing else
 }
 
 void Planet::rebuildSurfaceLUT() {
     surfaceLUT.resize(LUT_N);
-    for (int k = 0; k < LUT_N; k++)
-        surfaceLUT[k] = field.outerSurfaceRadius(k * (360.0f / LUT_N));
+    if (fieldReady_) {
+        for (int k = 0; k < LUT_N; k++)
+            surfaceLUT[k] = field.outerSurfaceRadius(k * (360.0f / LUT_N));
+    } else {
+        for (int k = 0; k < LUT_N; k++)
+            surfaceLUT[k] = seedRadius(k * (360.0f / LUT_N));
+    }
 }
 
 bool Planet::dig(Vec2 world, float radius) {
+    if (!fieldReady_) return false;   // can only dig the planet you're standing on
     if (!field.dig(world, radius)) return false;
+    digOps_.push_back({Vec2(world.x - center.x, world.y - center.y), radius});
     rebuildSurfaceLUT();
     return true;
+}
+
+void Planet::setOrbit(int parentIdx, float radius, float speedDegPerFrame, float startAngleDeg) {
+    orbitParent = parentIdx;
+    orbitRadius = radius;
+    orbitSpeed = speedDegPerFrame;
+    orbitAngle = startAngleDeg;
+}
+
+void Planet::updateOrbit(const std::vector<Planet>& planets, float timeScale) {
+    if (orbitParent < 0 || orbitParent >= (int)planets.size()) {
+        orbitVel = Vec2(0, 0);
+        return;
+    }
+    orbitAngle += orbitSpeed * timeScale;
+    const Vec2& pc = planets[orbitParent].center;
+    Vec2 newCenter(pc.x + orbitRadius * cosd(orbitAngle),
+                   pc.y + orbitRadius * sind(orbitAngle));
+    orbitVel = timeScale > 1e-6f
+                   ? Vec2((newCenter.x - center.x) / timeScale, (newCenter.y - center.y) / timeScale)
+                   : Vec2(0, 0);
+    center = newCenter;
+    if (fieldReady_) field.moveTo(center);   // grid is center-relative; pure shift
 }
 
 float Planet::surfaceRadius(float angle) const {
@@ -184,6 +375,7 @@ float Planet::maxSurfaceRadius() const {
 }
 
 float Planet::atmosphericDensity(float x, float y) const {
+    if (!atmosphere) return 0.0f;
     float dx = x - center.x;
     float dy = y - center.y;
     float d = sqrtf(dx * dx + dy * dy);

@@ -70,7 +70,9 @@ bool Cow::update(const Planet& planet, const Lander& lander, int cargo,
         float surfaceR = planet.surfaceRadius(landAngle);
         if (distance <= surfaceR) {
             surfaceAngle_ = landAngle;
-            surfaceRadius_ = surfaceR;
+            // Same standing height as spawn: hooves on the shadow contact
+            // point just below the silhouette line (~40 degree ground view).
+            surfaceRadius_ = surfaceR + 7.0f;
             recomputeOrigin(planet);
             pos = origin_;
             vel = Vec2(0, 0);

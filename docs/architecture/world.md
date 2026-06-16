@@ -1,25 +1,32 @@
 ---
 name: world
-description: The procedural Planet (star-shaped Perlin silhouette, 1/r^2 gravity, atmosphere shell) and its destructible TerrainField — a signed-density grid meshed with marching squares that digging carves into.
-tags: [world, planet, terrain, procedural, marching-squares]
+description: The procedural Planet (star-shaped Perlin silhouette, 1/r^2 gravity, atmosphere shell, ridge layers) and its destructible TerrainField — a signed-density grid that digging carves and the body shader pass renders per pixel.
+tags: [world, planet, terrain, procedural, density-field]
 ---
 
 # World
 
-The planet the whole game orbits. `Planet` owns the procedural silhouette,
-gravity, and atmosphere; `TerrainField` is the destructible crust underneath it,
-a density grid that digging carves and that re-meshes on demand.
+The solar system. Each `Planet` owns its procedural silhouette, gravity,
+atmosphere, background ridge layers, and an optional kinematic orbit around a
+parent body (the moon circles home; the sun itself orbits home at the old
+day-cycle rate so the tuned terminator drift carries over). `TerrainField` is
+the destructible crust, a signed-density grid that digging carves — and it is
+**lazy**: only the planet the player is near keeps a live grid
+(`ensureField`/`releaseField`), with dig ops recorded in planet-local coords
+and replayed on reload. Rendering samples the grid on the GPU (the core mirrors
+it into an R16F texture for the body shader pass); far planets render from
+their silhouette LUT rows instead.
 
 ```mermaid
 flowchart TD
-    Planet["Planet<br/>silhouette · gravity · atmosphere · surface LUT"]
-    Field["TerrainField<br/>signed-density grid · marching squares"]
+    Planet["Planet<br/>silhouette · gravity · atmosphere · surface LUT · ridges"]
+    Field["TerrainField<br/>signed-density grid · dig dirty-rect"]
     Noise["PerlinNoise<br/>star-shaped heightfield seed"]
     Renderer["Renderer2D"]
 
     Planet -->|seeds from| Noise
     Planet -->|owns / seeds / digs| Field
-    Field -->|mesh() triangles| Planet
+    Field -->|corner grid + digRect| Planet
     Planet --> Renderer
 
     click Planet call navigate("../../src/world/planet.cpp")
@@ -39,11 +46,12 @@ flowchart TD
   field then rebuilds the LUT. A starter planet is ~32000 units across.
 - **TerrainField** — a 2D signed-density grid in world space, organized around
   the planet centre. Each corner stores density (>0 solid rock, <0 open/cave,
-  0-isoline = surface), seeded from the planet heightfield. Only the crust shell
-  `[coreRadius..outerRadius]` is meshed with marching squares; the interior is a
-  cheap always-solid fan. `dig()` pushes corner densities negative inside a
-  circular brush and flags dirty; `mesh()` lazily rebuilds the cached world-space
-  triangle soup that the core's terrain pass uploads to the GPU.
+  0-isoline = surface), seeded from the planet heightfield. It is the source of
+  truth for collision (`solidAt`) and the silhouette (`outerSurfaceRadius`);
+  rendering happens GPU-side from a texture mirror of `corners()`. `dig()`
+  pushes corner densities negative inside a circular brush (never below the
+  protected core) and reports the touched corner bounds via `digRect()` so the
+  core re-uploads only that texture sub-rect.
 - **Perlin noise** — supplies the octave noise that shapes the silhouette (from
   [foundation](foundation.md)).
 
@@ -54,10 +62,10 @@ flowchart TD
   atmosphere, the surface-radius LUT, and `dig()`.
 - [src/world/terrain_field.h](../../src/world/terrain_field.h) ·
   [terrain_field.cpp](../../src/world/terrain_field.cpp) — the destructible
-  density grid and its marching-squares mesh.
+  density grid, collision sampling, and the dig dirty-rect.
 
 ## Related
 
 - The noise primitive that seeds the silhouette: [foundation](foundation.md).
 - Who reads gravity/surface and who digs: [entities](entities.md).
-- How the mesh + silhouette LUT reach the GPU each change: [core](core.md).
+- How the field texture + silhouette LUT reach the GPU each change: [core](core.md).

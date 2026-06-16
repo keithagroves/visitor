@@ -8,8 +8,8 @@
 
 // The player ship. Physics (1/r^2 gravity, thrust along the ship's local "up",
 // multiplicative atmospheric drag with substepping, velocity clamp) are ported
-// from cow-abductor's lander.js. Phase 1 supports a single planet; the gravity
-// loop is written so adding bodies later is a matter of summing over a list.
+// from cow-abductor's lander.js. Gravity and drag sum over every body in the
+// system; landing/beam/contact are judged against the dominant body by main.
 class Lander {
 public:
     // Fixed tuning (the live-tunable ones — thrust, fuel, beam, drag — moved to
@@ -31,12 +31,14 @@ public:
     // Advance one simulation step (pure physics; ground contact is judged by
     // the caller). `timeScale` is frame-relative (1 == one 60fps frame) so the
     // original tuning constants carry over unchanged. No-op once inactive.
-    void update(const Planet& planet, float timeScale);
+    // Gravity sums over every body; drag comes from whichever atmosphere the
+    // ship is inside (they never overlap in practice).
+    void update(const std::vector<Planet>& planets, float timeScale);
 
     // State transitions ported from lander.js.
     void land(const Planet& planet);   // settle: stop, stick to the surface
     void crash();                      // disable controls, mark wrecked
-    void liftOff(const Planet& planet);// reactivate and nudge clear of terrain
+    void liftOff(const Planet& planet);// reactivate, nudge clear, ride the orbit
 
     // Is the ship's "legs down" axis within LANDING_MAX_TILT of straight-up
     // (away from the planet)?
@@ -49,15 +51,16 @@ public:
 
     void draw(Renderer2D& r);
 
-    // Net gravity at a world point (for the camera roll). Single planet for now.
+    // Gravity from one body / net gravity from the whole system at a point.
     Vec2 gravityAt(const Planet& planet, Vec2 p) const;
+    Vec2 gravityAt(const std::vector<Planet>& planets, Vec2 p) const;
 
     // Unit vector the nose points along (== thrust direction).
     Vec2 noseDir() const { return Vec2(sind(rotation), -cosd(rotation)); }
 
     // Forward-simulate the coast path (gravity + drag, no thrust) into `out`,
-    // stopping at planet impact. Used to draw the trajectory line in space.
-    void predictTrajectory(const Planet& planet, std::vector<Vec2>& out) const;
+    // stopping at terrain impact on any body. Used for the space trajectory aid.
+    void predictTrajectory(const std::vector<Planet>& planets, std::vector<Vec2>& out) const;
 
     Vec2 pos;
     Vec2 vel;

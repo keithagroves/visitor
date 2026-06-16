@@ -5,7 +5,10 @@
 // writes into window.DBG; main.cpp's syncDebugFromJS() copies those values into
 // this struct each frame, so gameplay code can just read gDebug.* directly.
 struct Debug {
-    float thrust = 0.07f;
+    // 0.15 (the original's tuning) gives thrust-to-weight ~1.25 at the home
+    // planet's surface (g = density * baseRadius / 8000 ≈ 0.1) — enough to
+    // climb to orbit. Below ~0.1 the ship can never leave the ground.
+    float thrust = 0.15f;
     float maxFuel = 250.0f;
     float beamRange = 300.0f;
     float beamWidth = 20.0f;
@@ -28,6 +31,10 @@ struct Debug {
     float nightSoftness = 0.30f;   // half-width of the terminator band in sunDot units (higher = softer, more gradual)
     float cameraGroundZoom = 0.2f;
     float cameraFraming = 0.4f;
+    // Sun-angle override for tuning time-of-day looks: -5 = auto day cycle;
+    // 0..360 pins the sun's orbit angle (270 = noon over the spawn point,
+    // ~350 = sunset there).
+    float sunOverride = -5.0f;
 };
 
 inline Debug gDebug;

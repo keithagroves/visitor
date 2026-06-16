@@ -49,7 +49,26 @@ Vec2 Lander::gravityAt(const Planet& planet, Vec2 p) const {
     return Vec2((dx / distance) * force, (dy / distance) * force);
 }
 
-void Lander::update(const Planet& planet, float timeScale) {
+Vec2 Lander::gravityAt(const std::vector<Planet>& planets, Vec2 p) const {
+    Vec2 g(0, 0);
+    for (const Planet& pl : planets) g += gravityAt(pl, p);
+    return g;
+}
+
+namespace {
+// Strongest atmospheric density over all bodies at a point. Atmospheres never
+// overlap in practice, so this is "the one you're inside" (0 in open space).
+float systemDensity(const std::vector<Planet>& planets, Vec2 p) {
+    float best = 0.0f;
+    for (const Planet& pl : planets) {
+        float d = pl.atmosphericDensity(p.x, p.y);
+        if (d > best) best = d;
+    }
+    return best > 1.0f ? 1.0f : best;
+}
+}
+
+void Lander::update(const std::vector<Planet>& planets, float timeScale) {
     if (!active) return;
 
     anim += timeScale;
@@ -62,8 +81,7 @@ void Lander::update(const Planet& planet, float timeScale) {
     // Substep count from current atmospheric density: the multiplicative drag
     // form collapses to zero when k*dt approaches 1, so split the step to keep
     // each slice in the stable regime.
-    float densityNow = planet.atmosphericDensity(pos.x, pos.y);
-    if (densityNow > 1) densityNow = 1;
+    float densityNow = systemDensity(planets, pos);
     float kdt = gDebug.atmosphereDrag * densityNow * timeScale;
     int substeps = (int)std::ceil(kdt / SUBSTEP_MAX_KDT);
     if (substeps < 1) substeps = 1;
@@ -75,8 +93,8 @@ void Lander::update(const Planet& planet, float timeScale) {
     }
 
     for (int i = 0; i < substeps; i++) {
-        // Gravity.
-        vel += gravityAt(planet, pos) * dt;
+        // Gravity: sum over every body in the system.
+        vel += gravityAt(planets, pos) * dt;
 
         // Thrust along the ship's local "up": (sin(rot), -cos(rot)).
         if (thrusting > 0 && fuel > 0) {
@@ -86,7 +104,7 @@ void Lander::update(const Planet& planet, float timeScale) {
         }
 
         // Atmospheric drag toward the (static) planet frame.
-        float density = planet.atmosphericDensity(pos.x, pos.y);
+        float density = systemDensity(planets, pos);
         if (density > 0) {
             float factor = 1.0f - gDebug.atmosphereDrag * density * dt;
             if (factor < 0) factor = 0;
@@ -127,14 +145,17 @@ void Lander::land(const Planet& planet) {
     thrusting = 0.0f;
     thrustLevel = 0.0f;
     vel = Vec2(0, 0);
-    // Rest the legs just on top of the terrain, then remember the offset so the
-    // ship can ride the body if it ever moves.
+    // Rest the ship with its base sunk below the terrain silhouette line, so
+    // the ground reads as extending toward the viewer (the ~40 degree view
+    // angle of the ground-ellipse language). The hull base sits 22*SCALE below
+    // center; it should land on the blob shadow's contact point, which sits
+    // radius*1.5*0.64 (the shadow drop in drawBlobShadow) below the line.
     float dx = pos.x - planet.center.x;
     float dy = pos.y - planet.center.y;
     float d = sqrtf(dx * dx + dy * dy);
     if (d > 1e-6f) {
         float angle = atan2d(dy, dx);
-        float rest = planet.surfaceRadius(angle) + 12.0f;
+        float rest = planet.surfaceRadius(angle) + 22.0f * SCALE - radius * 1.5f * 0.64f;
         pos = Vec2(planet.center.x + (dx / d) * rest,
                    planet.center.y + (dy / d) * rest);
     }
@@ -159,7 +180,9 @@ void Lander::liftOff(const Planet& planet) {
     float upY = -cosd(rotation);
     pos.x += upX * (radius + 5.0f);
     pos.y += upY * (radius + 5.0f);
-    vel = Vec2(0, 0);
+    // Inherit the body's orbital motion so lifting off a moving moon doesn't
+    // instantly smear you across its surface.
+    vel = planet.orbitVel;
 }
 
 namespace {
@@ -279,12 +302,14 @@ void Lander::drawBeam(Renderer2D& r) {
     }
 
     // --- Layered ground splat: stacked breathing oblongs at the impact. ---
+    // Ground-plane ellipse language: ~64% height/width, matching the blob
+    // shadows' ~40 degree view angle.
     {
         float breath = 0.9f + 0.1f * sind(anim * 240.0f);
         for (int i = 4; i >= 1; i--) {
             float rx = hw * (0.6f + i * 0.4f) * breath;
             r.fill(0.70f, 1.0f, 0.86f, 0.10f);
-            r.ellipse(beamEnd.x, beamEnd.y, rx, rx * 0.32f, 18);
+            r.ellipse(beamEnd.x, beamEnd.y, rx, rx * 0.64f, 18);
         }
     }
 
@@ -301,27 +326,25 @@ void Lander::drawBeam(Renderer2D& r) {
     r.setBlend(Renderer2D::Blend::Normal);
 }
 
-void Lander::predictTrajectory(const Planet& planet, std::vector<Vec2>& out) const {
+void Lander::predictTrajectory(const std::vector<Planet>& planets, std::vector<Vec2>& out) const {
     out.clear();
     const float dt = 1.0f;        // one frame-unit per substep (matches the sim)
     const int steps = 320;        // recorded points
     const int subStride = 14;     // ~4500 frame-units of horizon -> wraps an orbit
 
-    // Beyond this radius the path can't possibly touch terrain, so we skip the
-    // per-substep surfaceRadius() lookup (a 256-point scan) and only do the
-    // cheap bounding check. That keeps the long horizon affordable.
-    float terrainReach = planet.baseRadius + planet.noiseIntensity;
-
     Vec2 sp = pos, sv = vel;
     out.push_back(sp);   // anchor the line at the ship itself
-    // Don't terminate on the body we're currently inside the bounding radius of
-    // (e.g. just after lift-off); only stop once we've left it and re-entered.
-    bool outside = dist(sp.x, sp.y, planet.center.x, planet.center.y) > planet.baseRadius;
+    // Don't terminate on a body we start inside the bounding radius of (e.g.
+    // just after lift-off); only stop once we've left it and re-entered.
+    bool outside = true;
+    for (const Planet& pl : planets) {
+        if (dist(sp.x, sp.y, pl.center.x, pl.center.y) <= pl.baseRadius) outside = false;
+    }
 
     for (int i = 0; i < steps; i++) {
         for (int s = 0; s < subStride; s++) {
-            sv += gravityAt(planet, sp) * dt;
-            float density = planet.atmosphericDensity(sp.x, sp.y);
+            sv += gravityAt(planets, sp) * dt;
+            float density = systemDensity(planets, sp);
             if (density > 0) {
                 float f = 1.0f - gDebug.atmosphereDrag * density * dt;
                 if (f < 0) f = 0;
@@ -331,13 +354,20 @@ void Lander::predictTrajectory(const Planet& planet, std::vector<Vec2>& out) con
             if (speedSq > TOP_SPEED * TOP_SPEED) sv *= TOP_SPEED / sqrtf(speedSq);
             sp += sv * dt;
 
-            float d = dist(sp.x, sp.y, planet.center.x, planet.center.y);
-            if (d <= terrainReach) {  // only near the surface can we actually hit
-                float surf = planet.surfaceRadius(
-                    atan2d(sp.y - planet.center.y, sp.x - planet.center.x));
-                if (outside && d <= surf) { out.push_back(sp); return; }
+            bool insideAny = false;
+            for (const Planet& pl : planets) {
+                float d = dist(sp.x, sp.y, pl.center.x, pl.center.y);
+                // Beyond this radius the path can't possibly touch terrain, so
+                // we skip the surfaceRadius() lookup. That keeps the long
+                // horizon affordable.
+                if (d <= pl.baseRadius + pl.noiseIntensity) {
+                    float surf = pl.surfaceRadius(
+                        atan2d(sp.y - pl.center.y, sp.x - pl.center.x));
+                    if (outside && d <= surf) { out.push_back(sp); return; }
+                }
+                if (d <= pl.baseRadius) insideAny = true;
             }
-            if (d > planet.baseRadius) outside = true;
+            if (!insideAny) outside = true;
         }
         out.push_back(sp);
     }
