@@ -10,8 +10,10 @@ set(SOURCES
     src/graphics/shader.cpp
     src/graphics/renderer2d.cpp
     src/world/planet.cpp
+    src/world/terrain_field.cpp
     src/entities/lander.cpp
     src/entities/cow.cpp
+    src/entities/astronaut.cpp
     src/input/input.cpp
 )
 

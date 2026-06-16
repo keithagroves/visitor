@@ -35,8 +35,9 @@ public:
     float maxSurfaceRadius() const;
 
     // Carve rock out of the destructible crust at a world point, then refresh
-    // the surface LUT. Callers re-upload the GPU terrain mesh + LUT afterwards.
-    void dig(Vec2 world, float radius);
+    // the surface LUT. Returns true if anything changed; callers then re-upload
+    // the field texture region (field.digRect()) and the silhouette LUT.
+    bool dig(Vec2 world, float radius);
 
     // 0..1 atmospheric density at a world point (1 at surface, 0 at the top).
     float atmosphericDensity(float x, float y) const;
@@ -49,7 +50,19 @@ public:
     float density = 0;
 
     std::vector<LandPoint> landscape;  // closed loop (last == first); seeds the field
-    TerrainField field;                // destructible crust (marching-squares mesh)
+    TerrainField field;                // destructible crust (SDF density grid)
+
+    // Distant mountain silhouettes drawn behind the terrain (ported from the
+    // original's generateBackgroundRidge). Each layer follows a fraction of the
+    // player's surface angle so the horizon slides with depth as you fly.
+    struct Ridge {
+        std::vector<LandPoint> points; // closed loop (last == first)
+        float follow;                  // fraction of the view angle the layer tracks
+        float lift;                    // radial offset so ridges sit above valleys
+        float alpha;                   // layer opacity (0..1)
+        float skyMix;                  // how far the rock tint fades toward sky haze
+    };
+    std::vector<Ridge> ridges;         // far-to-near order
 
 private:
     // The original star-shaped silhouette, interpolated from `landscape`. Used

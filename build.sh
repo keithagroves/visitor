@@ -33,6 +33,7 @@ SOURCES="
     $SRC_DIR/world/terrain_field.cpp
     $SRC_DIR/entities/lander.cpp
     $SRC_DIR/entities/cow.cpp
+    $SRC_DIR/entities/astronaut.cpp
     $SRC_DIR/input/input.cpp
 "
 

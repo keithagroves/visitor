@@ -36,6 +36,11 @@ public:
 
     // Per-vertex RGBA color, for gradient primitives.
     struct Color { float r, g, b, a; };
+    struct SpriteFrame {
+        float x, y, w, h;
+    };
+
+    GLuint createTextureRGBA(int width, int height, const unsigned char* pixels, bool nearest = true);
 
     // ---- primitives (current fill color, current transform) ----
     void triangle(float x1, float y1, float x2, float y2, float x3, float y3);
@@ -60,6 +65,12 @@ public:
     // hull pieces (ship body parts).
     void convexPolygon(const Vec2* pts, int count);
 
+    // Textured sprite from an atlas. Source rect is in pixels; destination rect
+    // uses the current transform just like the shape primitives.
+    void sprite(GLuint texture, int textureW, int textureH, SpriteFrame src,
+                float dstX, float dstY, float dstW, float dstH,
+                Color tint = Color{1, 1, 1, 1}, bool flipX = false, bool flipY = false);
+
     // Screen-space helpers: draw directly in clip space (-1..1), bypassing the
     // camera view. Used for the static starfield / HUD-ish overlays. Calls emit
     // clip coords into the same batch, so no flush is needed on the switch.
@@ -68,15 +79,22 @@ public:
 
 private:
     void flush();
+    void flushSprites();
     void addVertex(float x, float y);              // applies model+view, current color
     void addVertexColored(float x, float y, const Color& c); // model+view, explicit color
     void addClip(float cx, float cy, float r, float g, float b, float a);
+    void addSpriteVertex(float x, float y, float u, float v, const Color& c);
 
     GLuint program_ = 0;
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
+    GLuint spriteProgram_ = 0;
+    GLuint spriteVao_ = 0;
+    GLuint spriteVbo_ = 0;
+    GLuint spriteTexture_ = 0;
 
     std::vector<float> batch_;   // interleaved: clipX, clipY, r, g, b, a
+    std::vector<float> spriteBatch_; // interleaved: clipX, clipY, u, v, r, g, b, a
     std::vector<Mat3> stack_;
     Mat3 model_;
     Mat3 view_;

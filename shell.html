@@ -106,6 +106,52 @@
         }
         #message .sub { font-size: 16px; font-weight: 400; opacity: 0.85; }
 
+        #toast {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 65;
+            display: none;
+            max-width: min(320px, calc(100vw - 32px));
+            padding: 12px 42px 12px 14px;
+            background: rgba(8, 13, 22, 0.88);
+            border: 1px solid rgba(160, 210, 255, 0.24);
+            border-radius: 8px;
+            color: #eef7ff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            line-height: 1.35;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+        }
+        #toast .title {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+        #toast .body {
+            color: rgba(238, 247, 255, 0.82);
+        }
+        #toast-close {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: rgba(238, 247, 255, 0.72);
+            font-size: 18px;
+            line-height: 22px;
+            cursor: pointer;
+        }
+        #toast-close:hover {
+            background: rgba(255, 255, 255, 0.10);
+            color: #fff;
+        }
+
         /* ---- Debug panel ---- */
         #debug-toggle {
             position: fixed;
@@ -175,6 +221,11 @@
     </div>
 
     <div id="message"></div>
+    <div id="toast" role="status" aria-live="polite">
+        <button id="toast-close" type="button" aria-label="Dismiss">&times;</button>
+        <div class="title" id="toast-title"></div>
+        <div class="body" id="toast-body"></div>
+    </div>
 
     <button id="debug-toggle">&#9776; Debug</button>
     <div id="debug-panel">
@@ -267,7 +318,10 @@
     <script>
         (function () {
             var fuelEl = null, fuelFill = null, altEl = null, velEl = null,
-                cargoEl = null, scoreEl = null, statusEl = null, msgEl = null;
+                cargoEl = null, scoreEl = null, statusEl = null, msgEl = null,
+                toastEl = null, toastTitle = null, toastBody = null, toastClose = null;
+            var wasSpacewalking = false;
+            var spacewalkToastDismissed = false;
             function cache() {
                 fuelEl = document.getElementById('hud-fuel');
                 fuelFill = document.getElementById('hud-fuel-fill');
@@ -277,10 +331,33 @@
                 scoreEl = document.getElementById('hud-score');
                 statusEl = document.getElementById('hud-status');
                 msgEl = document.getElementById('message');
+                toastEl = document.getElementById('toast');
+                toastTitle = document.getElementById('toast-title');
+                toastBody = document.getElementById('toast-body');
+                toastClose = document.getElementById('toast-close');
+                toastClose.addEventListener('click', function () {
+                    spacewalkToastDismissed = true;
+                    toastEl.style.display = 'none';
+                });
             }
-            // state: 0 = playing, 1 = landed, 2 = crashed
-            window.updateHUD = function (fuel, maxFuel, altitude, velocity, state, cargo, maxCargo, score) {
+            function showToast(title, body) {
+                toastTitle.textContent = title;
+                toastBody.textContent = body;
+                toastEl.style.display = 'block';
+            }
+            // state: 0 = playing, 1 = landed, 2 = crashed  spacewalking: 0/1
+            window.updateHUD = function (fuel, maxFuel, altitude, velocity, state, cargo, maxCargo, score, spacewalking) {
                 if (!fuelEl) cache();
+                var enteredSpacewalk = !!spacewalking && !wasSpacewalking;
+                if (!spacewalking && wasSpacewalking) {
+                    spacewalkToastDismissed = false;
+                    toastEl.style.display = 'none';
+                }
+                if (enteredSpacewalk && !spacewalkToastDismissed) {
+                    showToast('Spacewalking', 'A/D or arrows walk. E re-enters the ship when you are close.');
+                }
+                wasSpacewalking = !!spacewalking;
+
                 var f = Math.max(0, Math.round(fuel));
                 var mf = Math.round(maxFuel);
                 var frac = mf > 0 ? f / mf : 0;
@@ -295,10 +372,15 @@
                 scoreEl.textContent = score;
 
                 if (state === 1) {
-                    statusEl.textContent = 'LANDED';
                     statusEl.style.color = '#7fe3a0';
                     msgEl.style.display = 'block';
-                    msgEl.innerHTML = 'LANDED SAFELY<div class="sub">press W to lift off</div>';
+                    if (spacewalking) {
+                        statusEl.textContent = 'WALKING';
+                        msgEl.style.display = 'none';
+                    } else {
+                        statusEl.textContent = 'LANDED';
+                        msgEl.innerHTML = 'LANDED SAFELY<div class="sub">E exit ship &nbsp;·&nbsp; W lift off</div>';
+                    }
                 } else if (state === 2) {
                     statusEl.textContent = 'CRASHED';
                     statusEl.style.color = '#ff7a6c';

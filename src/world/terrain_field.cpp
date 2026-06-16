@@ -42,10 +42,10 @@ void TerrainField::generate(Vec2 center, float coreRadius, float outerRadius,
             corner(i, j) = surf - dist;
         }
     }
-    dirty_ = true;
+    digRect_ = Rect{};
 }
 
-void TerrainField::dig(Vec2 world, float radius) {
+bool TerrainField::dig(Vec2 world, float radius) {
     // Touch only corners the brush can reach, and never carve into the core.
     int i0 = std::max(0, (int)std::floor((world.x - radius - ox_) / cell_));
     int i1 = std::min(nx_, (int)std::ceil((world.x + radius - ox_) / cell_));
@@ -64,7 +64,8 @@ void TerrainField::dig(Vec2 world, float radius) {
             if (carved < c) { c = carved; changed = true; }
         }
     }
-    if (changed) dirty_ = true;
+    digRect_ = changed ? Rect{i0, j0, i1, j1} : Rect{};
+    return changed;
 }
 
 float TerrainField::densityAt(Vec2 world) const {
@@ -99,63 +100,4 @@ float TerrainField::outerSurfaceRadius(float angleDeg) const {
         prevD = dens;
     }
     return coreR_;
-}
-
-const std::vector<float>& TerrainField::mesh() {
-    if (dirty_) buildMesh();
-    return mesh_;
-}
-
-void TerrainField::buildMesh() {
-    mesh_.clear();
-    auto emit = [&](Vec2 a, Vec2 b, Vec2 c) {
-        mesh_.push_back(a.x); mesh_.push_back(a.y);
-        mesh_.push_back(b.x); mesh_.push_back(b.y);
-        mesh_.push_back(c.x); mesh_.push_back(c.y);
-    };
-
-    // --- Crust shell: marching squares, filled. ---
-    float lo = coreR_ - cell_, hi = outerR_ + cell_;
-    for (int j = 0; j < ny_; j++) {
-        for (int i = 0; i < nx_; i++) {
-            // Skip cells well outside the crust band (deep core or empty sky).
-            Vec2 cc = cornerPos(i, j) + Vec2(cell_ * 0.5f, cell_ * 0.5f);
-            float cdx = cc.x - center_.x, cdy = cc.y - center_.y;
-            float cr = sqrtf(cdx * cdx + cdy * cdy);
-            if (cr < lo || cr > hi) continue;
-
-            // Corner densities + positions, CCW: BL, BR, TR, TL.
-            float dv[4] = { cornerVal(i, j), cornerVal(i + 1, j),
-                            cornerVal(i + 1, j + 1), cornerVal(i, j + 1) };
-            Vec2 pv[4] = { cornerPos(i, j), cornerPos(i + 1, j),
-                           cornerPos(i + 1, j + 1), cornerPos(i, j + 1) };
-
-            // Walk the cell boundary, collecting the solid polygon: each solid
-            // corner, plus the 0-crossing on every edge whose ends differ in sign.
-            Vec2 poly[8];
-            int np = 0;
-            for (int k = 0; k < 4; k++) {
-                int kn = (k + 1) & 3;
-                if (dv[k] >= 0.0f) poly[np++] = pv[k];
-                if ((dv[k] >= 0.0f) != (dv[kn] >= 0.0f)) {
-                    float t = dv[k] / (dv[k] - dv[kn]);  // 0-crossing along the edge
-                    poly[np++] = pv[k] + (pv[kn] - pv[k]) * t;
-                }
-            }
-            for (int k = 1; k + 1 < np; k++) emit(poly[0], poly[k], poly[k + 1]);
-        }
-    }
-
-    // --- Solid core: a fan disk below the dig floor, so the interior is filled
-    //     without meshing every cell. The shell quads overlap it seamlessly. ---
-    const int CORE_SEG = 128;
-    Vec2 prev(center_.x + coreR_, center_.y);
-    for (int k = 1; k <= CORE_SEG; k++) {
-        float a = (float)k / CORE_SEG * 360.0f;
-        Vec2 cur(center_.x + coreR_ * cosd(a), center_.y + coreR_ * sind(a));
-        emit(center_, prev, cur);
-        prev = cur;
-    }
-
-    dirty_ = false;
 }

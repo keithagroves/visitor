@@ -92,6 +92,37 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
     // Close the loop.
     if (!landscape.empty()) landscape.push_back(landscape.front());
 
+    // Background ridge layers (ported from planet.js generateBackgroundRidge):
+    // uniform-angle silhouettes with smaller amplitude than the main terrain so
+    // they mostly hide behind it, poking above only as distant horizon peaks.
+    // Far layer first; tuning (follow/lift/alpha/skyMix) carried over 1:1.
+    ridges.clear();
+    struct RidgeSpec { float ampScale, noiseStep, seedBias, follow, liftScale, alpha, skyMix; };
+    const RidgeSpec specs[] = {
+        {0.50f, 0.035f, 900.0f, 0.68f, 0.13f, 125.0f / 255.0f, 0.76f},
+        {0.82f, 0.055f, 500.0f, 0.84f, 0.07f, 205.0f / 255.0f, 0.55f},
+    };
+    for (const RidgeSpec& s : specs) {
+        Ridge layer;
+        layer.follow = s.follow;
+        layer.lift = noiseIntensity * s.liftScale;
+        layer.alpha = s.alpha;
+        layer.skyMix = s.skyMix;
+        // 3x the main terrain's resolution: finer silhouette detail without
+        // affecting collision/landing (which read the field LUT).
+        int count = numPoints * 3;
+        float ridgeOffset = rng.range(0.0f, 1000.0f) + s.seedBias;
+        float amplitude = noiseIntensity * s.ampScale;
+        layer.points.reserve(count + 1);
+        for (int i = 0; i < count; i++) {
+            float angle = i * (360.0f / count);
+            layer.points.push_back({angle, baseRadius + noise01(ridgeOffset) * amplitude});
+            ridgeOffset += s.noiseStep;
+        }
+        layer.points.push_back(layer.points.front());
+        ridges.push_back(std::move(layer));
+    }
+
     // Seed the destructible crust from the silhouette, then bake the surface LUT.
     float coreR = baseRadius - SHELL_DEPTH;
     if (coreR < baseRadius * 0.25f) coreR = baseRadius * 0.25f;
@@ -109,9 +140,10 @@ void Planet::rebuildSurfaceLUT() {
         surfaceLUT[k] = field.outerSurfaceRadius(k * (360.0f / LUT_N));
 }
 
-void Planet::dig(Vec2 world, float radius) {
-    field.dig(world, radius);
+bool Planet::dig(Vec2 world, float radius) {
+    if (!field.dig(world, radius)) return false;
     rebuildSurfaceLUT();
+    return true;
 }
 
 float Planet::surfaceRadius(float angle) const {

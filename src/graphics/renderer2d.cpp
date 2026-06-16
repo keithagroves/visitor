@@ -21,11 +21,37 @@ void main() {
 }
 )";
 
+const char* kSpriteVertexSrc = R"(#version 300 es
+layout(location = 0) in vec2 a_pos;
+layout(location = 1) in vec2 a_uv;
+layout(location = 2) in vec4 a_color;
+out vec2 v_uv;
+out vec4 v_color;
+void main() {
+    v_uv = a_uv;
+    v_color = a_color;
+    gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+)";
+
+const char* kSpriteFragmentSrc = R"(#version 300 es
+precision mediump float;
+uniform sampler2D u_tex;
+in vec2 v_uv;
+in vec4 v_color;
+out vec4 fragColor;
+void main() {
+    fragColor = texture(u_tex, v_uv) * v_color;
+}
+)";
+
 constexpr int kFloatsPerVertex = 6; // clipX, clipY, r, g, b, a
+constexpr int kFloatsPerSpriteVertex = 8; // clipX, clipY, u, v, r, g, b, a
 }
 
 void Renderer2D::init() {
     program_ = Shader::createProgram(kVertexSrc, kFragmentSrc);
+    spriteProgram_ = Shader::createProgram(kSpriteVertexSrc, kSpriteFragmentSrc);
 
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
@@ -40,7 +66,22 @@ void Renderer2D::init() {
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
+    glGenVertexArrays(1, &spriteVao_);
+    glGenBuffers(1, &spriteVbo_);
+    glBindVertexArray(spriteVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, spriteVbo_);
+    glBufferData(GL_ARRAY_BUFFER, 1 << 16, nullptr, GL_DYNAMIC_DRAW);
+
+    GLsizei spriteStride = kFloatsPerSpriteVertex * sizeof(float);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, spriteStride, (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, spriteStride, (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, spriteStride, (void*)(4 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
     batch_.reserve(1 << 14);
+    spriteBatch_.reserve(1 << 12);
 }
 
 void Renderer2D::begin(const Mat3& view, int screenW, int screenH) {
@@ -51,6 +92,8 @@ void Renderer2D::begin(const Mat3& view, int screenW, int screenH) {
     model_.identity();
     screenSpace_ = false;
     batch_.clear();
+    spriteBatch_.clear();
+    spriteTexture_ = 0;
     blend_ = Blend::Normal;
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -59,6 +102,7 @@ void Renderer2D::begin(const Mat3& view, int screenW, int screenH) {
 
 void Renderer2D::end() {
     flush();
+    flushSprites();
 }
 
 void Renderer2D::pushMatrix() { stack_.push_back(model_); }
@@ -83,12 +127,26 @@ void Renderer2D::fill(float r, float g, float b, float a) {
 void Renderer2D::setBlend(Blend mode) {
     if (mode == blend_) return;
     flush();
+    flushSprites();
     blend_ = mode;
     if (mode == Blend::Additive) {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
     } else {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
+}
+
+GLuint Renderer2D::createTextureRGBA(int width, int height, const unsigned char* pixels, bool nearest) {
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return tex;
 }
 
 void Renderer2D::beginScreenSpace() { screenSpace_ = true; }
@@ -108,6 +166,7 @@ void Renderer2D::addVertex(float x, float y) {
 }
 
 void Renderer2D::addVertexColored(float x, float y, const Color& c) {
+    flushSprites();
     if (screenSpace_) {
         addClip(x, y, c.r, c.g, c.b, c.a);
         return;
@@ -179,6 +238,49 @@ void Renderer2D::convexPolygon(const Vec2* pts, int count) {
     }
 }
 
+void Renderer2D::addSpriteVertex(float x, float y, float u, float v, const Color& c) {
+    Vec2 clip;
+    if (screenSpace_) {
+        clip = Vec2(x, y);
+    } else {
+        Vec2 world = model_.transform(x, y);
+        clip = view_.transform(world.x, world.y);
+    }
+    spriteBatch_.push_back(clip.x);
+    spriteBatch_.push_back(clip.y);
+    spriteBatch_.push_back(u);
+    spriteBatch_.push_back(v);
+    spriteBatch_.push_back(c.r);
+    spriteBatch_.push_back(c.g);
+    spriteBatch_.push_back(c.b);
+    spriteBatch_.push_back(c.a);
+}
+
+void Renderer2D::sprite(GLuint texture, int textureW, int textureH, SpriteFrame src,
+                        float dstX, float dstY, float dstW, float dstH,
+                        Color tint, bool flipX, bool flipY) {
+    if (!texture || textureW <= 0 || textureH <= 0 || src.w <= 0 || src.h <= 0) return;
+    flush();
+    if (spriteTexture_ != 0 && spriteTexture_ != texture) flushSprites();
+    spriteTexture_ = texture;
+
+    float u0 = src.x / textureW;
+    float v0 = src.y / textureH;
+    float u1 = (src.x + src.w) / textureW;
+    float v1 = (src.y + src.h) / textureH;
+    if (flipX) { float t = u0; u0 = u1; u1 = t; }
+    if (flipY) { float t = v0; v0 = v1; v1 = t; }
+
+    float x0 = dstX, y0 = dstY;
+    float x1 = dstX + dstW, y1 = dstY + dstH;
+    addSpriteVertex(x0, y0, u0, v0, tint);
+    addSpriteVertex(x1, y0, u1, v0, tint);
+    addSpriteVertex(x1, y1, u1, v1, tint);
+    addSpriteVertex(x0, y0, u0, v0, tint);
+    addSpriteVertex(x1, y1, u1, v1, tint);
+    addSpriteVertex(x0, y1, u0, v1, tint);
+}
+
 void Renderer2D::flush() {
     if (batch_.empty()) return;
 
@@ -192,4 +294,22 @@ void Renderer2D::flush() {
     glDrawArrays(GL_TRIANGLES, 0, vertexCount);
 
     batch_.clear();
+}
+
+void Renderer2D::flushSprites() {
+    if (spriteBatch_.empty()) return;
+
+    glUseProgram(spriteProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, spriteTexture_);
+    glUniform1i(glGetUniformLocation(spriteProgram_, "u_tex"), 0);
+    glBindVertexArray(spriteVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, spriteVbo_);
+    GLsizeiptr bytes = (GLsizeiptr)(spriteBatch_.size() * sizeof(float));
+    glBufferData(GL_ARRAY_BUFFER, bytes, spriteBatch_.data(), GL_DYNAMIC_DRAW);
+
+    GLsizei vertexCount = (GLsizei)(spriteBatch_.size() / kFloatsPerSpriteVertex);
+    glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+
+    spriteBatch_.clear();
 }

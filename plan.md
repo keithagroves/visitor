@@ -1,47 +1,158 @@
-# Plan: Fix Tree Selection for Third-Person Camera
+# Plan: From sandbox to exploration game
 
-## Problem
-Currently, the ray casting for tree selection starts from the camera position and goes toward where the camera is looking. In third-person view, this causes trees between the camera and player to be incorrectly selected.
+Vision: a No Man's Sky / KSP-flavored 2D game — fly between planets in a small
+solar system, discover unnamed worlds, land on them (landing itself is the
+challenge), step out and dig. Planets must *look* like places: lit slopes, ground
+shadows, horizon depth, other worlds visible in the sky — not flat grey discs you
+perch on the rim of.
 
-## Solution: Option 1 - Start ray from player position
+Decisions already made:
+- **Keep the destructible density field** ([src/world/terrain_field.cpp](src/world/terrain_field.cpp))
+  as the source of truth for collision and the silhouette LUT, but **render it as
+  an SDF mask texture** sampled in a fullscreen "body" shader pass instead of a
+  marching-squares mesh. Digging = carve the CPU grid + `glTexSubImage2D` of the
+  dirty rect (no mesh rebuild). The field also goes **lazy**: only the planet
+  you're near owns a live grid; distant planets are analytic silhouettes. Digs
+  are recorded and replayed so they survive field unload/reload.
+- **No parallax starfield.** Depth comes from the planets themselves.
+- The p5 original (`/Users/keithgroves/projects/games/cow-abductor`) already has
+  tuned implementations of orbits, discovery, map mode, ridges, water, and biome
+  texture — port, don't reinvent. Math carries over (degrees, +y down).
 
-Cast the ray from the player's position (slightly elevated to eye level) using the camera's look direction. This way trees behind the player or between camera and player won't be selected.
+Each stage leaves the game playable.
 
-## Files to Modify
+---
 
-### 1. `src/core/main.cpp`
-**Current code (~line 291-294):**
-```cpp
-// Get look direction for tree targeting
-Vec3 lookDir = app.camera.getLookDirection();
+## Stage 1 — Make the planet read as 3D (visual depth)
 
-// Find tree in crosshairs
-bool hasTargetedTree = false;
-Vec3 targetedTreePos = app.terrain.findTreeInCrosshairs(cameraPos, lookDir, 20.0f, hasTargetedTree);
-```
+The current planet is one flat `u_color` mesh fill plus a terminator multiply
+pass. Replace both with a single **body pass** and add depth cues around it:
 
-**Change to:**
-```cpp
-// Get look direction for tree targeting
-Vec3 lookDir = app.camera.getLookDirection();
+1. **Body pass (SDF mask texture).** Upload the TerrainField corner grid as an
+   R16F texture (filterable in ES 3.0; upload floats directly). A fullscreen
+   pass — same world-reconstruction skeleton as the atmosphere/cloud/terminator
+   shaders — samples the density per pixel:
+   - density ≥ 0 → rock; edge anti-aliased with `fwidth` smoothing at the 0
+     iso-line (smoother than the 250-unit marching-squares facets).
+   - density < 0 but **below the silhouette LUT** → cave interior: near-black
+     rock backdrop, darkening with depth, so tunnels never show stars.
+   - density < 0 above the LUT → sky (alpha 0).
+   - **Terminator merged in**: same dayNight shade the separate pass computed —
+     the terminator pass and the mesh path (`buildMesh`, terrain VAO/VBO,
+     `uploadTerrainMesh`) are deleted.
+   - Digging = `glTexSubImage2D` of the brush's dirty rect (uses
+     `GL_UNPACK_ROW_LENGTH` to upload the sub-rect straight from the CPU grid).
 
-// Find tree in crosshairs - start from player position, not camera
-// Use player eye level (position + some height offset)
-Vec3 playerEyePos = Vec3(
-    app.player.position.x,
-    app.player.position.y + 1.5f,  // Eye level
-    app.player.position.z
-);
-bool hasTargetedTree = false;
-Vec3 targetedTreePos = app.terrain.findTreeInCrosshairs(playerEyePos, lookDir, 20.0f, hasTargetedTree);
-```
+2. **Terrain material, per pixel in the body pass.** Altitude fraction =
+   (dist − base) / noise band → color ramp: dark basins → rock → ragged snow
+   caps, with FBM grain (reuse the cloud shader's `hash/vnoise/fbm`) jittering
+   band edges so nothing reads as concentric rings. Live-shader port of the p5
+   baked texture ([planet.js generateSurfaceTexture](../games/cow-abductor/src/world/planet.js#L111)).
+   Grass/water bands arrive with archetypes in Stage 4.
 
-## Summary of Changes
-- **1 file modified**: `main.cpp`
-- **Lines changed**: ~3-5 lines
-- Change the first parameter of `findTreeInCrosshairs` from `cameraPos` to player's eye-level position
+3. **Slope lighting from the SDF gradient.** The world-space density gradient
+   (4 taps at ±half-cell) is the true 2D surface normal — works on mountainsides
+   *and* inside dug craters/tunnels, which the old silhouette-LUT idea couldn't
+   see. Brighten sun-facing slopes, darken back slopes; subtle, the terminator
+   still owns day/night.
 
-## Expected Behavior After Fix
-- Trees between camera and player will NOT be selected
-- Trees in front of the player (in the direction they're looking) WILL be selected
-- Selection range is measured from the player, not the camera
+4. **Ground blob shadows.** For lander / astronaut / cows: project the entity
+   radially onto `planet.surfaceRadius(angle)`, draw a soft dark ellipse on the
+   ground, offset along the surface tangent away from the sun
+   (`sunWorldPos()`), alpha and size fading with altitude (gone above a few
+   hundred units). Drawn after the body pass, before cows. This single change
+   kills the "sticker on a rim" look when landing.
+
+5. **Background ridge silhouettes.** Port `generateBackgroundRidge`
+   ([planet.js:88](../games/cow-abductor/src/world/planet.js#L88)): two
+   haze-tinted ridge layers per atmosphere planet, drawn with the 2D renderer
+   *before* the body pass so only their peaks show above the main silhouette
+   as distant horizon mountains. Each layer follows a fraction (0.68 / 0.84) of
+   the player's surface angle, so the horizon slides believably as you fly.
+   Per-vertex night darkening (gradient triangles) keeps them consistent with
+   the terminator.
+
+## Stage 2 — Solar system & travel (background planets for free)
+
+1. **Planet orbits.** Port orbital state from
+   [planet.js:208-294](../games/cow-abductor/src/world/planet.js#L208):
+   `orbitCenter / orbitRadius / orbitSpeed / orbitAngle`, kinematic update, plus
+   the optional symplectic gravity-driven orbit (`useGravityOrbit`) and
+   `getOrbitalVelocity()` (needed so landed ships ride the planet — the
+   `landingOffset` hook already exists in the LANDED case,
+   [main.cpp:1130](src/core/main.cpp#L1130)).
+2. **`std::vector<Planet>` + a real sun.** Sun = `isSun` planet at the system
+   center; `sunWorldPos()` returns its actual position (day/night now comes from
+   orbiting, not the fake drift). Start with: sun, home planet (current one),
+   and a **moon orbiting the home planet** — a big object hanging in the sky is
+   the fastest "background planets" payoff.
+3. **Multi-body gravity.** Sum `gravityAt` over all bodies (lander.h is written
+   for this). Dominant body (strongest pull) drives camera roll, altitude
+   framing, contact tests, and cow updates.
+4. **Shaders go multi-planet.** All four passes already take `MAX_PLANETS=10`
+   arrays but are fed only index 0. Fill them per planet. Silhouette LUT becomes
+   a 2048×N texture (one row per planet); shaders index row `i`.
+5. **Lazy terrain fields.** Split `Planet::generate()`
+   ([planet.cpp:28](src/world/planet.cpp#L28)): always build the analytic
+   landscape + seed LUT (cheap); build `field` only via `ensureField()` when the
+   player is within ~2× atmosphere radius, release when far. Keep a per-planet
+   list of `(pos, radius)` dig operations; replay them on rebuild so craters
+   persist. Far planets render in the same body pass from their silhouette LUT
+   row (radial test, like the old terminator did) — no field texture needed.
+6. **Per-planet entities.** Cows spawn per planet; `spawnCows` takes a planet.
+
+## Stage 3 — Discovery & map (the NMS/KSP feel)
+
+1. **Discovery.** `name` + `discovered` on Planet; reveal when the ship comes
+   within a discovery distance (p5 used 2500 world units); HUD toast
+   "Discovered: <name>" plus score bonus. First *landing* on a body is a bigger
+   bonus — landing is the KSP challenge being rewarded.
+2. **Overview / map mode (M).** Camera mode that frames the whole system
+   (port from sketch.js): orbits as faint circles, planets as discs,
+   undiscovered ones drawn dim with "?" labels. The View struct already supports
+   everything needed (focus/scale override).
+3. **Objective HUD.** Extend the DOM HUD in [shell.html](shell.html): nearest
+   body + distance, discovered count, event toasts. Reuses the existing
+   `updateHUD` push ([main.cpp:1209](src/core/main.cpp#L1209)).
+
+## Stage 4 — Planet variety & things to find
+
+1. **Archetypes** drive the Stage-1 shader params + atmosphere per planet:
+   - airless moon (no atmosphere entry, grey, harsh terminator)
+   - lush world (water + grass ramp, thick atmosphere)
+   - ice / volcanic variants (color ramps, atmosphere tint)
+2. **Water worlds.** Port sea level ([planet.js:475](../games/cow-abductor/src/world/planet.js#L475)):
+   water disk behind the crust, shoreline rim, terrain ramp switches to the
+   vegetation band. (Underwater physics can come later.)
+3. **Seeded caves.** Subtract a noise term from the field seed in
+   `TerrainField::generate` so some planets have natural cavern pockets — hidden
+   until the astronaut digs into them (the silhouette LUT only sees the
+   outermost rock, so they're genuine surprises). The body pass's cave-interior
+   shading renders them correctly for free.
+4. **More abductables** as exploration rewards: minerals on airless moons,
+   plants on lush worlds (port from p5 `mineral.js` / `plant.js`). Cows stay
+   the home-planet specialty.
+5. **Digging feel.** Particles on dig, brief screen-space dust, hold-to-dig
+   cadence — the astronaut implementation stays as-is otherwise.
+
+## Stage 5 — Close the game loop
+
+1. `GameState` gains `WAITING / WON / LOST` (start screen, stranded-out-of-fuel
+   lose, goal-met win).
+2. Home base on the starter planet: deliver cargo → score + refuel.
+3. Goal: discover + land on every body / deliver a quota — pick once Stages 2–3
+   are playable and we feel the pacing.
+4. Upgrades (fuel tank, beam, cargo) spending score — these are already live
+   tunables in `gDebug`, just driven by gameplay instead of sliders.
+
+---
+
+## Order & why
+
+Stage 1 first: it pays off immediately on the current single planet and every
+later planet inherits it. Stage 2 is the structural change (vector of planets +
+lazy fields) — biggest refactor, do it while the codebase is still small.
+Stages 3–5 are additive.
+
+Out of scope for now: parallax starfield (explicitly dropped), true cave
+lighting, fluid plumes, audio, hull heat / re-entry.
