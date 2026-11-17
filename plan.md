@@ -21,6 +21,20 @@ Decisions already made:
 
 Each stage leaves the game playable.
 
+**Status (2026-11-15).** Stages 1–2 are done and Stage 3 mostly so; Stage 4's
+archetypes arrived early as part of system generation.
+- The system is now **generated from a seed** ([system_gen.cpp](src/world/system_gen.cpp)):
+  star + 4–6 planets + moons, each with an archetype look, on Kepler-consistent
+  orbits around a real central star (the "sun orbits home" stand-in is gone).
+- Discovery, first-landing score, the world/system HUD and the map (M) are in.
+- Flight was retuned so the system is reachable: fuel burn 0.2 → 0.05 per
+  frame and the tank refills while landed (at 0.2 a full tank ran dry at
+  ~8,400 altitude, below the 12,800 atmosphere top).
+- Still open from the stages below: water worlds, seeded caves, more
+  abductables (cows only spawn on the home world), dig feel, the whole of
+  Stage 5. New candidates: time warp for long coasts, a pointer to the
+  nearest uncharted world, things to do on the other worlds.
+
 ---
 
 ## Stage 1 — Make the planet read as 3D (visual depth)

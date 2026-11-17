@@ -42,30 +42,6 @@ void TerrainField::generate(Vec2 center, float coreRadius, float outerRadius,
             corner(i, j) = surf - dist;
         }
     }
-    digRect_ = Rect{};
-}
-
-bool TerrainField::dig(Vec2 world, float radius) {
-    // Touch only corners the brush can reach, and never carve into the core.
-    int i0 = std::max(0, (int)std::floor((world.x - radius - ox_) / cell_));
-    int i1 = std::min(nx_, (int)std::ceil((world.x + radius - ox_) / cell_));
-    int j0 = std::max(0, (int)std::floor((world.y - radius - oy_) / cell_));
-    int j1 = std::min(ny_, (int)std::ceil((world.y + radius - oy_) / cell_));
-    float coreFloor = coreR_ + cell_;
-    bool changed = false;
-    for (int j = j0; j <= j1; j++) {
-        for (int i = i0; i <= i1; i++) {
-            Vec2 p = cornerPos(i, j);
-            float cdx = p.x - center_.x, cdy = p.y - center_.y;
-            if (sqrtf(cdx * cdx + cdy * cdy) < coreFloor) continue;  // protect the core
-            float bx = p.x - world.x, by = p.y - world.y;
-            float carved = sqrtf(bx * bx + by * by) - radius;  // <0 inside the brush
-            float& c = corner(i, j);
-            if (carved < c) { c = carved; changed = true; }
-        }
-    }
-    digRect_ = changed ? Rect{i0, j0, i1, j1} : Rect{};
-    return changed;
 }
 
 float TerrainField::densityAt(Vec2 world) const {
@@ -89,10 +65,19 @@ float TerrainField::outerSurfaceRadius(float angleDeg) const {
     for (float r = outerR_ - step; r >= coreR_; r -= step) {
         float dens = densityAt(center_ + dir * r);
         if (dens >= 0.0f) {
-            // Crossed from open (prevD<0) to solid: interpolate the 0 crossing.
+            // Crossed from open (prevD<0) to solid. The density between the
+            // two samples is not a straight line (it is bilinear across each
+            // cell the ray passes through), so interpolating them lands
+            // several units off the real 0 line. Bisect for it: this outline
+            // has to agree with the ground the shader draws from the same grid.
             if (prevD < 0.0f) {
-                float t = prevD / (prevD - dens);
-                return prevR + (r - prevR) * t;
+                float open = prevR, solid = r;
+                for (int k = 0; k < 20; k++) {
+                    float mid = 0.5f * (open + solid);
+                    if (densityAt(center_ + dir * mid) >= 0.0f) solid = mid;
+                    else open = mid;
+                }
+                return 0.5f * (open + solid);
             }
             return r;  // already solid at the top sample
         }

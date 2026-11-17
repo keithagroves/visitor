@@ -28,10 +28,13 @@ flowchart TD
 
 - **Init** — `Input::init("#canvas")` wires Emscripten `html5` key/mouse/wheel
   callbacks and defines the `Key` enum (WASD, arrows, space, E, etc.).
-- **Poll state** — `isKeyDown(code)` for held keys; `getMouseDeltaX/Y` +
-  `resetMouseDelta` and `isPointerLocked` for pointer-lock look; `getWheelDelta`
-  + `resetWheelDelta` feed the camera's manual zoom. The core loop reads all of
-  these each frame in `pollInput`, `pollInputAstronaut`, and `updateZoom`.
+- **Poll state** — `isKeyDown(code)` for held keys; `getWheelDelta` +
+  `resetWheelDelta` feed the camera's manual zoom; `getMouseX/Y` (canvas
+  pixels) and `isMouseDown` (primary button, pressed on the canvas; released
+  anywhere in the window) aim and fire the mining laser. The core loop reads
+  these each frame in `pollInput`, `pollInputAstronaut`, `updateZoom` and
+  `updateLaser`. (`getMouseDeltaX/Y` / `isPointerLocked` are stubs kept for
+  API stability.)
 
 ## Source
 

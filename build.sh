@@ -30,7 +30,13 @@ SOURCES="
     $SRC_DIR/graphics/shader.cpp
     $SRC_DIR/graphics/renderer2d.cpp
     $SRC_DIR/world/planet.cpp
+    $SRC_DIR/world/system_gen.cpp
+    $SRC_DIR/world/nearfield.cpp
     $SRC_DIR/world/terrain_field.cpp
+    $SRC_DIR/world/carve_map.cpp
+    $SRC_DIR/world/cave_gen.cpp
+    $SRC_DIR/world/harvest_gen.cpp
+    $SRC_DIR/world/cavefield.cpp
     $SRC_DIR/entities/lander.cpp
     $SRC_DIR/entities/cow.cpp
     $SRC_DIR/entities/astronaut.cpp

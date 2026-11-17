@@ -10,6 +10,11 @@ struct Debug {
     // climb to orbit. Below ~0.1 the ship can never leave the ground.
     float thrust = 0.15f;
     float maxFuel = 250.0f;
+    // Fuel per frame at full thrust. 0.05 gives ~83 s of burn on a full tank:
+    // enough to climb out of the home atmosphere (which alone took more than a
+    // whole tank at the old 0.2), cross to a neighboring world, and land.
+    float fuelBurn = 0.05f;
+    float refuelRate = 0.25f;      // fuel per frame regained while landed (0 = off)
     float beamRange = 300.0f;
     float beamWidth = 20.0f;
     float planetDensity = 0.025f;  // applied live via Planet::setDensity
@@ -29,8 +34,46 @@ struct Debug {
     // Day/night terminator on the planet body (see the terminator shader in main.cpp).
     float nightDarkness = 0.16f;   // brightness of the deepest night side (0 = pitch black, 1 = no darkening)
     float nightSoftness = 0.30f;   // half-width of the terminator band in sunDot units (higher = softer, more gradual)
-    float cameraGroundZoom = 0.2f;
+    // Pixels per world unit when on or near the ground. 1.8 puts the astronaut
+    // (36 units tall) and the ship at about a twelfth of the screen height —
+    // close enough to see who you are. (It was 0.2: a seven-pixel astronaut.)
+    float cameraGroundZoom = 1.8f;
     float cameraFraming = 0.4f;
+    // Speed look-ahead, seconds: the camera pulls back so that, at your
+    // current speed, this much travel still fits in the frame. It is what
+    // makes a close ground zoom flyable — zoomed in while you stand or walk,
+    // wide while the ship is moving fast near the ground. 0 = off.
+    float cameraSpeedLook = 2.2f;
+    // On-foot movement. walkSpeed is the top running speed in world units per
+    // frame (2.4 = about four body lengths a second; it was ~17, half a body
+    // length every frame). jumpSpeed is the take-off speed: 3.0 clears a bit
+    // over one body height on the home world and far more on a low-gravity
+    // moon (it was 8: nine body heights at home).
+    float walkSpeed = 2.4f;
+    float jumpSpeed = 3.0f;
+    // How far below screen center the ship sits when on the ground (fraction of
+    // screen height): puts the horizon on the lower third so the sky gets the
+    // frame. Eases back to centered as the ship climbs.
+    float cameraHorizon = 0.14f;
+    float horizonHaze = 0.7f;      // strength of the pale aerial haze band at the horizon
+    float foreground = 1.0f;       // height of the dark near framing band (0 = off)
+    // Edge vignette strength (1 = the full strip alphas in drawVignette, 0 =
+    // off). The vignette pass existed before but was never flushed to the
+    // screen; it is on at a gentle strength now that it actually draws.
+    float vignette = 0.35f;
+    // Drifting dust motes over the whole frame (0 = off, 1 = original
+    // strength). Off by default: as small pale squares drawn in front of the
+    // land they read as the starfield showing through the mountains.
+    float motes = 0.0f;
+    // The front strip of ground is solid where it passes in front of a hole —
+    // except around a player who is down one, where it thins to this (0 =
+    // vanishes there, 1 = stays solid and hides them).
+    float frontVeil = 0.45f;
+    // A hole is a darker shade of the ground it was cut in, darker the deeper
+    // it goes (see holeShade in the body shader): it levels off at holeFloor x
+    // the ground once it is holeDepth deep, so it never goes black.
+    float holeFloor = 0.34f;
+    float holeDepth = 150.0f;
     // Sun-angle override for tuning time-of-day looks: -5 = auto day cycle;
     // 0..360 pins the sun's orbit angle (270 = noon over the spawn point,
     // ~350 = sunset there).

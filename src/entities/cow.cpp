@@ -66,19 +66,42 @@ bool Cow::update(const Planet& planet, const Lander& lander, int cargo,
         pos.x += vel.x * timeScale;
         pos.y += vel.y * timeScale;
 
-        float landAngle = atan2d(pos.y - planet.center.y, pos.x - planet.center.x);
-        float surfaceR = planet.surfaceRadius(landAngle);
-        if (distance <= surfaceR) {
+        // It lands when the ground under it is rock: the planet's surface, or
+        // the floor of a hole if that is what is below.
+        Vec2 rel = pos - planet.center;
+        float r = rel.length();
+        if (r < 1.0f) r = 1.0f;
+        Vec2 up = rel * (1.0f / r);
+        float groundR = r - STAND_UP;
+        if (planet.rockAt(planet.center + up * groundR) > 0.0f) {
+            // Back up out of whatever it sank into this step.
+            for (int k = 0; k < 120 && planet.rockAt(planet.center + up * groundR) > 0.0f; k++)
+                groundR += 1.0f;
+            float landAngle = atan2d(rel.y, rel.x);
+            // On open ground use the outline itself, the same standing height
+            // as spawn: hooves on the shadow contact point just below the
+            // silhouette line (~40 degree ground view).
+            float surfaceR = planet.surfaceRadius(landAngle);
+            if (fabsf(groundR - surfaceR) < 5.0f) groundR = surfaceR;
             surfaceAngle_ = landAngle;
-            // Same standing height as spawn: hooves on the shadow contact
-            // point just below the silhouette line (~40 degree ground view).
-            surfaceRadius_ = surfaceR + 7.0f;
+            surfaceRadius_ = groundR + STAND_UP;
             recomputeOrigin(planet);
             pos = origin_;
             vel = Vec2(0, 0);
             state = State::OnGround;
         }
         return false;
+    }
+
+    // OnGround, but is the ground still there? If it has been cut out from
+    // under the cow, it falls.
+    {
+        Vec2 up(cosd(surfaceAngle_), sind(surfaceAngle_));
+        if (planet.rockAt(planet.center + up * (surfaceRadius_ - STAND_UP - 4.0f)) < 0.0f) {
+            state = State::Falling;
+            vel = Vec2(0, 0);
+            return false;
+        }
     }
 
     // OnGround: spring back toward the origin point with heavy damping.

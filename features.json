@@ -15,32 +15,33 @@
         { "id": "gradient-tris",    "title": "Per-vertex color triangles for soft gradients", "status": "done" },
         { "id": "math-lib",         "title": "Vec2 / Mat3 affine / degree trig", "status": "done" },
         { "id": "game-loop",        "title": "Main loop + game-state machine", "status": "partial", "note": "Has PLAYING/LANDED/CRASHED; missing WAITING start screen and GAMEOVER/win." },
-        { "id": "starfield",        "title": "Starfield background", "status": "partial", "note": "Static screen-space stars only; original adds parallax depth, static bg layer, constellations, star-temperature colors." }
+        { "id": "starfield",        "title": "Starfield background", "status": "partial", "note": "Static screen-space stars only (parallax starfield deliberately dropped)." }
       ]
     },
     {
       "name": "Flight Physics",
       "features": [
-        { "id": "gravity",          "title": "1/r^2 gravity", "status": "partial", "note": "Single planet; multi-body summation is stubbed for one body." },
+        { "id": "gravity",          "title": "1/r^2 gravity", "status": "done", "note": "Sums over every body, the star included." },
         { "id": "thrust-rotate",    "title": "Thrust + smoothed rotation", "status": "done" },
         { "id": "atmo-drag",        "title": "Atmospheric drag with substepping", "status": "done" },
         { "id": "vel-clamp",        "title": "Top-speed clamp", "status": "done" },
-        { "id": "trajectory",       "title": "Coast trajectory prediction", "status": "done", "note": "Long-horizon predictor; shown as space aid." },
+        { "id": "trajectory",       "title": "Coast trajectory prediction", "status": "done", "note": "Predicted with the planets advancing along their orbits, drawn in the frame of the strongest-pulling body; a ghost ring marks where another world will be at closest approach." },
         { "id": "hull-heat",        "title": "Hull heat / re-entry burn / burn-through crash", "status": "todo" },
         { "id": "parachute",        "title": "Parachute descent brake (C key)", "status": "todo" },
-        { "id": "orbits",           "title": "Planet orbits (kinematic + gravity-driven)", "status": "partial", "note": "Kinematic circular orbits (moon around home, sun's day-cycle orbit); gravity-driven orbits + eccentricity still todo. Lander gravity/drag/trajectory sum over all bodies; landing speed is judged relative to the body." }
+        { "id": "orbits",           "title": "Planet orbits (kinematic + gravity-driven)", "status": "partial", "note": "Kinematic circular orbits, Kepler-consistent with the parent mass: planets around the star, moons around planets. Ships share a planet's orbit (star gravity), drag acts in the planet's frame, landing speed is judged relative to the body. Gravity-driven (integrated) orbits + eccentricity still todo." }
       ]
     },
     {
       "name": "World",
       "features": [
         { "id": "planet-terrain",   "title": "Procedural terrain (mountain ranges, inverse-CDF sampling)", "status": "done" },
-        { "id": "atmosphere",       "title": "Atmosphere shell + Rayleigh/Mie arc-ring shader", "status": "done", "note": "Fullscreen shader pass: Gaussian arc/ring band, day/night terminator drift, blue Rayleigh + warm Mie sunset. Sun lens-flare not ported; multi-planet covered by solar-system." },
-        { "id": "surface-texture",  "title": "Surface texture (snow caps / rock by altitude)", "status": "done", "note": "Live in the body shader pass (altitude bands + FBM grain + slope lighting from the SDF gradient) instead of a baked texture. Grass/water band arrives with archetypes." },
+        { "id": "atmosphere",       "title": "Atmosphere shell + Rayleigh/Mie arc-ring shader", "status": "done", "note": "Fullscreen shader pass, per-planet scatter colors (PlanetLook). Day/night comes from orbiting the star. Horizon haze band + soft-fading limb. Sun lens-flare not ported." },
+        { "id": "surface-texture",  "title": "Surface texture (snow caps / rock by altitude)", "status": "done", "note": "Live in the body shader pass: five per-planet tones by altitude + slope lighting from the SDF gradient. Water band still todo." },
         { "id": "water",            "title": "Sea level + water rendering + underwater state", "status": "todo" },
-        { "id": "bg-ridges",        "title": "Parallax background ridge silhouettes", "status": "done", "note": "Two haze-tinted layers following 0.68/0.84 of the player's surface angle, with per-vertex night shading." },
+        { "id": "bg-ridges",        "title": "Parallax background ridge silhouettes", "status": "done", "note": "Six haze-tinted layers per world with per-archetype tints; the near framing plane is a screen-anchored band (drawForeground)." },
         { "id": "clouds",           "title": "FBM cloud shader layer", "status": "done", "note": "Fullscreen shader pass: FBM density in a low-altitude band, Beer's-law opacity, sun-direction shading, gentle drift." },
-        { "id": "solar-system",     "title": "Multiple planets + moon + sun", "status": "partial", "note": "Sun (corona-rendered star) + home + airless moon; all shader passes multi-planet (silhouette LUT rows); destructible fields are lazy (nearest planet only, digs replayed). Moon landing not yet play-tested; more worlds + variety in Stage 4." },
+        { "id": "solar-system",     "title": "Multiple planets + moon + sun", "status": "done", "note": "Generated from a seed (system_gen): star + 4-6 planets + moons, seven archetypes with their own palette/sky/clouds/terrain/gravity, generated names. All shader passes multi-planet; destructible fields are lazy (nearest body only, digs replayed)." },
+        { "id": "sky-bodies",       "title": "Other worlds + the star on the sky dome", "status": "done", "note": "Port addition: true direction, real relative size, lit half toward the star; they rise and set behind the terrain." },
         { "id": "base",             "title": "Home base / launch pad", "status": "todo" }
       ]
     },
@@ -49,9 +50,9 @@
       "features": [
         { "id": "follow",           "title": "Velocity-predictive follow", "status": "done" },
         { "id": "roll",             "title": "Auto-roll so gravity points screen-down", "status": "done" },
-        { "id": "altitude-zoom",    "title": "Altitude-based framing", "status": "done" },
+        { "id": "altitude-zoom",    "title": "Altitude-based framing", "status": "done", "note": "One rule ground-to-space: the true ground under the player stays in frame the whole way up and down; horizon on the lower third when grounded." },
         { "id": "user-zoom",        "title": "Manual zoom (wheel + keys)", "status": "done" },
-        { "id": "overview-mode",    "title": "Overview/system map mode (M)", "status": "todo" }
+        { "id": "overview-mode",    "title": "Overview/system map mode (M)", "status": "done", "note": "M frames every orbit around the star; orbit rings, world markers and DOM name labels also fade in whenever the view is far out." }
       ]
     },
     {
@@ -59,8 +60,8 @@
       "features": [
         { "id": "lander",           "title": "Player lander (hull + flame)", "status": "done" },
         { "id": "cow",              "title": "Cow (onGround/carried/falling/stowed)", "status": "done" },
-        { "id": "plant",            "title": "Plant (growable, abductable)", "status": "todo" },
-        { "id": "mineral",          "title": "Mineral (intact/abductable)", "status": "todo" },
+        { "id": "plant",            "title": "Plant (growable, abductable)", "status": "partial", "note": "Grass and bulb plants grow on the ground strip around the walking line, in depth (in front of / behind the walker); cut with the mining laser for carbon, and they grow back. Not abductable by the ship." },
+        { "id": "mineral",          "title": "Mineral (intact/abductable)", "status": "partial", "note": "Rocks (ferrite) and crystals on every world, ore only on airless ones; mined with the laser, slow to come back. Not abductable by the ship." },
         { "id": "stick-person",     "title": "Stick person abductable", "status": "todo" },
         { "id": "alien",            "title": "Decorative ground alien", "status": "todo" },
         { "id": "terrisaur",        "title": "Terrisaur enemy (spear thrower)", "status": "todo" }
@@ -73,14 +74,17 @@
         { "id": "cargo",            "title": "Cargo / max-cargo capacity", "status": "done" },
         { "id": "score",            "title": "Score", "status": "done" },
         { "id": "landing-crash",    "title": "Safe-landing vs crash judgment (speed/tilt/slope)", "status": "done" },
-        { "id": "fuel",             "title": "Fuel burn + out-of-fuel handling", "status": "done" },
+        { "id": "fuel",             "title": "Fuel burn + out-of-fuel handling", "status": "done", "note": "Burn rate is a debug knob (0.05/frame: a tank reaches orbit and a neighbor world); the tank refills while landed." },
         { "id": "deliver",          "title": "Deliver cargo at base + refuel", "status": "todo" },
         { "id": "research",         "title": "Research / delivered counters + delivery goal (win)", "status": "todo" },
         { "id": "shop",             "title": "Upgrades / shop (fuel, beam, cargo)", "status": "todo" },
-        { "id": "discoveries",      "title": "Body discovery on approach", "status": "todo" },
-        { "id": "laser",            "title": "Click-to-zap laser", "status": "todo" },
+        { "id": "discoveries",      "title": "Body discovery on approach", "status": "done", "note": "Worlds are charted on approach (+25) and on first landing (+100); HUD shows the current world, type, system and chart progress." },
+        { "id": "inventory",        "title": "Inventory (Tab) + pickup feed", "status": "partial", "note": "Slot grid with icons, counts and descriptions; carbon, ferrite, one named crystal per kind of world, and the cave items (calcite, glowcap, gold). No capacity limit, transfer, or use for the items yet." },
+        { "id": "caves",            "title": "Mesas + natural cave systems", "status": "done", "note": "Flat-topped mesas on every rocky body; most hold a cave system cut into the dig layer: flared mouth, gallery, hall (skylight or through-passage), ramp or well down to a deep cavern, crystal grottos, sometimes a geode room. Furnished with minable stalactites/stalagmites/columns, glowing crystals, glowcaps and gold veins that light the cave walls; mouths have uneven rims, a lit far wall and rubble. Nothing marks caves on the map yet." },
+        { "id": "digging",          "title": "Terrain cutter (aimed, person-scale digging)", "status": "done", "note": "Second mode of the hand tool (Q). Small bites where the beam meets rock on a fine carve layer; the astronaut collides with the rock itself, so shafts and tunnels can be walked into, and cows drop into a hole cut under them. Holes open at the walking line with an elliptical mouth; from the surface the front ground covers the shaft, down a hole it becomes a see-through cutaway. Cut rock scorches and glows, with embers and smoke. Yields ferrite. The ship still lands on the terrain outline only." },
+        { "id": "laser",            "title": "Click-to-zap laser", "status": "done", "note": "Reworked as the astronaut's mining laser: hold the mouse button to fire at the cursor; harvests plants/rocks/crystals in front of and behind the walking line. The ship has no laser." },
         { "id": "spears",           "title": "Terrisaur spears (incoming hazards)", "status": "todo" },
-        { "id": "time-scale",       "title": "Time-scale control slider", "status": "todo" }
+        { "id": "time-scale",       "title": "Time-scale control slider", "status": "todo", "note": "Would make the long coasts between worlds painless (time warp)." }
       ]
     },
     {
@@ -104,11 +108,11 @@
         { "id": "fuel-gauge",       "title": "Fuel gauge", "status": "done" },
         { "id": "readouts-core",    "title": "Altitude / velocity / cargo / score readouts", "status": "done" },
         { "id": "status-msg",       "title": "LANDED / CRASHED status messages", "status": "done" },
-        { "id": "debug-panel",      "title": "Live debug tuning panel (localStorage)", "status": "partial", "note": "9 core knobs; original has more (heat, burn, fluid toggles, spacing, etc.)." },
+        { "id": "debug-panel",      "title": "Live debug tuning panel (localStorage)", "status": "partial", "note": "Core knobs plus fuel burn/refuel, horizon haze, foreground band, vignette, camera horizon; seed display, \"New random system\", per-world warp buttons." },
         { "id": "heat-gauge",       "title": "Hull-heat gauge", "status": "todo" },
         { "id": "atmo-readout",     "title": "Atmosphere % + drag readout", "status": "todo" },
         { "id": "minimap",          "title": "Minimap with trajectory", "status": "todo" },
-        { "id": "objective-hud",    "title": "Objective + nearest-body + event messages", "status": "todo" },
+        { "id": "objective-hud",    "title": "Objective + nearest-body + event messages", "status": "partial", "note": "Current world / type / system / charted count + event banners. No objective or nearest-body pointer yet." },
         { "id": "start-screen",     "title": "WAITING start screen", "status": "todo" }
       ]
     },

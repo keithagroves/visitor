@@ -10,7 +10,7 @@ enum Key {
     KEY_A = 65,
     KEY_S = 83,
     KEY_D = 68,
-    KEY_Q = 81,
+    KEY_Q = 81,   // on foot: switch tool (mining laser / terrain cutter)
     KEY_E = 69,
     KEY_SPACE = 32,
     KEY_SHIFT = 16,
@@ -33,5 +33,12 @@ void resetMouseDelta();
 // Accumulated wheel delta (deltaY) since the last reset, for manual zoom.
 float getWheelDelta();
 void resetWheelDelta();
+
+// Pointer over the canvas, in canvas pixels (origin top-left); (-1,-1) until
+// the first move. The button is the primary one, pressed ON the canvas — a
+// press on the HUD / debug panel never reaches the game.
+float getMouseX();
+float getMouseY();
+bool isMouseDown();
 
 } // namespace Input

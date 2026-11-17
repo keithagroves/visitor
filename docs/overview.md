@@ -1,15 +1,17 @@
 ---
 name: overview
-description: Entry map for Cow Abductor — a C++/WebGL (Emscripten) 2D game with a procedural destructible planet, a lander, abductable cows, a spacewalking astronaut, and fullscreen body/atmosphere/cloud shader passes.
+description: Entry map for Cow Abductor — a C++/WebGL (Emscripten) 2D space-travel game with a seed-generated solar system of destructible planets, a lander, abductable cows, a spacewalking astronaut, and fullscreen body/atmosphere/cloud shader passes.
 tags: [entry, overview, architecture, webgl, emscripten]
 ---
 
 # Cow Abductor — Architecture Overview
 
 A 2D arcade game compiled from C++ to WebAssembly and rendered with WebGL 2
-(OpenGL ES 3.0) through Emscripten. You pilot a lander around a huge,
-procedurally generated, **destructible** planet, tractor-beam cows into your
-hold, and can step out as a jetpack astronaut to dig the crust. The look —
+(OpenGL ES 3.0) through Emscripten. You pilot a lander around a **generated
+solar system** — one seed builds the star, the planets, their moons, looks and
+names — of huge, **destructible** worlds: tractor-beam cows into your hold on
+the home planet, step out as a jetpack astronaut to dig the crust, then fly to
+the next world and chart it. The look —
 Rayleigh/Mie atmosphere, drifting clouds, a day/night terminator — comes from
 fullscreen shader passes layered over an immediate-mode 2D renderer.
 
@@ -22,7 +24,7 @@ tuning constants carry over one-to-one (degrees-based trig, +y-down world).
 flowchart TD
     Core["Core / game loop<br/>main.cpp · App · View · shader passes"]
     Entities["Entities<br/>Lander · Cow · Astronaut"]
-    World["World<br/>Planet · TerrainField"]
+    World["World<br/>system_gen · Planet · TerrainField"]
     Graphics["Graphics<br/>Renderer2D · Shader"]
     Input["Input<br/>browser event bridge"]
     Foundation["Foundation<br/>Vec2/Mat3 math · Perlin noise"]
@@ -66,8 +68,9 @@ own flow:
 - [Entities](architecture/entities.md) — the player [Lander](../src/entities/lander.h),
   the abductable [Cow](../src/entities/cow.h), and the spacewalking
   [Astronaut](../src/entities/astronaut.h).
-- [World](architecture/world.md) — the procedural [Planet](../src/world/planet.h)
-  and its destructible [TerrainField](../src/world/terrain_field.h) crust.
+- [World](architecture/world.md) — the [system generator](../src/world/system_gen.h),
+  the procedural [Planet](../src/world/planet.h) and its destructible
+  [TerrainField](../src/world/terrain_field.h) crust.
 - [Graphics](architecture/graphics.md) — the immediate-mode
   [Renderer2D](../src/graphics/renderer2d.h) batcher and the
   [Shader](../src/graphics/shader.h) compile helper.
@@ -92,8 +95,16 @@ own flow:
   debug panel in [shell.html](../shell.html) owns the UI + `localStorage` and
   writes `window.DBG`; `syncDebugFromJS()` copies it into `gDebug` each frame.
 - **Host page / HUD** — [shell.html](../shell.html) is the Emscripten shell: it
-  hosts the `#canvas`, renders the fuel/score/altitude HUD (`window.updateHUD`,
-  called from the C++ loop), and the debug slider panel.
+  picks the system seed (`?seed=N` → remembered → random), hosts the `#canvas`,
+  renders the fuel/score/altitude HUD plus the current world and chart
+  progress (`window.updateHUD` / `updateNav`, called from the C++ loop), event
+  banners, the map's name labels, and the debug panel (sliders, "New random
+  system", per-world "Warp to" buttons).
+- **Controls** — W/Up thrust, A/D rotate, Space tractor beam, E exit/enter the
+  ship, M system map, wheel or +/- zoom, R restart after a crash. On foot:
+  A/D walk (and steer in the air), W jump, Space jetpack, hold the mouse
+  button to fire the hand tool at the cursor, Q to switch it between mining
+  laser and terrain cutter, Tab (or I) for the inventory.
 
 ## Building & running
 

@@ -23,7 +23,9 @@ void Lander::spawnOnPlanet(const Planet& planet) {
     float r = surf + 2000.0f;  // drop in high enough to fly the descent
     pos = Vec2(planet.center.x + r * cosd(angle),
                planet.center.y + r * sind(angle));
-    vel = Vec2(0, 0);
+    // Start co-moving with the planet: it is travelling along its orbit, and a
+    // ship spawned at rest in the world frame would watch it race away.
+    vel = planet.orbitVel;
     rotation = targetRotation = angle + 90.0f;
     active = true;
     crashed = false;
@@ -56,15 +58,19 @@ Vec2 Lander::gravityAt(const std::vector<Planet>& planets, Vec2 p) const {
 }
 
 namespace {
-// Strongest atmospheric density over all bodies at a point. Atmospheres never
-// overlap in practice, so this is "the one you're inside" (0 in open space).
-float systemDensity(const std::vector<Planet>& planets, Vec2 p) {
-    float best = 0.0f;
+// The air at a point: the strongest atmosphere over all bodies (they never
+// overlap in practice, so this is "the one you're inside"; density 0 in open
+// space) and the velocity that air moves with — its planet's orbital motion.
+// Drag pulls the ship toward THAT velocity, not toward rest in the world
+// frame: the atmosphere travels with its planet.
+struct Air { float density; Vec2 vel; };
+Air systemAir(const std::vector<Planet>& planets, Vec2 p) {
+    Air air{0.0f, Vec2(0, 0)};
     for (const Planet& pl : planets) {
-        float d = pl.atmosphericDensity(p.x, p.y);
-        if (d > best) best = d;
+        float d = pl.atmosphericDensity(p.x, p.y) * pl.look.dragScale;
+        if (d > air.density) { air.density = d; air.vel = pl.orbitVel; }
     }
-    return best > 1.0f ? 1.0f : best;
+    return air;
 }
 }
 
@@ -81,7 +87,7 @@ void Lander::update(const std::vector<Planet>& planets, float timeScale) {
     // Substep count from current atmospheric density: the multiplicative drag
     // form collapses to zero when k*dt approaches 1, so split the step to keep
     // each slice in the stable regime.
-    float densityNow = systemDensity(planets, pos);
+    float densityNow = systemAir(planets, pos).density;
     float kdt = gDebug.atmosphereDrag * densityNow * timeScale;
     int substeps = (int)std::ceil(kdt / SUBSTEP_MAX_KDT);
     if (substeps < 1) substeps = 1;
@@ -89,7 +95,7 @@ void Lander::update(const std::vector<Planet>& planets, float timeScale) {
 
     // Fuel burn is per-frame, independent of substep slicing.
     if (thrusting > 0 && fuel > 0) {
-        fuel -= 0.2f * thrusting * timeScale;
+        fuel -= gDebug.fuelBurn * thrusting * timeScale;
     }
 
     for (int i = 0; i < substeps; i++) {
@@ -103,12 +109,12 @@ void Lander::update(const std::vector<Planet>& planets, float timeScale) {
             vel.y -= cosd(rotation) * force;
         }
 
-        // Atmospheric drag toward the (static) planet frame.
-        float density = systemDensity(planets, pos);
-        if (density > 0) {
-            float factor = 1.0f - gDebug.atmosphereDrag * density * dt;
+        // Atmospheric drag toward the air's own velocity (the planet's frame).
+        Air air = systemAir(planets, pos);
+        if (air.density > 0) {
+            float factor = 1.0f - gDebug.atmosphereDrag * air.density * dt;
             if (factor < 0) factor = 0;
-            vel *= factor;
+            vel = air.vel + (vel - air.vel) * factor;
         }
 
         // Velocity clamp.
@@ -138,28 +144,89 @@ bool Lander::isUpright(const Planet& planet) const {
     return alignment >= cosd(LANDING_MAX_TILT);
 }
 
+namespace {
+// Where a landed ship's center rests, as a radius from the body's center at a
+// given angle: the base sunk below the terrain silhouette line, so the ground
+// reads as extending toward the viewer (the ~40 degree view angle of the
+// ground-ellipse language). The hull base sits 22*SCALE below center; it
+// rests on the blob shadow's contact point, which sits radius*1.5*0.64 (the
+// shadow drop in drawBlobShadow) below the line.
+float restRadius(const Planet& planet, float angleDeg, float shipRadius) {
+    return planet.surfaceRadius(angleDeg) + 22.0f * Lander::SCALE - shipRadius * 1.5f * 0.64f;
+}
+
+// Shortest signed turn from one heading to another, degrees.
+float turnTo(float from, float to) {
+    float d = fmodf(to - from + 540.0f, 360.0f);
+    if (d < 0.0f) d += 360.0f;
+    return d - 180.0f;
+}
+}  // namespace
+
+// Touchdown is judged with the ship's center still `radius` above the terrain
+// line, a good 20 units above where a parked ship rests. Rather than jump it
+// there (and stop it dead) in one frame, keep its motion: settle() carries
+// the approach speed down into the resting depth on a damped spring — a firm
+// landing dips a little past it, like the legs taking the weight — lets any
+// sideways speed run out as a short slide, and eases the hull upright.
 void Lander::land(const Planet& planet) {
     active = false;
     crashed = false;
     landed = true;
+    liftingOff = false;
     thrusting = 0.0f;
     thrustLevel = 0.0f;
+    Vec2 rel = vel - planet.orbitVel;            // motion over the ground
     vel = Vec2(0, 0);
-    // Rest the ship with its base sunk below the terrain silhouette line, so
-    // the ground reads as extending toward the viewer (the ~40 degree view
-    // angle of the ground-ellipse language). The hull base sits 22*SCALE below
-    // center; it should land on the blob shadow's contact point, which sits
-    // radius*1.5*0.64 (the shadow drop in drawBlobShadow) below the line.
-    float dx = pos.x - planet.center.x;
-    float dy = pos.y - planet.center.y;
-    float d = sqrtf(dx * dx + dy * dy);
-    if (d > 1e-6f) {
-        float angle = atan2d(dy, dx);
-        float rest = planet.surfaceRadius(angle) + 22.0f * SCALE - radius * 1.5f * 0.64f;
-        pos = Vec2(planet.center.x + (dx / d) * rest,
-                   planet.center.y + (dy / d) * rest);
-    }
     landingOffset = Vec2(pos.x - planet.center.x, pos.y - planet.center.y);
+    float d = landingOffset.length();
+    if (d < 1e-6f) { settling = false; return; }
+    Vec2 up = landingOffset * (1.0f / d);
+    Vec2 along(-up.y, up.x);
+    float angle = atan2d(up.y, up.x);
+    settleHeight = d - restRadius(planet, angle, radius);
+    settleSpeed = rel.dot(up);
+    settleSlide = rel.dot(along);
+    targetRotation = rotation + turnTo(rotation, angle + 90.0f);   // upright
+    settling = true;
+}
+
+void Lander::settle(const Planet& planet, float timeScale) {
+    if (!settling) return;
+    // Spring: critically damped, settling in about half a second. Stepped in
+    // slices so a long frame can't make it overshoot wildly.
+    const float W = 0.14f;                       // stiffness, per frame
+    const float SLIDE_GRIP = 0.86f;              // sideways speed kept per frame
+    const float MAX_DIP = 5.0f;                  // the legs can only give so far
+    int steps = (int)ceilf(timeScale / 0.5f);
+    if (steps < 1) steps = 1;
+    float dt = timeScale / steps;
+    for (int k = 0; k < steps; k++) {
+        float acc = -W * W * settleHeight - 2.0f * W * settleSpeed;
+        settleSpeed += acc * dt;
+        settleHeight += settleSpeed * dt;
+        if (settleHeight < -MAX_DIP) { settleHeight = -MAX_DIP; if (settleSpeed < 0.0f) settleSpeed = 0.0f; }
+    }
+    float d = landingOffset.length();
+    float angle = atan2d(landingOffset.y, landingOffset.x);
+    if (d > 1e-6f) angle += (settleSlide * timeScale / d) * (180.0f / 3.14159265f);
+    settleSlide *= powf(SLIDE_GRIP, timeScale);
+    float r = restRadius(planet, angle, radius) + settleHeight;
+    landingOffset = Vec2(cosd(angle) * r, sind(angle) * r);
+
+    float upright = angle + 90.0f;
+    targetRotation = rotation + turnTo(rotation, upright);
+    float k = 0.18f * timeScale;
+    rotation += (targetRotation - rotation) * (k > 1.0f ? 1.0f : k);
+
+    if (fabsf(settleHeight) < 0.03f && fabsf(settleSpeed) < 0.01f && fabsf(settleSlide) < 0.01f &&
+        fabsf(targetRotation - rotation) < 0.05f) {
+        settleHeight = settleSpeed = settleSlide = 0.0f;
+        rotation = targetRotation;
+        r = restRadius(planet, angle, radius);
+        landingOffset = Vec2(cosd(angle) * r, sind(angle) * r);
+        settling = false;
+    }
 }
 
 void Lander::crash() {
@@ -174,15 +241,21 @@ void Lander::liftOff(const Planet& planet) {
     active = true;
     crashed = false;
     landed = false;
-    // Nudge a little out the top of the ship so the next contact check doesn't
-    // immediately re-land us.
-    float upX = sind(rotation);
-    float upY = -cosd(rotation);
-    pos.x += upX * (radius + 5.0f);
-    pos.y += upY * (radius + 5.0f);
+    settling = false;
+    // Rise from where the ship sits — no jump. It starts below the height at
+    // which touching the ground counts as a landing, so until it has climbed
+    // clear (or starts sinking back) contact is not judged; see updateClearing.
+    liftingOff = true;
     // Inherit the body's orbital motion so lifting off a moving moon doesn't
     // instantly smear you across its surface.
     vel = planet.orbitVel;
+}
+
+void Lander::updateClearing(const Planet& planet, float altitude) {
+    if (!liftingOff) return;
+    Vec2 up = (pos - planet.center).normalize();
+    float climb = (vel - planet.orbitVel).dot(up);
+    if (altitude > radius || climb < 0.0f) liftingOff = false;
 }
 
 namespace {
@@ -326,50 +399,140 @@ void Lander::drawBeam(Renderer2D& r) {
     r.setBlend(Renderer2D::Blend::Normal);
 }
 
-void Lander::predictTrajectory(const std::vector<Planet>& planets, std::vector<Vec2>& out) const {
+void Lander::predictTrajectory(const std::vector<Planet>& planets, int frameIdx,
+                               std::vector<Vec2>& out, Encounter& enc) const {
     out.clear();
+    enc = Encounter{};
     const float dt = 1.0f;        // one frame-unit per substep (matches the sim)
     const int steps = 320;        // recorded points
     const int subStride = 14;     // ~4500 frame-units of horizon -> wraps an orbit
+
+    // Snapshot the bodies and march them along their (kinematic, circular)
+    // orbits together with the ship, so the path is where the ship will
+    // actually be relative to worlds that are themselves moving. Each body's
+    // orbit direction is advanced by a fixed rotation per step (no trig in the
+    // loop). Parents precede children in the vector, so one pass per step
+    // rebuilds every center.
+    const int MAXB = 16;
+    int n = (int)planets.size();
+    if (n > MAXB) n = MAXB;
+    Vec2 c[MAXB], bv[MAXB], dir[MAXB];
+    float rotC[MAXB], rotS[MAXB], minD[MAXB];
+    for (int i = 0; i < n; i++) {
+        const Planet& pl = planets[i];
+        c[i] = pl.center;
+        bv[i] = pl.orbitVel;
+        dir[i] = Vec2(cosd(pl.orbitAngle), sind(pl.orbitAngle));
+        bool moving = pl.orbitParent >= 0 && pl.orbitParent < n && !pl.orbitPinned;
+        float w = moving ? pl.orbitSpeed * DEG2RAD * dt : 0.0f;
+        rotC[i] = cosf(w);
+        rotS[i] = sinf(w);
+        minD[i] = 1e30f;
+    }
+    bool useFrame = frameIdx >= 0 && frameIdx < n;
+    Vec2 frame0 = useFrame ? c[frameIdx] : Vec2(0, 0);
 
     Vec2 sp = pos, sv = vel;
     out.push_back(sp);   // anchor the line at the ship itself
     // Don't terminate on a body we start inside the bounding radius of (e.g.
     // just after lift-off); only stop once we've left it and re-entered.
     bool outside = true;
-    for (const Planet& pl : planets) {
-        if (dist(sp.x, sp.y, pl.center.x, pl.center.y) <= pl.baseRadius) outside = false;
+    for (int i = 0; i < n; i++) {
+        if (dist(sp.x, sp.y, c[i].x, c[i].y) <= planets[i].baseRadius) outside = false;
     }
+
+    auto framePoint = [&](Vec2 world) {
+        return useFrame ? world - c[frameIdx] + frame0 : world;
+    };
 
     for (int i = 0; i < steps; i++) {
         for (int s = 0; s < subStride; s++) {
-            sv += gravityAt(planets, sp) * dt;
-            float density = systemDensity(planets, sp);
-            if (density > 0) {
-                float f = 1.0f - gDebug.atmosphereDrag * density * dt;
+            // Advance the bodies one step along their orbits.
+            for (int b = 0; b < n; b++) {
+                const Planet& pl = planets[b];
+                if (pl.orbitParent < 0 || pl.orbitParent >= n) continue;
+                Vec2 d0 = dir[b];
+                dir[b] = Vec2(d0.x * rotC[b] - d0.y * rotS[b], d0.x * rotS[b] + d0.y * rotC[b]);
+                Vec2 nc = c[pl.orbitParent] + dir[b] * pl.orbitRadius;
+                bv[b] = (nc - c[b]) * (1.0f / dt);
+                c[b] = nc;
+            }
+
+            // Gravity from every body at its current position.
+            Vec2 g(0, 0);
+            float airDensity = 0.0f;
+            Vec2 airVel(0, 0);
+            for (int b = 0; b < n; b++) {
+                const Planet& pl = planets[b];
+                float dx = c[b].x - sp.x, dy = c[b].y - sp.y;
+                float distSq = dx * dx + dy * dy;
+                if (distSq < 1.0f) distSq = 1.0f;
+                float d = sqrtf(distSq);
+                float f = pl.gravity / distSq;
+                g.x += dx / d * f;
+                g.y += dy / d * f;
+                // Same linear density falloff as Planet::atmosphericDensity,
+                // against the body's predicted position.
+                float thick = pl.atmosphereThickness();
+                if (thick > 0.0f && d < pl.baseRadius + thick) {
+                    float alt = d - pl.baseRadius;
+                    float dens = (alt <= 0 ? 1.0f : 1.0f - alt / thick) * pl.look.dragScale;
+                    if (dens > airDensity) { airDensity = dens; airVel = bv[b]; }
+                }
+            }
+            sv += g * dt;
+            if (airDensity > 0) {
+                float f = 1.0f - gDebug.atmosphereDrag * airDensity * dt;
                 if (f < 0) f = 0;
-                sv *= f;
+                sv = airVel + (sv - airVel) * f;
             }
             float speedSq = sv.lengthSq();
             if (speedSq > TOP_SPEED * TOP_SPEED) sv *= TOP_SPEED / sqrtf(speedSq);
             sp += sv * dt;
 
             bool insideAny = false;
-            for (const Planet& pl : planets) {
-                float d = dist(sp.x, sp.y, pl.center.x, pl.center.y);
+            for (int b = 0; b < n; b++) {
+                const Planet& pl = planets[b];
+                float d = dist(sp.x, sp.y, c[b].x, c[b].y);
+                // Closest pass to every body other than the reference one:
+                // the caller draws a ghost of the best one, so the player can
+                // see WHERE a moving world will be when the ship gets there.
+                if (b != frameIdx && !pl.isSun && d < minD[b]) {
+                    minD[b] = d;
+                    float reach = pl.baseRadius * 6.0f;
+                    float score = d / pl.baseRadius;
+                    if (d < reach && (enc.body < 0 || enc.body == b || score < enc.score)) {
+                        enc.body = b;
+                        enc.score = score;
+                        enc.distance = d;
+                        enc.bodyPos = framePoint(c[b]);
+                        enc.shipPos = framePoint(sp);
+                    }
+                }
                 // Beyond this radius the path can't possibly touch terrain, so
                 // we skip the surfaceRadius() lookup. That keeps the long
                 // horizon affordable.
-                if (d <= pl.baseRadius + pl.noiseIntensity) {
-                    float surf = pl.surfaceRadius(
-                        atan2d(sp.y - pl.center.y, sp.x - pl.center.x));
-                    if (outside && d <= surf) { out.push_back(sp); return; }
+                if (d <= pl.baseRadius + pl.noiseIntensity * 3.5f) {
+                    float surf = pl.isSun ? pl.baseRadius : pl.surfaceRadius(
+                        atan2d(sp.y - c[b].y, sp.x - c[b].x));
+                    if (outside && d <= surf) {
+                        out.push_back(framePoint(sp));
+                        if (b != frameIdx && !pl.isSun) {
+                            enc.body = b;
+                            enc.impact = true;
+                            enc.score = 0.0f;
+                            enc.distance = d;
+                            enc.bodyPos = framePoint(c[b]);
+                            enc.shipPos = framePoint(sp);
+                        }
+                        return;
+                    }
                 }
                 if (d <= pl.baseRadius) insideAny = true;
             }
             if (!insideAny) outside = true;
         }
-        out.push_back(sp);
+        out.push_back(framePoint(sp));
     }
 }
 

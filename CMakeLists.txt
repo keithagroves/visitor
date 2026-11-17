@@ -10,7 +10,13 @@ set(SOURCES
     src/graphics/shader.cpp
     src/graphics/renderer2d.cpp
     src/world/planet.cpp
+    src/world/system_gen.cpp
+    src/world/nearfield.cpp
     src/world/terrain_field.cpp
+    src/world/carve_map.cpp
+    src/world/cave_gen.cpp
+    src/world/harvest_gen.cpp
+    src/world/cavefield.cpp
     src/entities/lander.cpp
     src/entities/cow.cpp
     src/entities/astronaut.cpp

@@ -3,11 +3,16 @@
 #include <GLES3/gl3.h>
 #include <cstdio>
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include "../math/vecmath.h"
+#include "../math/noise.h"
 #include "../graphics/renderer2d.h"
 #include "../world/planet.h"
+#include "../world/system_gen.h"
+#include "../world/nearfield.h"
+#include "../world/cavefield.h"
 #include "../entities/lander.h"
 #include "../entities/cow.h"
 #include "../entities/astronaut.h"
@@ -25,6 +30,42 @@
 // sun-direction shading. Up to SHADER_MAX_PLANETS bodies.
 // ============================================================================
 static constexpr int SHADER_MAX_PLANETS = 10;
+
+// Day -> dusk -> night, shared by the body and cloud shaders (and mirrored on
+// the CPU by groundLight() below for everything drawn through Renderer2D).
+//
+// The light on the ground is a smooth function of the sun's elevation there
+// (s = sine of the elevation: 1 overhead, 0 on the horizon, negative below):
+//   - direct sunlight, eased in over the twilight width and colored by how
+//     much air it has crossed — white through the day, gold, then orange-red
+//     as the sun reaches the horizon (the same extinction that tints the sky);
+//   - a twilight ambient that takes over as the sun goes under: sky-scattered
+//     afterglow, rose on a blue-sky world, whatever the planet's air makes it
+//     elsewhere;
+//   - a dim night ambient in the sky's own tint.
+// So the terminator is a long graded sweep — golden hour, dusk, blue hour —
+// not a line. Airless worlds get a narrow width, white light and no twilight:
+// a hard edge, as it should be with no air to scatter anything.
+#define LIGHT_GLSL R"(
+uniform vec3 u_extK[MAX_PLANETS];     // extinction (scatter + absorption) x sunset strength
+uniform vec3 u_twiCol[MAX_PLANETS];   // twilight ambient color
+uniform vec3 u_nightAmb[MAX_PLANETS]; // night ambient color
+uniform float u_twiWidth[MAX_PLANETS];// twilight half-width in sunDot units
+
+float sunDirect(int i, float s) {
+  float w = u_twiWidth[i];
+  return smoothstep(-0.33 * w, w, s);
+}
+
+vec3 groundLight(int i, float s) {
+  float w = u_twiWidth[i];
+  float airmass = 1.0 / max(s * 0.9 + 0.1, 0.05);
+  vec3 sunCol = exp(-u_extK[i] * max(airmass - 2.0, 0.0));
+  float twi = smoothstep(-1.6 * w, -0.2 * w, s) * (1.0 - smoothstep(-0.17 * w, 0.8 * w, s));
+  float night = 1.0 - smoothstep(-1.6 * w, 0.0, s);
+  return sunCol * sunDirect(i, s) + u_twiCol[i] * twi + u_nightAmb[i] * night;
+}
+)"
 
 static const char* kFsVert = R"(#version 300 es
 layout(location = 0) in vec2 a_pos;
@@ -52,28 +93,43 @@ uniform float u_sunIntensity;
 uniform float u_extinction;
 uniform float u_overlay;        // planet-face sky fill (0 near the surface -> 1 in space)
 uniform int u_mode;             // 0 = sky band above the terrain, 1 = face fill below it
-uniform sampler2D u_terrainTex; // 2048xN: terrain radius per angle (one row per planet)
+uniform sampler2D u_terrainTex; // terrain radius per angle (one row per planet)
+// Per-planet sky identity (PlanetLook): scatter colors, brightness, and the
+// pale ground haze. The day color comes from u_betaR; the sunset hue falls out
+// of the same numbers through the extinction term.
+uniform vec3 u_betaR[MAX_PLANETS];
+uniform vec3 u_betaM[MAX_PLANETS];
+uniform float u_skyGain[MAX_PLANETS];
+uniform vec3 u_hazeCol[MAX_PLANETS];
+uniform float u_horizonHaze;    // strength of the aerial haze band at the horizon (0 = off)
+uniform int u_hazeIdx;          // planet the camera is at (its haze is fitted to the view)
+uniform float u_hazeRef;        // radius the haze sits on for that planet (the ground under the player)
+uniform float u_hazeView;       // haze scale height for that planet, world units
 out vec4 fragColor;
-
-#define TERRAIN_N 2048
+)" LIGHT_GLSL R"(
 
 // Terrain (surface) radius at a given outward direction, sampled from the
 // silhouette LUT with linear wrap so the sky meets the ground exactly.
 float terrainRadius(vec2 outward, int row) {
   float ang = degrees(atan(outward.y, outward.x));
   if (ang < 0.0) ang += 360.0;
-  float fidx = ang / 360.0 * float(TERRAIN_N);
-  int i0 = int(fidx) % TERRAIN_N;
-  int i1 = (i0 + 1) % TERRAIN_N;
+  int n = textureSize(u_terrainTex, 0).x;
+  float fidx = ang / 360.0 * float(n);
+  int i0 = int(fidx) % n;
+  int i1 = (i0 + 1) % n;
   float frac = fract(fidx);
   return mix(texelFetch(u_terrainTex, ivec2(i0, row), 0).r,
              texelFetch(u_terrainTex, ivec2(i1, row), 0).r, frac);
 }
 
 // Scattering coefficients (relative), adapted from Maxime Heckel's sky article.
-const vec3 BETA_R = vec3(0.0058, 0.0135, 0.0331);    // Rayleigh: blue scatters most
-const vec3 BETA_M = vec3(0.0080);                    // Mie haze (achromatic; keep < blue so sky stays blue)
+// Rayleigh + Mie are per planet (u_betaR / u_betaM); the home world's values
+// are the article's: (0.0058, 0.0135, 0.0331) blue, 0.008 achromatic haze.
 const vec3 BETA_O = vec3(0.00065, 0.00188, 0.00008); // ozone absorption
+
+// How far under the terrain outline the open-sky band keeps drawing (world
+// units). See the gating in main().
+const float SKY_UNDERLAP = 40.0;
 
 void main() {
   // Reconstruct the world point under this pixel (inverse camera transform).
@@ -111,8 +167,14 @@ void main() {
     // the ridge layers can be painted over it and the terrain over those), and
     // mode 1 draws only the face fill (after the terrain, so the from-space
     // sky sphere still tints the rock).
+    // The sky band (mode 0) runs a little way UNDER that line. The ground is
+    // drawn afterwards, from the density grid, and covers it wherever there
+    // is ground; the outline table only follows the grid to within a unit or
+    // so, and a sky that stopped dead on the table would leave a sliver of
+    // nothing — black, stars showing — wherever the table sits above the
+    // ground actually drawn. The overlap is sky in every respect (haze, glow).
     float surfaceR = terrainRadius(outward, i);
-    bool belowSurface = dist < surfaceR;
+    bool belowSurface = dist < surfaceR - (u_mode == 0 ? SKY_UNDERLAP : 0.0);
     if (u_mode == 0 && belowSurface) continue;
     if (u_mode == 1 && !belowSurface) continue;
 
@@ -127,9 +189,30 @@ void main() {
 
     // Air-mass of the sunlight (~1 overhead, large at the terminator); extinction
     // reddens it so sunsets *emerge*.
+    vec3 betaR = u_betaR[i];
+    vec3 betaM = u_betaM[i];
     float airmass = 1.0 / max(sunDot * 0.9 + 0.1, 0.05);
-    vec3 extBeta = BETA_R + BETA_M + BETA_O;
-    vec3 sunlight = exp(-extBeta * max(airmass - 1.0, 0.0) * u_extinction);
+    vec3 extBeta = betaR + betaM + BETA_O;
+    // Light reaching the low air has crossed more of it than light reaching
+    // the top of the shell, so it is reddened more: at a low sun the horizon
+    // goes orange while the sky above it is still blue. (No effect at noon,
+    // where the path term is zero.)
+    float path = max(airmass - 1.0, 0.0) * mix(1.35, 0.45, h);
+    vec3 sunlight = exp(-extBeta * path * u_extinction);
+
+    // Twilight: sky-scattered afterglow once the sun is at or under the
+    // horizon — warm against the ground, cooling to the sky's own color
+    // higher up. It outlasts the direct light by a long way, which is what
+    // makes dusk a slow fade instead of a switch.
+    float tw = u_twiWidth[i];
+    float twi = smoothstep(-1.6 * tw, -0.1 * tw, sunDot) * (1.0 - smoothstep(-0.05, 0.9 * tw, sunDot));
+    vec3 skyTint = betaR / max(max(betaR.r, betaR.g), max(betaR.b, 0.0001));
+    // The warm end of the glow is the color of the sun itself seen through
+    // the whole atmosphere (orange-red on a blue-sky world) while it is at
+    // the horizon, sliding to the rose of the scattered afterglow as it sinks.
+    vec3 sunLow = exp(-u_extK[i] * 11.7) * 1.7;
+    vec3 warm = mix(u_twiCol[i], sunLow, smoothstep(-0.8 * tw, 0.15 * tw, sunDot));
+    vec3 twiSky = mix(warm, skyTint * 0.30 + vec3(0.05, 0.02, 0.10), smoothstep(0.0, 0.30, h));
 
     // Sun glint + warm sunset band are limb-only (faded out toward the disk
     // centre by limbW) so they never smear a streak across the flat planet face.
@@ -137,25 +220,64 @@ void main() {
     // face (incl. mountain tops, which have a small nonzero h) we force limbW to 0
     // so the bright sunset band can't light up the peaks like snow at dusk.
     float limbW = smoothstep(0.05, 0.45, h);
-    if (dist < surfaceR) limbW = 0.0;
+    if (belowSurface) limbW = 0.0;
     float mieGlow = 1.0 + 2.0 * pow(max(sunDot, 0.0), 16.0) * limbW;
     float termBand = exp(-pow(sunDot * 2.0, 2.0) * 4.0) * limbW;
-    vec3 rayleigh = BETA_R * densR;
-    vec3 mie = BETA_M * densM * (mieGlow * 0.4 + termBand * 1.6 + 0.25);
+    vec3 rayleigh = betaR * densR;
+    vec3 mie = betaM * densM * (mieGlow * 0.4 + termBand * 1.6 + 0.25);
 
-    vec3 col = u_sunIntensity * sunlight * (rayleigh + mie) * dayNight;
+    vec3 col = u_sunIntensity * u_skyGain[i] * sunlight * (rayleigh + mie) * dayNight;
     float opacity = dayNight * (densR * 0.8 + densM * 0.6) * 1.8;
+    float airy = clamp(densR * 0.55 + densM * 0.5, 0.0, 1.0);
+    col += twiSky * twi * 0.60 * airy;
+    opacity = max(opacity, twi * 0.82 * airy);
 
-    // Night side: a faint, almost-transparent dark blue so the shell stays
-    // visible against space instead of going fully black.
+    // Aerial haze at the horizon: a pale, luminous band in the lowest slice of
+    // the air, so the sky lightens toward the land and the far ranges sit in
+    // glow instead of against flat color. It takes the sunlight's extinction,
+    // so it warms at dusk. Sky band only, and faded out on the climb to space
+    // (the face fill below the terrain line has no matching term).
+    if (!belowSurface) {
+      // Physically the band is ~8% of the shell deep. For the world the
+      // camera is at, it is also fitted to the view: zoomed in close, a band
+      // that deep would cover the whole screen and wash the sky flat, so it
+      // shrinks to stay a glow along the horizon and sits on the ground under
+      // the player rather than on the planet's base radius.
+      float hazeH = max((atmoR - baseR) * 0.085, 1.0);
+      float hazeRef = baseR;
+      if (i == u_hazeIdx) {
+        float fit = clamp(u_hazeView / hazeH, 0.0, 1.0);
+        hazeRef = mix(u_hazeRef, baseR, smoothstep(0.5, 1.0, fit));
+        hazeH = max(min(hazeH, u_hazeView), 1.0);
+      }
+      float gh = exp(-max(dist - hazeRef, 0.0) / hazeH) * u_horizonHaze * (1.0 - u_overlay);
+      // By day the band is the pale haze color in the sun's light; through
+      // twilight it carries the afterglow, so the horizon keeps glowing after
+      // the sun has gone.
+      vec3 hazeLit = u_hazeCol[i] * 1.2 * (sunlight * 0.9 + 0.1) * dayNight + warm * twi * 0.95;
+      col = mix(col, hazeLit, gh * 0.8);
+      opacity = mix(opacity, max(opacity, max(dayNight, twi * 0.9)), gh * 0.8);
+    }
+
+    // Night side: a faint, almost-transparent tint of the sky color so the
+    // shell stays visible against space instead of going fully black.
     float night = 1.0 - dayNight;
-    col += vec3(0.03, 0.06, 0.14) * densR * night;
+    col += betaR * 4.2 * densR * night;
     opacity += night * clamp(densR, 0.0, 1.0) * 0.22;
     opacity = clamp(opacity, 0.0, 1.0);
 
+    // Soft top: the shell thins out over its last stretch instead of ending
+    // on a hard edge, so from altitude the limb is a glow that falls off into
+    // space rather than a cut-out disc.
+    float topFade = 1.0 - smoothstep(0.84, 1.0, h);
+    col *= topFade;
+    opacity *= topFade;
+
     // Below the terrain line = planet face: only fill it with sky once you've
     // climbed out toward space, so the ground stays visible from up close.
-    if (dist < surfaceR) {
+    // (`belowSurface`, not the bare line: the sky band's overlap under the
+    // line is sky, and has to be drawn at full strength to close the gap.)
+    if (belowSurface) {
       col *= u_overlay;
       opacity *= u_overlay;
     }
@@ -185,20 +307,25 @@ uniform float u_falloff;    // how much coverage thins with altitude (0 = none, 
 uniform float u_overlay;    // cloud deck over the planet disk (0 near surface -> 1 in space)
 uniform float u_nightDarkness; // brightness of clouds on the deepest night side
 uniform float u_softness;      // terminator half-width in sunDot units (matches the body)
-uniform sampler2D u_terrainTex; // 2048x1: terrain radius per angle (the silhouette)
+uniform sampler2D u_terrainTex; // terrain radius per angle (one row per planet)
+// Per-planet cloud identity (PlanetLook): coverage multiplier + lit/shaded color.
+uniform float u_cover[MAX_PLANETS];
+uniform vec3 u_cloudLit[MAX_PLANETS];
+uniform vec3 u_cloudDark[MAX_PLANETS];
 out vec4 fragColor;
+)" LIGHT_GLSL R"(
 
 const float CLOUD_DRIFT = 0.004;
 
-#define TERRAIN_N 2048
 // Terrain radius at a given outward direction (matches the atmosphere shader), so
 // the cloud deck meets the planet silhouette exactly instead of a smaller circle.
 float terrainRadius(vec2 outward, int row) {
   float ang = degrees(atan(outward.y, outward.x));
   if (ang < 0.0) ang += 360.0;
-  float fidx = ang / 360.0 * float(TERRAIN_N);
-  int i0 = int(fidx) % TERRAIN_N;
-  int i1 = (i0 + 1) % TERRAIN_N;
+  int n = textureSize(u_terrainTex, 0).x;
+  float fidx = ang / 360.0 * float(n);
+  int i0 = int(fidx) % n;
+  int i1 = (i0 + 1) % n;
   float frac = fract(fidx);
   return mix(texelFetch(u_terrainTex, ivec2(i0, row), 0).r,
              texelFetch(u_terrainTex, ivec2(i1, row), 0).r, frac);
@@ -264,7 +391,7 @@ void main() {
     // the average; the weather term pushes local coverage above/below it.
     float weather = fbm(local * 0.00011 + vec2(u_time * CLOUD_DRIFT * 0.18, 7.3));
     weather = smoothstep(0.30, 0.72, weather);
-    float localCoverage = clamp(u_coverage * (0.25 + 1.6 * weather), 0.0, 1.0);
+    float localCoverage = clamp(u_coverage * u_cover[i] * (0.25 + 1.6 * weather), 0.0, 1.0);
     // Coverage peaks in the mid cloud band and thins toward BOTH the surface and
     // the top of the band, so clouds don't pile up on the ground or up high.
     // u_falloff sets how strongly the two edges thin out.
@@ -281,11 +408,11 @@ void main() {
     vec2 toSun = normalize(u_sunPos - u_planetPos[i]);   // directional sun
     float sunDot = dot(outward, toSun);
     float lit = smoothstep(-0.25, 0.45, sunDot);
-    vec3 cloudColor = mix(vec3(0.45, 0.5, 0.6), vec3(1.0, 0.98, 0.94), lit);
-    // Same day/night terminator as the planet body, so clouds on the dark side go
-    // dark too instead of staying bright white.
-    float dayNight = smoothstep(-u_softness, u_softness, sunDot);
-    cloudColor *= mix(u_nightDarkness, 1.0, dayNight);
+    vec3 cloudColor = mix(u_cloudDark[i], u_cloudLit[i], lit);
+    // Same graded light as the ground, but clouds stand high: the sun is
+    // still on them a little after it has left the land below, so they are
+    // the last things to glow at dusk and the first at dawn.
+    cloudColor *= groundLight(i, sunDot + 0.10);
 
     // Premultiplied "over" composite (drawn with GL_ONE, GL_ONE_MINUS_SRC_ALPHA).
     accum.rgb += cloudColor * alpha * (1.0 - accum.a);
@@ -323,24 +450,61 @@ uniform vec2 u_planetPos[MAX_PLANETS];
 uniform float u_planetMaxR[MAX_PLANETS];   // silhouette bound (-1e9 = skip, e.g. the sun)
 uniform float u_baseRadius[MAX_PLANETS];   // altitude-band reference
 uniform float u_noiseBand[MAX_PLANETS];    // terrain noise intensity (band thickness)
+uniform vec3 u_tone[MAX_PLANETS * 5];      // five flat terrain tones per planet (basin..cap)
 uniform int u_activeField;      // planet index using the density texture (-1 = none)
 uniform vec2 u_sunPos;
 uniform float u_nightDarkness;  // brightness floor of the deepest night side
 uniform float u_softness;       // terminator half-width in sunDot units
-uniform sampler2D u_terrainTex; // 2048x1: terrain radius per angle (the silhouette)
+uniform sampler2D u_terrainTex; // terrain radius per angle (one row per planet)
 uniform sampler2D u_fieldTex;   // R16F corner density grid (LINEAR-filtered)
+uniform sampler2D u_carveTex;   // R16F: signed distance to dug space, in a window round the player
+uniform vec2 u_carveOrigin;     // world position of its sample (0,0)
+uniform float u_carveCell;      // world units between samples
+uniform float u_carveSize;      // samples per side; 0 = nothing dug here
+uniform float u_walkDrop;       // dug space is drawn this far below where it physically is
+uniform float u_mouthRise;      // how far the far rim of a hole's mouth arches up at its middle
+uniform float u_mouthRound;     // how far in from a hole's wall its rims take to round off
+// Front-ground veil (second run of this pass, after the player is drawn).
+uniform int u_veilPass;         // 1 = draw only the veil; 2 = cave mask (see drawCaveMask)
+uniform float u_veilTop;        // the front strip of ground, as world units below
+uniform float u_veilBottom;     //   the terrain line: where it starts (at the middle
+                                //   of a hole's near rim) and where it ends
+uniform float u_veilAlpha;      // how see-through it gets around a player who is down a hole
+uniform vec2 u_playerPos;       // where the player is
+uniform float u_playerIn;       // 0 = on the surface, 1 = down a hole
+// Burn: the last few cutter bites, still hot. xy = where (true position),
+// z = heat 1 -> 0 as it cools, w = radius.
+#define MAX_BURNS 12
+uniform vec4 u_burn[MAX_BURNS];
+uniform int u_burnCount;
+// Cave lights: the glowing crystals and mushrooms nearest the camera, and the
+// player's own lamp. xy = where (true position), z = radius; and its color.
+#define MAX_GLOW 14
+uniform vec4 u_glow[MAX_GLOW];
+uniform vec3 u_glowCol[MAX_GLOW];
+uniform int u_glowCount;
+// Natural cave mouths near the view: x = angle (degrees), y = half-width
+// (degrees). Their rims are uneven; a dug hole's are clean.
+#define MAX_MOUTHS 8
+uniform vec2 u_natMouth[MAX_MOUTHS];
+uniform int u_natMouthCount;
+// A hole is the ground it was cut in, a shade darker the deeper it goes:
+// darkest (u_holeFloor x the ground) from u_holeDepth down, never black.
+uniform float u_holeFloor;
+uniform float u_holeDepth;
 uniform vec2 u_fieldOrigin;     // world position of corner (0,0)
 uniform float u_fieldCell;      // world units per grid cell
 uniform vec2 u_fieldSize;       // corner counts (w,h)
 out vec4 fragColor;
+)" LIGHT_GLSL R"(
 
-#define TERRAIN_N 2048
 float terrainRadius(vec2 outward, int row) {
   float ang = degrees(atan(outward.y, outward.x));
   if (ang < 0.0) ang += 360.0;
-  float fidx = ang / 360.0 * float(TERRAIN_N);
-  int i0 = int(fidx) % TERRAIN_N;
-  int i1 = (i0 + 1) % TERRAIN_N;
+  int n = textureSize(u_terrainTex, 0).x;
+  float fidx = ang / 360.0 * float(n);
+  int i0 = int(fidx) % n;
+  int i1 = (i0 + 1) % n;
   float frac = fract(fidx);
   return mix(texelFetch(u_terrainTex, ivec2(i0, row), 0).r,
              texelFetch(u_terrainTex, ivec2(i1, row), 0).r, frac);
@@ -371,6 +535,26 @@ float fbm(vec2 p) {
 // planet, a radial pseudo-SDF from the silhouette row for everyone else. Both
 // have ~unit gradient, so one material/lighting path serves near and far
 // planets alike (far ones just can't have caves).
+// Signed distance to what has been DUG at a world point (CarveMap): negative
+// inside a hole. A large positive number where nothing has been dug, or
+// outside the window.
+float carveDist(vec2 world) {
+  if (u_carveSize < 1.0) return 1.0e4;
+  vec2 g = (world - u_carveOrigin) / u_carveCell;
+  if (g.x < 0.0 || g.y < 0.0 || g.x > u_carveSize - 1.0 || g.y > u_carveSize - 1.0) return 1.0e4;
+  return texture(u_carveTex, (g + 0.5) / u_carveSize).r;
+}
+
+// How much of the ground's light is left at a depth into a hole: 0.88 for a
+// scratch (still a step darker than the ground, so it reads as a hole), easing
+// down to u_holeFloor at u_holeDepth and flat below that. Ease-out, so most of
+// the darkening happens in the first stretch: the first few bites show.
+float holeShade(float depth) {
+  float x = clamp(depth / max(u_holeDepth, 1.0), 0.0, 1.0);
+  float k = (1.0 - x) * (1.0 - x);
+  return mix(u_holeFloor, 0.88, k);
+}
+
 float planetDensity(int i, vec2 wpt) {
   if (i == u_activeField) return fieldDensity(wpt);
   vec2 dd = wpt - u_planetPos[i];
@@ -401,20 +585,144 @@ void main() {
     if (dist > u_planetMaxR[i] + u_fieldCell * 2.0) continue;
     vec2 outward = d / max(dist, 0.0001);
     float surfaceR = terrainRadius(outward, i);
-    float density = planetDensity(i, world);
+    // The terrain as generated: anti-aliased rock coverage across its 0 line.
+    float terrain = planetDensity(i, world);
+    float terrainRock = clamp(terrain / aaw + 0.5, 0.0, 1.0);
 
-    // Rock coverage: anti-aliased step across the 0 iso-line.
-    float rock = clamp(density / aaw + 0.5, 0.0, 1.0);
-    // Cave interior: open space that sits below the outer silhouette (a dug
-    // tunnel, or a sealed pocket). Rendered opaque so stars never show through.
+    // Dug space. The ground is drawn as seen from above at an angle: the
+    // terrain line is the FAR edge of the ground, and the walking line — where
+    // the player stands and digs — shows u_walkDrop below it (that is why the
+    // astronaut's boots are drawn below the terrain line). So a hole is drawn
+    // that same distance below where it physically is: its mouth opens at the
+    // walking line with a strip of ground still behind it, and its floor is
+    // where the boots of someone standing in it are drawn. This pixel shows a
+    // hole if the true point it stands for (P) was rock and has been cut.
+    float dug = 0.0;
+    float dugCover = 0.0;      // dug, a pixel wider: what the front ground has to cover
+    float cutEdge = 1.0e4;     // at P: distance into the rock from the nearest cut
+    float mouth = 0.0;         // 0 at a hole's wall at ground level .. 1 toward its middle
+    float riseK = 1.0;         // a natural mouth's rims wander: how far the far rim
+    float sagK = 1.0;          //   rises / the near rim sags here, against the clean ellipse
+    float under = surfaceR - dist;             // how far below the terrain line
+    vec2 P = world + outward * u_walkDrop;
+    float rise = 0.0;          // how far the far rim lifts this pixel's P (see below)
+    float nat = 0.0;           // 1 = this column is a natural cave's mouth
+    float holeH = 0.0;         // how deep the hole under this column goes (mouth columns only)
+    if (i == u_activeField && u_carveSize > 0.5) {
+      // The mouth. A round hole in the ground, seen from a low angle, is an
+      // ellipse lying on the walking line: its far rim arches up behind the
+      // middle of the hole, its near rim sags below it, and the two meet at
+      // the hole's sides. `inside` is how far this column is from the hole's
+      // wall at ground level (0 outside any hole that breaks the surface);
+      // `mouth` turns that into a quarter-circle, so both rims leave the wall
+      // rounded rather than at a corner. The far rim is made by easing the
+      // drop off — near the top only, so floors further down stay exactly
+      // where boots are drawn; the near rim is the edge of the front ground
+      // (below).
+      float inside = max(-carveDist(u_planetPos[i] + outward * (surfaceR - 2.0)), 0.0);
+      float fromMiddle = 1.0 - clamp(inside / u_mouthRound, 0.0, 1.0);
+      mouth = sqrt(max(1.0 - fromMiddle * fromMiddle, 0.0));
+      // A natural cave's mouth is not a clean ellipse: its rims wander, in
+      // lumps a few strides long (shape, not grain — flat fills either side).
+      if (mouth > 0.0) {
+        float angDeg = degrees(atan(outward.y, outward.x));
+        for (int k = 0; k < MAX_MOUTHS; k++) {
+          if (k >= u_natMouthCount) break;
+          float da = abs(mod(angDeg - u_natMouth[k].x + 540.0, 360.0) - 180.0);
+          if (da < u_natMouth[k].y) nat = 1.0;
+        }
+        float along = radians(angDeg) * u_baseRadius[i];
+        riseK = mix(1.0, 0.45 + 0.90 * vnoise(vec2(along * 0.050, 7.3)), nat);
+        sagK = mix(1.0, 0.35 + 1.30 * vnoise(vec2(along * 0.043, 31.9)), nat);
+        // How deep the hole is under this column: march down from the terrain
+        // line until the carve layer says rock, and put the floor where its
+        // value crosses zero between the last two samples. That moves
+        // smoothly from column to column (and as you cut), so the mouth's
+        // shade has no seams. A natural mouth opens onto a tunnel that runs
+        // sideways, which a straight-down look would call a trench: it
+        // counts as deep.
+        if (u_veilPass == 0) {
+          if (nat > 0.5) {
+            holeH = u_holeDepth;
+          } else {
+            float prevD = 2.0;
+            float prevC = min(carveDist(u_planetPos[i] + outward * (surfaceR - prevD)), -0.001);
+            holeH = prevD;
+            for (int k = 1; k < 40; k++) {
+              float dk = 2.0 + 12.0 * float(k);
+              if (dk > u_holeDepth + 12.0) break;
+              float ck = carveDist(u_planetPos[i] + outward * (surfaceR - dk));
+              if (ck >= 0.0) { holeH = prevD + (dk - prevD) * prevC / (prevC - ck); break; }
+              prevD = dk; prevC = ck; holeH = dk;
+            }
+            holeH = min(holeH, u_holeDepth);   // past that, deeper looks the same
+          }
+        }
+      }
+      rise = u_mouthRise * riseK * mouth * (1.0 - smoothstep(4.0, 26.0, under));
+      P = world + outward * (u_walkDrop - rise);
+      float tP = planetDensity(i, P);
+      float cP = carveDist(P);
+      float wasRock = clamp(tP / aaw + 0.5, 0.0, 1.0);
+      // (Tested against the carve alone: "not rock" is also true along the
+      // terrain's own anti-aliased edge, which would draw a hairline of hole
+      // the whole length of the walking line.)
+      dug = wasRock * (1.0 - clamp(cP / aaw + 0.5, 0.0, 1.0));
+      // Solid wherever `dug` is anything at all, so ground laid back over a
+      // hole leaves no dark thread along the hole's anti-aliased walls.
+      dugCover = wasRock * (1.0 - clamp(cP / aaw - 0.5, 0.0, 1.0));
+      if (tP > 0.0) cutEdge = cP;
+    }
+    float rock = terrainRock * (1.0 - dug);
+    // Cave interior: open space that sits below the outer silhouette (a
+    // natural pocket). Rendered opaque so stars never show through.
     float below = 1.0 - smoothstep(surfaceR - u_fieldCell, surfaceR, dist);
-    float cave = below * (1.0 - rock);
-    if (rock <= 0.0 && cave <= 0.0) continue;
+    // A hole you dug always shows the darker rock behind it, however shallow,
+    // so it reads as a hole rather than a window onto the sky.
+    float cave = max(below * (1.0 - terrainRock), dug);
+    // How much the ground in front covers whatever has been dug at this
+    // pixel (the veil pass, below, is what lays it over). It begins at the
+    // hole's near rim — a curve: on the walking line where the hole's wall
+    // is, sagging to u_veilTop at its middle.
+    //  - Seen from the surface, it covers everything: a hole is its mouth
+    //    and nothing else, the shaft under it is out of sight.
+    //  - Down a hole, you get the cutaway: the front strip thins around you
+    //    so you can see yourself behind it, and below the strip the rock is
+    //    simply open.
+    float cover = 0.0;
+    float wallCover = 0.0;     // the same, for the rock beside a hole (see Burn)
+    if (i == u_activeField) {
+      float rim = mix(u_walkDrop, u_walkDrop + (u_veilTop - u_walkDrop) * sagK, mouth);
+      float strip = 1.0 - smoothstep(u_veilBottom - 5.0, u_veilBottom + 5.0, under);
+      float nearPlayer = 1.0 - smoothstep(90.0, 170.0, distance(world, u_playerPos));
+      float stripCover = mix(1.0, u_veilAlpha, u_playerIn * nearPlayer);
+      float covered = mix(1.0 - u_playerIn, stripCover, strip);
+      cover = covered * smoothstep(rim - 1.0, rim + 1.0, under);
+      // Rock beside a hole starts exactly at the rim, where `cover` is still
+      // fading in; taken from just above it so no thread of scorch is left
+      // showing along the walking line.
+      wallCover = covered * smoothstep(rim - 3.0, rim - 1.0, under);
+    }
+    // The veil pass only cares about dug space the front ground covers;
+    // everything else is the main pass's business.
+    float veil = 0.0;
+    // The cave mask: just the cave's open space, as drawn. No color, only a
+    // stencil mark where the hole is solid (cave formations are clipped to
+    // it, so the wall they grow out of hides their roots).
+    if (u_veilPass == 2) {
+      if (i != u_activeField || dug < 0.5) continue;
+      fragColor = vec4(0.0);
+      return;
+    }
+    if (u_veilPass == 1) {
+      if (i != u_activeField) continue;
+      veil = dugCover * cover;
+      if (veil <= 0.0) continue;
+    } else if (rock <= 0.0 && cave <= 0.0) continue;
 
-    // Day/night terminator (directional sun).
+    // Where the sun stands here (the light model below turns it into light).
     vec2 toSun = normalize(u_sunPos - u_planetPos[i]);
     float sunDot = dot(outward, toSun);
-    float shade = mix(u_nightDarkness, 1.0, smoothstep(-u_softness, u_softness, sunDot));
 
     // Surface normal from the SDF gradient: the density gradient points into
     // the rock, so its negation is the outward normal — valid on mountain
@@ -427,7 +735,7 @@ void main() {
     float slopeLight = 0.0;   // -1 shadow flank .. +1 sun-facing flank
     if (dot(g, g) > 1e-6) {
       vec2 N = -normalize(g);
-      float skin = 1.0 - smoothstep(0.0, u_fieldCell * 6.0, density);
+      float skin = 1.0 - smoothstep(0.0, u_fieldCell * 6.0, terrain);
       slopeLight = dot(N, toSun) * skin;
     }
 
@@ -439,35 +747,112 @@ void main() {
     float n = fbm(local * 0.00005);
     float altFrac = clamp((dist - u_baseRadius[i]) / max(u_noiseBand[i], 1.0), 0.0, 1.0);
     float ragged = altFrac + (n - 0.5) * 0.30;
-    const vec3 T_BASIN = vec3(0.290, 0.271, 0.251);
-    const vec3 T_MID   = vec3(0.431, 0.412, 0.392);
-    const vec3 T_HIGH  = vec3(0.561, 0.533, 0.494);
-    const vec3 T_CREST = vec3(0.690, 0.659, 0.604);
-    const vec3 T_SNOW  = vec3(0.930, 0.950, 0.980);
-    vec3 col = mix(T_BASIN, T_MID, smoothstep(0.16, 0.20, ragged));
-    col = mix(col, T_HIGH,  smoothstep(0.42, 0.46, ragged));
-    col = mix(col, T_CREST, smoothstep(0.60, 0.64, ragged));
-    col = mix(col, T_SNOW,  smoothstep(0.76, 0.80, ragged));
+    // The tones are per planet (PlanetLook::tones) — the archetype swaps the
+    // palette, the banding rule stays the same on every world.
+    // Band edges are anti-aliased against the pixel footprint (bw = about a
+    // pixel and a half, in altitude-fraction units), so the boundaries stay
+    // crisp flat-color shorelines up close and soften only when zoomed out.
+    vec3 tBasin = u_tone[i * 5];
+    float bw = clamp(aaw / max(u_noiseBand[i], 1.0), 0.0015, 0.02);
+    vec3 col = mix(tBasin, u_tone[i * 5 + 1], smoothstep(0.18 - bw, 0.18 + bw, ragged));
+    col = mix(col, u_tone[i * 5 + 2], smoothstep(0.44 - bw, 0.44 + bw, ragged));
+    col = mix(col, u_tone[i * 5 + 3], smoothstep(0.62 - bw, 0.62 + bw, ragged));
+    col = mix(col, u_tone[i * 5 + 4], smoothstep(0.78 - bw, 0.78 + bw, ragged));
 
-    // Cel lighting: three flat light levels (night / shadow / day) with thin
-    // anti-aliased boundaries. The terminator sweeps the planet as a clean
-    // banded edge, and shadow-side mountain flanks drop one whole step.
-    float lightT = shade * (0.80 + 0.20 * slopeLight);
-    float q1 = smoothstep(0.34, 0.40, lightT);
-    float q2 = smoothstep(0.66, 0.72, lightT);
-    col *= 0.30 + 0.32 * q1 + 0.38 * q2;
+    // Lighting. The day/night sweep is the smooth graded light above — the
+    // tones stay flat fields, the light across them changes slowly. Slopes
+    // turned well away from the sun drop one step, with a soft edge, and only
+    // while there is direct sun to be turned away from.
+    float flank = smoothstep(0.35, 0.75, -slopeLight);
+    vec3 lightK = groundLight(i, sunDot) * (1.0 - 0.36 * flank * sunDirect(i, sunDot));
+    col *= lightK;
+    // The ground as it is here, before any burn or cave light: what a hole
+    // cut here is a darker shade of.
+    vec3 ground = col;
 
-    // Cave interior: near-black rock backdrop, darker with depth below the
-    // silhouette so shafts read recessed.
-    vec3 caveCol = vec3(0.055, 0.050, 0.045) *
-                   mix(1.0, 0.35, clamp((surfaceR - dist) / max(u_noiseBand[i] * 2.0, 1.0), 0.0, 1.0)) *
-                   shade;
+    // Burn. Rock right beside a cut is scorched — a dark burnt rim that stays
+    // — and where the cutter has just been it is still glowing: the last few
+    // bites heat the rock around them and cool over a second or two. The glow
+    // is emitted, not lit, so it shows at night.
+    float heat = 0.0;
+    if (i == u_activeField && u_veilPass == 0) {
+      for (int k = 0; k < MAX_BURNS; k++) {
+        if (k >= u_burnCount) break;
+        vec2 bd = P - u_burn[k].xy;
+        heat += u_burn[k].z * u_burn[k].z * 0.55 * exp(-dot(bd, bd) / (u_burn[k].w * u_burn[k].w));
+      }
+      heat = min(heat, 1.0);
+      // The walls of a hole are behind the front ground, so the scorch shows
+      // only as far as that ground lets it (not at all from the surface). The
+      // glow is light, and some of it comes through regardless.
+      float scorch = (1.0 - smoothstep(0.0, 7.0, cutEdge)) * (1.0 - wallCover);
+      col *= 1.0 - 0.45 * scorch;
+      // Orange through the rim, a thin yellow line right on the cut face.
+      float hotRim = 1.0 - smoothstep(0.0, 9.0, cutEdge);
+      float hotLine = 1.0 - smoothstep(0.0, 2.5, cutEdge);
+      col += (vec3(1.0, 0.34, 0.07) * heat * hotRim * 0.75 + vec3(1.0, 0.80, 0.40) * heat * hotLine * 0.55) *
+             (1.0 - 0.6 * wallCover);
+    }
+
+    // Cave light: what the glowing things (and the player's lamp) throw. It
+    // falls on the back wall of the cave (below) and catches the rock right
+    // at the cave's edge. Emitted, so it is there at night too.
+    vec3 glow = vec3(0.0);
+    if (i == u_activeField && u_veilPass == 0) {
+      for (int k = 0; k < MAX_GLOW; k++) {
+        if (k >= u_glowCount) break;
+        vec2 gd = P - u_glow[k].xy;
+        glow += u_glowCol[k] * exp(-dot(gd, gd) / (u_glow[k].z * u_glow[k].z));
+      }
+      // Many lights close together pool; they don't add up to white.
+      glow /= 1.0 + 1.6 * dot(glow, vec3(0.34));
+      col += glow * (1.0 - smoothstep(0.0, 12.0, cutEdge)) * (1.0 - wallCover) * 0.26;
+    }
+
+    // Front-ground veil. The ground is drawn as if seen from above at an
+    // angle: the terrain line is its FAR edge, and the strip just below that
+    // line is ground in front of the walking line — where the plants in front
+    // of you stand. A shaft dug at the walking line is BEHIND that strip. So
+    // where a hole passes behind it, the ground is drawn back over the hole
+    // (and over whoever is in it), in its own color — `cover` says how
+    // solidly: completely from the surface, see-through around a player who
+    // is down there.
+    if (u_veilPass == 1) {
+      accumCol += col * veil * (1.0 - accumA);
+      accumA += veil * (1.0 - accumA);
+      continue;
+    }
+
+    // Cave interior: the ground it was cut in, a shade darker the deeper the
+    // part of it you are looking at — so a scratch is barely darker than the
+    // ground, a deep shaft or a cave levels off at u_holeFloor of it, and
+    // nothing is ever black. Bands run straight through: a hole in snow is
+    // darker snow.
+    //  - In section (the cutaway, and natural pockets in the cross-section)
+    //    that is how far below the terrain line the point shown physically is.
+    //  - In a hole's mouth, seen from the surface, you see its far wall from
+    //    the lip down: lit at the far rim, falling in ONE smooth fall to the
+    //    depth of the hole under it at the near rim. So a dent stays light
+    //    across its whole mouth and a deep shaft still reads deep.
+    float farRim = u_walkDrop - u_mouthRise * riseK * mouth;
+    float nearRim = mix(u_walkDrop, u_walkDrop + (u_veilTop - u_walkDrop) * sagK, mouth);
+    float sectionDepth = max(under - (u_walkDrop - rise) * dug, 0.0);
+    float wallT = clamp((under - farRim) / max(nearRim - farRim, 1.0), 0.0, 1.0);
+    // The mouth view hands over to the section only once the front ground
+    // covers it fully (nearRim + 1), so no lighter sliver shows at the rim.
+    float inMouth = smoothstep(0.0, 0.35, mouth) * (1.0 - smoothstep(nearRim + 1.0, nearRim + 3.0, under)) *
+                    (1.0 - u_playerIn);
+    float depthShown = mix(sectionDepth, holeH * wallT, inMouth);
+    vec3 caveCol = ground * holeShade(depthShown);
+    caveCol += vec3(0.60, 0.20, 0.05) * heat * dug * 0.30;   // the hole is lit by its own hot walls
+    caveCol += glow * dug * 0.55;                            // ...and by whatever glows in it
 
     float alpha = clamp(rock + cave, 0.0, 1.0);
     vec3 rgb = col * rock + caveCol * cave;
     accumCol += rgb * (1.0 - accumA);
     accumA += alpha * (1.0 - accumA);
   }
+  if (u_veilPass == 2) discard;         // the mask marks open cave space only
   fragColor = vec4(accumCol, accumA);   // premultiplied "over"
 }
 )";
@@ -516,10 +901,12 @@ struct App {
     // pull at the ship (drives camera/contact/beam); activeFieldIdx is the one
     // planet whose destructible field is currently live (lazy).
     std::vector<Planet> planets;
+    StarSystem system;              // seed + star name + indices of the generated system
     int sunIdx = 0;
     int homeIdx = 1;
     int dominantIdx = 1;
     int activeFieldIdx = -1;
+    int stuckIdx = 1;               // body a landed / wrecked ship rides along with
     Lander lander;
     View view;
     GameState state = PLAYING;
@@ -533,6 +920,70 @@ struct App {
     bool prevExitKey   = false;
 
     std::vector<Vec2> trajectory;   // reused coast-path buffer
+    Lander::Encounter encounter;    // closest pass to another world on that path
+
+    // Navigation overlay (orbit rings, body markers, DOM name labels): fades
+    // in whenever the view is zoomed far enough out that worlds are specks.
+    // M frames the whole system.
+    bool mapMode = false;
+    bool prevMapKey = false;
+    float navAlpha = 0.0f;
+    bool navLabelsShown = false;
+    int navHudKey = -1;             // change detector for the DOM nav readout
+    std::string labelBuf;
+
+    // Sun-angle override bookkeeping: lets a pin being engaged / moved /
+    // released carry the player along with the world instead of stranding them.
+    int prevPinIdx = -1;
+    float prevSunOverride = -5.0f;
+
+    // Mining laser (on foot): what it is cutting, where the beam ends, and the
+    // loose bits it throws off. Particles are stored relative to the center of
+    // the world you're on, so they ride its orbit with everything else.
+    struct Particle {
+        Vec2 local, vel;
+        float life, maxLife, size;
+        float r, g, b;
+        int mode;                   // 0 spark, 1 harvested bit flying to the player, 2 ember (falls), 3 smoke (rises, spreads)
+    };
+    std::vector<Particle> particles;
+    // The hand tool has two modes (Q switches): the mining laser, which cuts
+    // plants / rocks / crystals, and the terrain cutter, which eats rock.
+    int toolMode = 0;               // 0 = mining laser, 1 = terrain cutter
+    // The terrain cutter is meant to be an upgrade you earn (natural caves are
+    // the way underground until then). Unlocked from the start for now.
+    bool cutterUnlocked = true;
+    bool prevToolKey = false;
+    bool laserCutting = false;      // this frame's beam is the cutter (for its color)
+    float cutTimer = 0.0f;          // time banked toward the next bite
+    int cutBites = 0;               // bites taken (every few yield a ferrite)
+    // The last few bites, still hot (planet-local, cooling) — the body shader
+    // makes the rock around them glow.
+    static constexpr int MAX_BURNS = 12;
+    struct Burn { Vec2 local; float heat = 0.0f; float radius = 26.0f; };
+    Burn burns[MAX_BURNS];
+    int burnNext = 0;
+    float inHole = 0.0f;            // eased 0..1: the player is down a dug hole
+    bool laserOn = false;
+    int laserTarget = -1;           // index into the dominant planet's harvest list (-1 = none)
+    int hoverTarget = -1;           // harvestable under the cursor and in range
+    int laserProp = -1;             // the same two, for what grows in caves
+    int hoverProp = -1;             //   (indices into the dominant planet's caveProps)
+    Vec2 laserEnd;
+    float laserDepth = 0.0f;        // near-field depth of whatever the beam ends on
+    bool laserHit = false;          // beam ends on something (item or ground), not open sky
+    // What the player is carrying, by item id: 0 carbon, 1 ferrite, then one
+    // crystal per world archetype (2 + Planet::archetype) — each kind of world
+    // grows its own. The names, icons and the panel live in shell.html.
+    static constexpr int ITEM_COUNT = 12;
+    static constexpr int ITEM_CAVE = 9;         // first of the cave items: calcite, glowcap, gold
+    int inventory[ITEM_COUNT] = {0};
+    bool inventoryDirty = true;
+    unsigned int fxSeed = 2463534242u;
+
+    float camAlt = 0.0f;            // eased altitude above the local ground (camera + foreground)
+    float camGround = 0.0f;         // radius of that ground (averaged terrain under the player)
+    PerlinNoise fgNoise{90210};     // silhouette of the near framing planes
 
     struct Star { float x, y, size, brightness; };
     std::vector<Star> stars;
@@ -562,8 +1013,10 @@ struct App {
     GLuint cloudProgram = 0;
     GLuint bodyProgram = 0;         // planet body: SDF fill + material + terminator
     GLuint fsVao = 0, fsVbo = 0;
-    GLuint terrainTex = 0;          // 2048x1 R32F: terrain radius per angle (the silhouette)
+    GLuint terrainTex = 0;          // R32F, one row per planet: terrain radius per angle
+    int terrainN = 2048;            // its width (entries around the planet)
     GLuint fieldTex = 0;            // R16F mirror of the TerrainField corner grid
+    GLuint carveTex = 0;            // R16F mirror of the active planet's CarveMap window
 
     // Previous-frame key states for edge-triggered actions (lift off / restart).
     bool prevThrustKey = false;
@@ -597,7 +1050,25 @@ static int dominantBody(Vec2 p) {
     return best;
 }
 
+// The point the camera and all the surface dressing key off: the astronaut
+// when on foot, the ship otherwise.
+static Vec2 playerPos() { return app.spacewalking ? app.astronaut.pos : app.lander.pos; }
+
+static float smoothstepf(float e0, float e1, float x) {
+    float t = (x - e0) / (e1 - e0);
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// Post a one-line event banner to the DOM HUD (discoveries, first landings).
+static void showEvent(const std::string& title, const std::string& sub) {
+    EM_ASM({
+        if (window.showEvent) window.showEvent(UTF8ToString($0), UTF8ToString($1));
+    }, title.c_str(), sub.c_str());
+}
+
 static constexpr int KEY_R = 82;
+static constexpr int KEY_M = 77;
 static constexpr float LANDING_MAX_SLOPE = 40.0f; // degrees off the local tangent
 static constexpr int MAX_CARGO = 3;
 static constexpr int NUM_COWS = 5;
@@ -634,20 +1105,36 @@ static void spawnCows() {
     }
 }
 
+static void updateActiveField();   // defined below (lazy destructible fields)
+
 static void resetGame() {
     app.lander.reset();
     app.lander.spawnOnPlanet(homePlanet());
+    // Restarting after a crash on another world: bring the home field back
+    // before anything (the cows) reads the home surface, so they stand on the
+    // dug/gridded ground rather than the analytic silhouette.
+    updateActiveField();
     app.state = PLAYING;
     app.cargo = 0;
     app.score = 0;
-    app.dominantIdx = app.homeIdx;
+    app.dominantIdx = app.stuckIdx = app.homeIdx;
+    app.mapMode = false;
+    app.camAlt = 2000.0f;
+    app.particles.clear();
+    app.laserOn = false;
+    app.laserTarget = app.hoverTarget = -1;
+    app.laserProp = app.hoverProp = -1;
+    for (int i = 0; i < App::ITEM_COUNT; i++) app.inventory[i] = 0;
+    app.inventoryDirty = true;
     spawnCows();
     app.spacewalking      = false;
     app.astronaut.active  = false;
 
     app.view.focusX = app.lander.pos.x;
     app.view.focusY = app.lander.pos.y;
-    app.view.scale = gDebug.cameraGroundZoom;
+    // Start already framed for the drop-in altitude (2000 above the ground),
+    // not at the ground zoom: otherwise the first second is a lurch outward.
+    app.view.scale = std::fmin(gDebug.cameraGroundZoom, app.height * gDebug.cameraFraming / 2000.0f);
 
     // Align the initial roll so gravity points screen-down.
     Vec2 g = app.lander.gravityAt(homePlanet(), app.lander.pos);
@@ -680,17 +1167,28 @@ static void updateContact() {
     l.altitude = alt > 0 ? alt : 0;
 
     if (!l.active) return;
-    if (alt <= l.radius) {
+    l.updateClearing(p, alt);
+    if (alt <= l.radius && !l.clearingGround()) {
         // Speed is judged relative to the body — landing on an orbiting moon
         // means matching its velocity, not the world frame's.
         bool speedSafe = (l.vel - p.orbitVel).length() < Lander::LANDING_MAX_SPEED;
         bool upright = l.isUpright(p);
         bool flat = terrainFlat(p, angle);
+        app.stuckIdx = app.dominantIdx;
         if (speedSafe && upright && flat) {
             l.land(p);
             app.state = LANDED;
+            p.discovered = true;
+            if (!p.visited) {
+                p.visited = true;
+                if (app.dominantIdx != app.homeIdx) {
+                    app.score += 100;
+                    showEvent("First landing: " + p.name, p.kind + "  +100");
+                }
+            }
         } else {
             l.crash();
+            l.landingOffset = l.pos - p.center;   // the wreck stays on the body
             app.state = CRASHED;
         }
     }
@@ -711,14 +1209,18 @@ static void initShaderPasses() {
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
-    // 2048xMAX_PLANETS float texture holding the terrain radius per angle (one
-    // silhouette row per planet), so the sky/cloud/body shaders know exactly
-    // where each ground meets its sky. High angular resolution (>> the
-    // ~255-vertex terrain polygon) so the sampled silhouette faithfully follows
-    // the real peaks instead of aliasing against them.
+    // Float texture holding the terrain radius per angle (one silhouette row
+    // per planet), so the sky/cloud/body shaders know where each ground meets
+    // its sky. As wide as the planets' own outline tables (Planet::LUT_N), so
+    // the GPU and the CPU read the very same outline — or as wide as this GPU
+    // allows, if that is less.
+    GLint maxTex = 2048;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+    app.terrainN = Planet::LUT_N;
+    while (app.terrainN > maxTex && app.terrainN > 2048) app.terrainN /= 2;
     glGenTextures(1, &app.terrainTex);
     glBindTexture(GL_TEXTURE_2D, app.terrainTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 2048, SHADER_MAX_PLANETS, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, app.terrainN, SHADER_MAX_PLANETS, 0, GL_RED, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -727,6 +1229,16 @@ static void initShaderPasses() {
     // Density-field texture for the body pass; (re)allocated to the grid size
     // in uploadFieldTexture once the planet exists.
     glGenTextures(1, &app.fieldTex);
+
+    // Carve-map texture (what has been dug, in a window round the player):
+    // fixed size, filled by uploadCarveTexture / uploadCarveRegion.
+    glGenTextures(1, &app.carveTex);
+    glBindTexture(GL_TEXTURE_2D, app.carveTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, CarveMap::N, CarveMap::N, 0, GL_RED, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
 // Mirror the active planet's TerrainField corner grid into the R16F field
@@ -744,35 +1256,125 @@ static void uploadFieldTexture() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
-// Re-upload just the corners a dig touched (UNPACK_ROW_LENGTH lets us copy the
-// sub-rect straight out of the full CPU grid) — this is the whole GPU cost of
-// a dig, replacing the old full mesh rebuild + VBO upload.
-static void uploadFieldRegion(TerrainField::Rect rc) {
-    if (rc.i1 < rc.i0 || rc.j1 < rc.j0 || app.activeFieldIdx < 0) return;
-    const TerrainField& f = app.planets[app.activeFieldIdx].field;
-    glBindTexture(GL_TEXTURE_2D, app.fieldTex);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, f.cornersX());
+// Mirror the active planet's carve window into its texture: all of it (after
+// the window was rebuilt around the player)...
+static void uploadCarveTexture() {
+    if (app.activeFieldIdx < 0) return;
+    const CarveMap& c = app.planets[app.activeFieldIdx].carve;
+    if (!c.ready()) return;
+    glBindTexture(GL_TEXTURE_2D, app.carveTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CarveMap::N, CarveMap::N, GL_RED, GL_FLOAT, c.data().data());
+}
+
+// ...or just the samples one bite touched (UNPACK_ROW_LENGTH copies the
+// sub-rect straight out of the full CPU grid). This is the whole GPU cost of
+// a dig.
+static void uploadCarveRegion(CarveMap::Rect rc) {
+    if (rc.empty() || app.activeFieldIdx < 0) return;
+    const CarveMap& c = app.planets[app.activeFieldIdx].carve;
+    if (!c.ready()) return;
+    glBindTexture(GL_TEXTURE_2D, app.carveTex);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, CarveMap::N);
     glPixelStorei(GL_UNPACK_SKIP_PIXELS, rc.i0);
     glPixelStorei(GL_UNPACK_SKIP_ROWS, rc.j0);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, rc.i0, rc.j0,
-                    rc.i1 - rc.i0 + 1, rc.j1 - rc.j0 + 1,
-                    GL_RED, GL_FLOAT, f.corners().data());
+    glTexSubImage2D(GL_TEXTURE_2D, 0, rc.i0, rc.j0, rc.i1 - rc.i0 + 1, rc.j1 - rc.j0 + 1,
+                    GL_RED, GL_FLOAT, c.data().data());
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
 }
 
-// Resample one planet's silhouette onto a uniform 2048-angle grid and upload it
-// to that planet's row of the terrain texture. Call after its terrain changes.
+// Upload one planet's outline table to that planet's row of the terrain
+// texture. Call after its terrain changes.
 static void uploadTerrainLUT(int planetIdx) {
-    const int N = 2048;
-    float lut[N];
+    const int N = app.terrainN;
+    static std::vector<float> lut;
+    lut.resize(N);
     const Planet& p = app.planets[planetIdx];
     for (int k = 0; k < N; k++) {
         lut[k] = p.surfaceRadius(k * (360.0f / N));
     }
     glBindTexture(GL_TEXTURE_2D, app.terrainTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, planetIdx, N, 1, GL_RED, GL_FLOAT, lut);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, planetIdx, N, 1, GL_RED, GL_FLOAT, lut.data());
+}
+
+// ---- Day/night light, CPU side (mirror of LIGHT_GLSL) ---------------------
+// The per-planet numbers the light model needs, derived from the planet's air.
+struct LightParams {
+    float extK[3];    // extinction x sunset strength
+    float twi[3];     // twilight ambient color
+    float night[3];   // night ambient color
+    float width;      // twilight half-width in sunDot units
+};
+
+static LightParams lightParams(const Planet& p) {
+    LightParams L{};
+    if (p.isSun || !p.atmosphere) {
+        // No air: white light, no afterglow, a narrow hard terminator.
+        float n = (0.14f + gDebug.nightDarkness) * 0.40f;
+        L.night[0] = L.night[1] = L.night[2] = n;
+        L.width = 0.06f;
+        return L;
+    }
+    const float ozone[3] = {0.00065f, 0.00188f, 0.00008f};
+    float mx = std::fmax(p.look.skyBeta[0], std::fmax(p.look.skyBeta[1], p.look.skyBeta[2]));
+    float level = 0.14f + gDebug.nightDarkness;       // 0.30 at the default knob
+    for (int k = 0; k < 3; k++) {
+        float ext = p.look.skyBeta[k] + p.look.mieBeta[k] + ozone[k];
+        L.extK[k] = ext * gDebug.atmExtinction;
+        float tint = mx > 0 ? p.look.skyBeta[k] / mx : 1.0f;
+        // Twilight = what is left of the sunlight at the horizon (deep red on
+        // a blue-sky world) plus the sky's own scattered color: rose.
+        float sunLow = expf(-L.extK[k] * 11.7f);
+        L.twi[k] = (sunLow * 1.25f + tint * 0.42f) * 0.85f;
+        L.night[k] = level * (0.65f + 0.60f * tint);
+    }
+    L.width = gDebug.nightSoftness;
+    return L;
+}
+
+static float lightDirect(const LightParams& L, float s) {
+    return smoothstepf(-0.33f * L.width, L.width, s);
+}
+
+// Color of the light on the ground where the sun stands at sine-elevation s.
+static void groundLight(const LightParams& L, float s, float out[3]) {
+    float w = L.width;
+    float airmass = 1.0f / std::fmax(s * 0.9f + 0.1f, 0.05f);
+    float excess = std::fmax(airmass - 2.0f, 0.0f);
+    float direct = lightDirect(L, s);
+    float twi = smoothstepf(-1.6f * w, -0.2f * w, s) * (1.0f - smoothstepf(-0.17f * w, 0.8f * w, s));
+    float night = 1.0f - smoothstepf(-1.6f * w, 0.0f, s);
+    for (int k = 0; k < 3; k++)
+        out[k] = expf(-L.extK[k] * excess) * direct + L.twi[k] * twi + L.night[k] * night;
+}
+
+// Light where a planet-relative direction points (angle in degrees).
+static void groundLightAt(const Planet& p, const LightParams& L, Vec2 toSun, float angleDeg, float out[3]) {
+    (void)p;
+    groundLight(L, cosd(angleDeg) * toSun.x + sind(angleDeg) * toSun.y, out);
+}
+
+// Upload the light-model arrays (LIGHT_GLSL) to the bound program.
+static void setLightUniforms(GLuint pr) {
+    const int N = SHADER_MAX_PLANETS;
+    float extK[N * 3] = {0}, twi[N * 3] = {0}, night[N * 3] = {0}, width[N];
+    for (int i = 0; i < N; i++) width[i] = 0.3f;
+    int count = (int)app.planets.size();
+    if (count > N) count = N;
+    for (int i = 0; i < count; i++) {
+        LightParams L = lightParams(app.planets[i]);
+        for (int k = 0; k < 3; k++) {
+            extK[i * 3 + k] = L.extK[k];
+            twi[i * 3 + k] = L.twi[k];
+            night[i * 3 + k] = L.night[k];
+        }
+        width[i] = L.width;
+    }
+    glUniform3fv(glGetUniformLocation(pr, "u_extK"), N, extK);
+    glUniform3fv(glGetUniformLocation(pr, "u_twiCol"), N, twi);
+    glUniform3fv(glGetUniformLocation(pr, "u_nightAmb"), N, night);
+    glUniform1fv(glGetUniformLocation(pr, "u_twiWidth"), N, width);
 }
 
 // Shared uniform setup: camera reconstruction params common to both passes.
@@ -787,7 +1389,10 @@ static void setPassViewUniforms(GLuint pr) {
 // Planet body pass: SDF fill + material + slope lighting + terminator, all per
 // pixel from the field texture (see kBodyFrag). Drawn premultiplied-over so the
 // rock occludes the stars and the sky shows through everywhere else.
-static void drawBodyPass();   // defined after sunWorldPos (uses it)
+// Main: the bodies. Veil: the front ground laid back over holes. CaveMask:
+// no color, only the cave's open space marked in the stencil (drawCaveMask).
+enum class BodyPass { Main, Veil, CaveMask };
+static bool drawBodyPass(BodyPass pass = BodyPass::Main);   // defined after sunWorldPos (uses it)
 
 // World position of the sun — the actual star body. It kinematically orbits the
 // home planet (see init) at the old day-cycle rate, so the drifting terminator,
@@ -798,37 +1403,477 @@ static Vec2 sunWorldPos() {
     return app.planets[app.sunIdx].center;
 }
 
-// How strongly the sky + clouds fill the planet disk, as a function of the
-// ship's altitude over the dominant body: 0 near the surface (so the ground
-// stays clear in front of you) ramping to gDebug.spaceHaze once you're clearly
-// out in space. This makes the atmosphere read as a full sphere with the planet
-// showing through.
-static float spaceOverlay() {
+// How far the player has climbed out of the dominant body's sky: 0 from the
+// ground up through the lower air, ramping to 1 across the upper atmosphere so
+// the changeover completes right at the top. Airless bodies use the height an
+// atmosphere WOULD have, so their surface dressing fades on the same schedule.
+static float climbRamp() {
     const Planet& p = dominantPlanet();
-    float dx = app.lander.pos.x - p.center.x;
-    float dy = app.lander.pos.y - p.center.y;
-    float distC = sqrtf(dx * dx + dy * dy);
-    float thickness = p.atmosphereOuterRadius() - p.baseRadius;
+    Vec2 pp = playerPos();
+    float distC = dist(pp.x, pp.y, p.center.x, p.center.y);
+    float thickness = p.atmosphere ? p.atmosphereThickness()
+                                   : p.baseRadius * gDebug.atmosphereScale;
     float altFrac = (distC - p.baseRadius) / (thickness > 1.0f ? thickness : 1.0f);
-    // Crossfade across the upper atmosphere so the sky is a complete circle right
-    // as you exit at the atmosphere top (altFrac ~ 1.0).
-    float ramp = altFrac <= 0.55f ? 0.0f
-               : altFrac >= 1.0f  ? 1.0f
-               : (altFrac - 0.55f) / (1.0f - 0.55f);
-    return ramp * gDebug.spaceHaze;
+    return altFrac <= 0.55f ? 0.0f
+         : altFrac >= 1.0f  ? 1.0f
+         : (altFrac - 0.55f) / (1.0f - 0.55f);
+}
+
+// How strongly the sky + clouds fill the planet disk: 0 near the surface (so
+// the ground stays clear in front of you) ramping to gDebug.spaceHaze once
+// you're clearly out in space. This makes the atmosphere read as a full sphere
+// with the planet showing through.
+static float spaceOverlay() {
+    return climbRamp() * gDebug.spaceHaze;
+}
+
+// Strength of everything that only makes sense seen from the ground — ridge
+// layers, cast shadows, light shafts, sky-dome bodies, motes. Fades out on the
+// climb to space AND when the camera is pulled far back (wheel zoom / map), so
+// none of it is ever left hanging around a planet that has become a small disc.
+static float surfaceDressing() {
+    float zoomK = app.view.scale / (gDebug.cameraGroundZoom > 1e-4f ? gDebug.cameraGroundZoom : 1e-4f);
+    return (1.0f - climbRamp()) * smoothstepf(0.10f, 0.30f, zoomK);
+}
+
+// ============================================================================
+// Mining laser + harvesting (on foot). Hold the mouse button to fire at the
+// cursor; plants and minerals on the ground strip (Planet::harvest, placed in
+// depth by nearfield.cpp) come apart under the beam and fly to the player.
+// ============================================================================
+static constexpr float LASER_RANGE = 300.0f;        // world units from the player
+// Terrain cutter (the tool's second mode).
+static constexpr float CUT_REACH = 120.0f;          // how far the cutter reaches
+static constexpr float CUT_RADIUS = 20.0f;          // a bite is a circle this big (a tunnel 40 high: the figure needs 36.5)
+static constexpr float CUT_BITE = 3.0f;             // how deep each bite goes into the face
+static constexpr float CUT_INTERVAL = 0.06f;        // seconds between bites while held (~50 units/s)
+static constexpr int CUT_BITES_PER_FERRITE = 10;
+
+static float fxRand() {
+    app.fxSeed ^= app.fxSeed << 13;
+    app.fxSeed ^= app.fxSeed >> 17;
+    app.fxSeed ^= app.fxSeed << 5;
+    return (app.fxSeed & 0xffffffu) * (1.0f / 16777216.0f);
+}
+
+// World point under a canvas pixel (the inverse of View::matrix; the same
+// reconstruction the fullscreen shaders do per fragment).
+static Vec2 screenToWorld(float mx, float my) {
+    float cx = mx - app.width * 0.5f, cy = my - app.height * 0.5f;
+    float c = cosd(-app.view.rotation), s = sind(-app.view.rotation);
+    return Vec2((c * cx - s * cy) / app.view.scale + app.view.focusX,
+                (s * cx + c * cy) / app.view.scale + app.view.focusY);
+}
+
+// The slice of the near field that is on screen right now.
+static NearField::Frame nearFrame(float time) {
+    const Planet& p = dominantPlanet();
+    NearField::Frame f;
+    f.viewAngle = atan2d(app.view.focusY - p.center.y, app.view.focusX - p.center.x);
+    float halfDiag = 0.5f * sqrtf((float)app.width * app.width + (float)app.height * app.height);
+    f.halfSpanDeg = halfDiag / app.view.scale / (p.baseRadius > 1.0f ? p.baseRadius : 1.0f) * RAD2DEG * 1.15f;
+    f.time = time;
+    f.toSun = (app.planets[app.sunIdx].center - p.center).normalize();
+    f.strength = surfaceDressing();
+    // One light for the whole strip on screen (it spans a degree or two).
+    groundLight(lightParams(p), cosd(f.viewAngle) * f.toSun.x + sind(f.viewAngle) * f.toSun.y, f.light);
+    return f;
+}
+
+// The same for what grows in the caves (CaveField).
+static CaveField::Frame caveFrame(float time) {
+    const Planet& p = dominantPlanet();
+    CaveField::Frame f;
+    f.focus = Vec2(app.view.focusX, app.view.focusY);
+    f.reach = 0.5f * sqrtf((float)app.width * app.width + (float)app.height * app.height) / app.view.scale * 1.1f;
+    f.time = time;
+    float viewAngle = atan2d(app.view.focusY - p.center.y, app.view.focusX - p.center.x);
+    Vec2 toSun = (app.planets[app.sunIdx].center - p.center).normalize();
+    groundLight(lightParams(p), cosd(viewAngle) * toSun.x + sind(viewAngle) * toSun.y, f.light);
+    f.inside = app.inHole;
+    f.holeFloor = gDebug.holeFloor;
+    f.holeDepth = gDebug.holeDepth;
+    f.strength = app.dominantIdx == app.activeFieldIdx ? surfaceDressing() : 0.0f;
+    return f;
+}
+
+static void spawnParticle(Vec2 world, Vec2 vel, float life, float size, const float* col, int mode) {
+    if (app.particles.size() > 400) return;
+    App::Particle q;
+    q.local = world - dominantPlanet().center;
+    q.vel = vel;
+    q.life = q.maxLife = life;
+    q.size = size;
+    q.r = col[0]; q.g = col[1]; q.b = col[2];
+    q.mode = mode;
+    app.particles.push_back(q);
+}
+
+// Add to the inventory and tell the page (pickup feed + panel refresh).
+static void addItem(int id, int amount) {
+    if (id < 0 || id >= App::ITEM_COUNT || amount <= 0) return;
+    app.inventory[id] += amount;
+    app.inventoryDirty = true;
+    EM_ASM({ if (window.notifyPickup) window.notifyPickup($0, $1); }, id, amount);
+}
+
+// Aim, cut, harvest. Runs after the astronaut has moved this frame.
+static void updateLaser(float dt, float time) {
+    Astronaut& a = app.astronaut;
+    Planet& p = dominantPlanet();
+    app.laserOn = false;
+    app.laserTarget = -1;
+    app.hoverTarget = -1;
+    app.laserProp = -1;
+    app.hoverProp = -1;
+    a.aiming = false;
+    float mx = Input::getMouseX(), my = Input::getMouseY();
+    if (!app.spacewalking || mx < 0.0f || app.mapMode) return;
+
+    NearField::Frame f = nearFrame(time);
+    Vec2 cursor = screenToWorld(mx, my);
+    float slack = 7.0f / app.view.scale;                 // a few pixels of forgiveness
+    bool cutter = app.toolMode == 1;
+    app.laserCutting = cutter;
+    if (!cutter) {
+        app.hoverTarget = NearField::pick(p, f, cursor, a.pos, LASER_RANGE, slack);
+        // What grows in the caves. Underground that is what you are aiming
+        // at; out on the surface a plant under the cursor comes first.
+        Vec2 eye = a.pos + (a.pos - p.center).normalize() * 16.0f;
+        app.hoverProp = CaveField::pick(p, caveFrame(time), cursor, a.pos, eye, LASER_RANGE, slack);
+        if (app.hoverProp >= 0 && app.hoverTarget >= 0) {
+            if (app.inHole < 0.5f) app.hoverProp = -1;
+            else app.hoverTarget = -1;
+        }
+    }
+    if (!Input::isMouseDown()) { app.cutTimer = 0.0f; return; }
+
+    app.laserOn = true;
+    a.aiming = true;
+    static const float sparkCol[3] = {1.0f, 0.78f, 0.50f};
+    if (cutter) {
+        // ---- Terrain cutter ---------------------------------------------------
+        // Things on the walking line are drawn WALK_DROP below where they
+        // physically are (see the body shader), so what the cursor points at
+        // is that far above it in the physical world: aim there. The beam runs
+        // from the physical height of the tool toward it and bites the first
+        // rock it meets, a little at a time. Each bite is a circle a bit over
+        // one body-height across set almost entirely on the near side of the
+        // rock face, so it shaves CUT_BITE off the surface with a rounded
+        // profile: hold it and the hole deepens steadily under the beam. A
+        // level beam leaves a tunnel whose floor is the floor you are standing
+        // on, tall enough to walk in.
+        Vec2 up = (a.pos - p.center).normalize();
+        Vec2 drop = up * NearField::WALK_DROP;
+        Vec2 origin = a.pos + up * (CUT_RADIUS - Astronaut::FOOT_R);
+        Vec2 d = (cursor + drop) - origin;
+        float len = d.length();
+        Vec2 dir = len > 1.0f ? d * (1.0f / len) : up * -1.0f;
+        float reach = len + 12.0f < CUT_REACH ? len + 12.0f : CUT_REACH;
+        float hitT = -1.0f;
+        for (float t = 2.0f; t <= reach; t += 2.0f) {
+            Vec2 q = origin + dir * t;
+            if (p.rockAt(q) > -0.5f) { hitT = t; break; }
+        }
+        app.laserDepth = 0.0f;
+        if (hitT < 0.0f) {
+            app.laserEnd = origin + dir * (len < CUT_REACH ? len : CUT_REACH) - drop;
+            app.laserHit = false;
+            app.cutTimer = 0.0f;
+        } else {
+            Vec2 hit = origin + dir * hitT;
+            Vec2 hitDrawn = hit - drop;            // where that shows on screen
+            app.laserEnd = hitDrawn;
+            app.laserHit = true;
+            // Not under the ship: it stands on the terrain's outline, and
+            // would be left hanging over the hole.
+            bool nearShip = dist(hit.x, hit.y, app.lander.pos.x, app.lander.pos.y) < 90.0f;
+            app.cutTimer += dt;
+            if (app.cutTimer >= CUT_INTERVAL && !nearShip) {
+                app.cutTimer = 0.0f;
+                Vec2 c = hit - dir * (CUT_RADIUS - CUT_BITE);
+                CarveMap::Rect rc = p.dig(c, CUT_RADIUS);
+                if (!rc.empty()) {
+                    uploadCarveRegion(rc);
+                    // A roof only a few units thick over the cut is not a roof:
+                    // open it to the sky, rather than leave a sliver of ground
+                    // that looks like air but holds you up.
+                    Vec2 cUp = (c - p.center).normalize();
+                    float cr = dist(c.x, c.y, p.center.x, p.center.y);
+                    float roof = p.surfaceRadius(atan2d(cUp.y, cUp.x)) - (cr + CUT_RADIUS);
+                    if (roof > 0.0f && roof < 12.0f)
+                        uploadCarveRegion(p.dig(c + cUp * (roof + 6.0f), CUT_RADIUS));
+                    // Anything growing on the ground that just went goes with it.
+                    NearField::uproot(p, f, c, CUT_RADIUS + 4.0f);
+                    // The rock around the bite stays hot for a moment.
+                    App::Burn& b = app.burns[app.burnNext];
+                    app.burnNext = (app.burnNext + 1) % App::MAX_BURNS;
+                    b.local = hit - p.center;
+                    b.heat = 1.0f;
+                    b.radius = CUT_RADIUS * 1.3f;
+                    // Rock chips, embers that fall, a little smoke — and a
+                    // ferrite for every few bites.
+                    static const float ember[3] = {1.0f, 0.55f, 0.18f};
+                    static const float smoke[3] = {0.16f, 0.15f, 0.15f};
+                    for (int i = 0; i < 2; i++) {
+                        float ang = atan2d(-dir.y, -dir.x) + (fxRand() - 0.5f) * 110.0f;
+                        float sp = 1.5f + fxRand() * 3.0f;
+                        spawnParticle(hitDrawn, Vec2(cosd(ang) * sp, sind(ang) * sp),
+                                      0.35f + fxRand() * 0.35f, 2.0f + fxRand() * 1.6f, p.look.tones[2], 0);
+                    }
+                    for (int i = 0; i < 2; i++) {
+                        float ang = atan2d(-dir.y, -dir.x) + (fxRand() - 0.5f) * 150.0f;
+                        float sp = 1.0f + fxRand() * 2.6f;
+                        spawnParticle(hitDrawn, Vec2(cosd(ang) * sp, sind(ang) * sp),
+                                      0.55f + fxRand() * 0.55f, 1.4f + fxRand() * 1.3f, ember, 2);
+                    }
+                    if (app.cutBites % 3 == 0) {
+                        Vec2 drift = up * (0.5f + fxRand() * 0.5f) + Vec2((fxRand() - 0.5f) * 0.5f, (fxRand() - 0.5f) * 0.5f);
+                        spawnParticle(hitDrawn, drift, 0.9f + fxRand() * 0.6f, 3.5f + fxRand() * 2.5f, smoke, 3);
+                    }
+                    if (++app.cutBites % CUT_BITES_PER_FERRITE == 0) addItem(1, 1);
+                }
+            }
+        }
+    } else if (app.hoverProp >= 0) {
+        // Mining something in a cave.
+        Planet::CaveProp& q = p.caveProps[app.hoverProp];
+        app.laserProp = app.hoverProp;
+        app.laserEnd = CaveField::center(p, q);
+        app.laserDepth = q.front ? 10.0f : -6.0f;
+        app.laserHit = true;
+        q.hp -= dt / CaveField::toughness(q.kind);
+        if (q.hp <= 0.0f) {
+            NearField::Yield y = CaveField::yield(q);
+            // 2 is "the crystal of this kind of world"; 3.. are the cave's own.
+            addItem(y.resource == 2 ? 2 + p.archetype : (y.resource >= 3 ? App::ITEM_CAVE + (y.resource - 3) : y.resource),
+                    y.amount);
+            float col[3];
+            CaveField::color(p, q.kind, col);
+            int bits = 5 + y.amount * 2;
+            for (int i = 0; i < bits; i++) {
+                float ang = fxRand() * 360.0f, sp = 1.5f + fxRand() * 3.5f;
+                Vec2 off(cosd(ang) * CaveField::radius(q) * 0.6f * fxRand(),
+                         sind(ang) * CaveField::radius(q) * 0.6f * fxRand());
+                spawnParticle(app.laserEnd + off, Vec2(cosd(ang) * sp, sind(ang) * sp),
+                              0.9f + fxRand() * 0.5f, 2.2f + fxRand() * 1.8f, col, 1);
+            }
+            CaveField::mine(q);
+            app.laserProp = -1;
+        }
+    } else if (app.hoverTarget >= 0) {
+        // Cutting something.
+        Planet::Harvestable& h = p.harvest[app.hoverTarget];
+        app.laserTarget = app.hoverTarget;
+        app.laserEnd = NearField::center(p, h);
+        app.laserDepth = h.depth;
+        app.laserHit = true;
+        h.hp -= dt / NearField::toughness(h.kind);
+        if (h.hp <= 0.0f) {
+            NearField::Yield y = NearField::yield(h);
+            // Resource 2 is "the crystal of this kind of world".
+            addItem(y.resource == 2 ? 2 + p.archetype : y.resource, y.amount);
+            const float* col = NearField::color(p, h.kind);
+            int bits = 5 + y.amount * 2;
+            for (int i = 0; i < bits; i++) {
+                float ang = fxRand() * 360.0f, sp = 1.5f + fxRand() * 3.5f;
+                Vec2 off(cosd(ang) * NearField::radius(h) * 0.6f * fxRand(),
+                         sind(ang) * NearField::radius(h) * 0.6f * fxRand());
+                spawnParticle(app.laserEnd + off, Vec2(cosd(ang) * sp, sind(ang) * sp),
+                              0.9f + fxRand() * 0.5f, 2.2f + fxRand() * 1.8f, col, 1);
+            }
+            NearField::harvest(h);
+            app.laserTarget = -1;
+        }
+    } else {
+        // Nothing under the cursor: the beam goes where you point, up to its
+        // range. Below the terrain line it is hitting the ground (in front of
+        // or behind the walking line — that's what the depth is for).
+        Vec2 d = cursor - a.pos;
+        float len = d.length();
+        if (len > LASER_RANGE) d = d * (LASER_RANGE / len);
+        app.laserEnd = a.pos + d;
+        float ang = atan2d(app.laserEnd.y - p.center.y, app.laserEnd.x - p.center.x);
+        float drop = p.surfaceRadius(ang) - dist(app.laserEnd.x, app.laserEnd.y, p.center.x, p.center.y);
+        app.laserHit = drop > 0.0f;
+        float depth = NearField::depthAtDrop(drop);
+        app.laserDepth = !app.laserHit ? 0.0f : (depth < -20.0f ? -20.0f : (depth > 80.0f ? 80.0f : depth));
+    }
+    a.aimWorld = app.laserEnd;
+    // Face whatever you're shooting at.
+    Vec2 up = (a.pos - p.center).normalize();
+    float side = (app.laserEnd.x - a.pos.x) * -up.y + (app.laserEnd.y - a.pos.y) * up.x;
+    if (fabsf(side) > 3.0f) a.facing = side > 0.0f ? 1 : -1;
+    // Sparks where the beam lands.
+    if (app.laserHit) {
+        for (int i = 0; i < 2; i++) {
+            float ang = fxRand() * 360.0f, sp = 2.0f + fxRand() * 4.0f;
+            spawnParticle(app.laserEnd, Vec2(cosd(ang) * sp, sind(ang) * sp),
+                          0.18f + fxRand() * 0.25f, 1.4f + fxRand() * 1.2f, sparkCol, 0);
+        }
+    }
+}
+
+static void updateParticles(float dt, float timeScale) {
+    Vec2 home = playerPos() - dominantPlanet().center;       // where harvested bits fly to
+    home = home + (playerPos() - dominantPlanet().center).normalize() * 4.0f;
+    for (size_t i = 0; i < app.particles.size();) {
+        App::Particle& q = app.particles[i];
+        q.life -= dt;
+        bool done = q.life <= 0.0f;
+        if (q.mode == 1) {
+            // Burst outward for a moment, then home in on the player, faster
+            // the longer it has been flying.
+            float age = q.maxLife - q.life;
+            Vec2 to = home - q.local;
+            float d = to.length();
+            if (age > 0.16f) {
+                float pull = 0.5f + age * 6.0f;
+                Vec2 want = d > 0.01f ? to * ((2.0f + age * 16.0f) / d) : Vec2(0, 0);
+                float k = pull * 0.12f * timeScale;
+                if (k > 1.0f) k = 1.0f;
+                q.vel = q.vel + (want - q.vel) * k;
+            } else {
+                q.vel = q.vel * (1.0f - 0.08f * timeScale);
+            }
+            if (age > 0.16f && d < 9.0f) done = true;       // collected
+        } else if (q.mode == 2) {
+            // Ember: thrown out, then falls.
+            Vec2 down = q.local.normalize() * -1.0f;
+            q.vel = q.vel * (1.0f - 0.03f * timeScale) + down * (0.07f * timeScale);
+        } else if (q.mode == 3) {
+            // Smoke: drifts up, slows, spreads.
+            Vec2 upw = q.local.normalize();
+            q.vel = q.vel * (1.0f - 0.05f * timeScale) + upw * (0.012f * timeScale);
+            q.size += 0.06f * timeScale;
+        } else {
+            q.vel = q.vel * (1.0f - 0.10f * timeScale);
+        }
+        q.local = q.local + q.vel * timeScale;
+        if (done) { q = app.particles.back(); app.particles.pop_back(); }
+        else i++;
+    }
+}
+
+// Beam, impact glow, particles and the "you can shoot this" brackets. World
+// space, inside an active batch, drawn over the near field's front items.
+static void drawLaserFx(float time) {
+    Renderer2D& r = app.renderer;
+    const Planet& p = dominantPlanet();
+    float px = 1.0f / app.view.scale;
+
+    // Brackets around the harvestable under the cursor.
+    bool overPlant = app.hoverTarget >= 0 && app.hoverTarget < (int)p.harvest.size();
+    bool overProp = app.hoverProp >= 0 && app.hoverProp < (int)p.caveProps.size();
+    if (app.spacewalking && (overPlant || overProp)) {
+        Vec2 c;
+        float rad;
+        if (overProp) {
+            c = CaveField::center(p, p.caveProps[app.hoverProp]);
+            rad = CaveField::radius(p.caveProps[app.hoverProp]) + 3.0f * px;
+        } else {
+            const Planet::Harvestable& h = p.harvest[app.hoverTarget];
+            c = NearField::center(p, h);
+            rad = NearField::radius(h) + 3.0f * px;
+        }
+        Vec2 up = (c - p.center).normalize(), right(-up.y, up.x);
+        float arm = rad * 0.45f, w = 1.5f * px;
+        r.fill(1.0f, 1.0f, 1.0f, app.laserOn ? 0.95f : 0.65f);
+        for (int sx = -1; sx <= 1; sx += 2) {
+            for (int sy = -1; sy <= 1; sy += 2) {
+                Vec2 corner = c + right * (rad * sx) + up * (rad * sy);
+                Vec2 a1 = corner - right * (arm * sx), a2 = corner - up * (arm * sy);
+                r.line(corner.x, corner.y, a1.x, a1.y, w);
+                r.line(corner.x, corner.y, a2.x, a2.y, w);
+            }
+        }
+    }
+
+    r.setBlend(Renderer2D::Blend::Additive);
+    if (app.spacewalking && app.laserOn) {
+        // The beam widens toward things in front of the walking line and
+        // narrows toward things behind it — it is travelling out of / into the
+        // screen, and that taper is what says so.
+        Vec2 a = app.astronaut.muzzleWorld, b = app.laserEnd;
+        Vec2 d = b - a;
+        float len = d.length();
+        if (len > 0.5f) {
+            Vec2 dir = d * (1.0f / len), n(-dir.y, dir.x);
+            float flick = 0.85f + 0.15f * sinf(time * 31.0f);
+            float w0 = 2.6f, w1 = 2.6f * NearField::scale(app.laserDepth) * (app.laserDepth < 0 ? 0.75f : 1.25f);
+            auto band = [&](float k, float cr, float cg, float cb, float ca) {
+                Renderer2D::Color col{cr, cg, cb, ca * flick};
+                Vec2 a0 = a + n * (w0 * k), a1 = a - n * (w0 * k);
+                Vec2 b0 = b + n * (w1 * k), b1 = b - n * (w1 * k);
+                r.triangleV(a0, col, b0, col, b1, col);
+                r.triangleV(a0, col, b1, col, a1, col);
+            };
+            // Mining laser: hot orange. Terrain cutter: the ship's teal.
+            const bool cut = app.laserCutting;
+            const float g0[3] = {cut ? 0.20f : 1.0f, cut ? 0.85f : 0.36f, cut ? 0.80f : 0.16f};
+            const float g1[3] = {cut ? 0.35f : 1.0f, cut ? 0.95f : 0.55f, cut ? 0.88f : 0.25f};
+            const float core[3] = {cut ? 0.85f : 1.0f, cut ? 1.0f : 0.95f, cut ? 0.97f : 0.85f};
+            band(3.2f, g0[0], g0[1], g0[2], 0.16f);                 // outer glow
+            band(1.6f, g1[0], g1[1], g1[2], 0.38f);
+            band(0.55f, core[0], core[1], core[2], 0.95f);          // bright core
+            // Muzzle flash + impact.
+            r.fill(g1[0], g1[1], g1[2], 0.45f * flick);
+            r.circle(a.x, a.y, 4.5f, 14);
+            if (app.laserHit) {
+                float ir = (cut ? 5.0f : 7.0f) * NearField::scale(app.laserDepth) * flick;
+                r.fill(g0[0], g0[1], g0[2], cut ? 0.22f : 0.30f);
+                r.circle(b.x, b.y, ir * 1.9f, 18);
+                r.fill(core[0], core[1], core[2], 0.75f);
+                r.circle(b.x, b.y, ir * 0.7f, 14);
+            }
+        }
+    }
+    // Sparks and embers glow (additive)...
+    for (const App::Particle& q : app.particles) {
+        if (q.mode != 0 && q.mode != 2) continue;
+        float t = q.life / q.maxLife;
+        Vec2 w = p.center + q.local;
+        r.fill(q.r, q.g, q.b, t);
+        r.circle(w.x, w.y, q.size * (0.4f + 0.6f * t), 8);
+    }
+    r.setBlend(Renderer2D::Blend::Normal);
+    // ...smoke is soft grey, thinning as it spreads...
+    for (const App::Particle& q : app.particles) {
+        if (q.mode != 3) continue;
+        float t = q.life / q.maxLife;
+        Vec2 w = p.center + q.local;
+        r.fill(q.r, q.g, q.b, 0.17f * t);
+        r.circle(w.x, w.y, q.size, 12);
+    }
+    // ...harvested bits are solid chips of what was cut, in its own color, so
+    // you can see WHAT you just picked up as it flies to you.
+    for (const App::Particle& q : app.particles) {
+        if (q.mode != 1) continue;
+        Vec2 w = p.center + q.local;
+        r.fill(q.r * 0.55f, q.g * 0.55f, q.b * 0.55f, 0.9f);
+        r.circle(w.x, w.y, q.size * 1.25f, 8);
+        r.fill(q.r, q.g, q.b, 1.0f);
+        r.circle(w.x, w.y, q.size * 0.85f, 8);
+    }
 }
 
 static void drawCloudsPass(float t) {
     const int N = SHADER_MAX_PLANETS;
-    float pos[N * 2] = {0}, outerR[N] = {0};
+    float pos[N * 2] = {0}, outerR[N] = {0}, cover[N] = {0};
+    float lit[N * 3] = {0}, dark[N * 3] = {0};
     int count = (int)app.planets.size();
     if (count > N) count = N;
     for (int i = 0; i < count; i++) {
         const Planet& p = app.planets[i];
         pos[i * 2] = p.center.x; pos[i * 2 + 1] = p.center.y;
-        if (p.isSun || !p.atmosphere) { outerR[i] = 0.0f; continue; }  // no deck
+        if (p.isSun || !p.atmosphere || p.look.cloudCover <= 0.0f) { outerR[i] = 0.0f; continue; }  // no deck
         float mountainTop = p.maxSurfaceRadius();
         outerR[i] = mountainTop + (p.atmosphereOuterRadius() - mountainTop) * gDebug.cloudHeight;
+        cover[i] = p.look.cloudCover;
+        for (int k = 0; k < 3; k++) {
+            lit[i * 3 + k] = p.look.cloudLit[k];
+            dark[i * 3 + k] = p.look.cloudDark[k];
+        }
     }
 
     GLuint pr = app.cloudProgram;
@@ -838,6 +1883,10 @@ static void drawCloudsPass(float t) {
     glUniform1i(glGetUniformLocation(pr, "u_planetCount"), count);
     glUniform2fv(glGetUniformLocation(pr, "u_planetPos"), N, pos);
     glUniform1fv(glGetUniformLocation(pr, "u_planetOuterR"), N, outerR);
+    glUniform1fv(glGetUniformLocation(pr, "u_cover"), N, cover);
+    glUniform3fv(glGetUniformLocation(pr, "u_cloudLit"), N, lit);
+    glUniform3fv(glGetUniformLocation(pr, "u_cloudDark"), N, dark);
+    setLightUniforms(pr);
     glUniform1f(glGetUniformLocation(pr, "u_coverage"), gDebug.cloudCoverage);
     glUniform1f(glGetUniformLocation(pr, "u_falloff"), gDebug.cloudFalloff);
     glUniform1f(glGetUniformLocation(pr, "u_overlay"), spaceOverlay());
@@ -858,9 +1907,18 @@ static void drawCloudsPass(float t) {
 // Planet body pass (see kBodyFrag): one fullscreen draw filling the rock from
 // the density field, with material, slope lighting, the day/night terminator,
 // and cave-interior backdrop. Runs before the cows so they stay readable on top.
-static void drawBodyPass() {
+static bool drawBodyPass(BodyPass pass) {
+    // The veil run only has something to draw where holes have been dug; the
+    // cave mask, wherever there is a carve window (natural caves live in it).
+    if (pass != BodyPass::Main) {
+        if (app.activeFieldIdx < 0) return false;
+        const Planet& ap = app.planets[app.activeFieldIdx];
+        if (!ap.carve.ready()) return false;
+        if (pass == BodyPass::Veil && !ap.hasDigs()) return false;
+    }
     const int N = SHADER_MAX_PLANETS;
     float pos[N * 2] = {0}, maxR[N], baseR[N] = {0}, noiseBand[N] = {0};
+    float tones[N * 5 * 3] = {0};
     for (int i = 0; i < N; i++) maxR[i] = -1e9f;   // default: skip
     int count = (int)app.planets.size();
     if (count > N) count = N;
@@ -871,6 +1929,9 @@ static void drawBodyPass() {
         maxR[i] = p.maxSurfaceRadius() + 2.0f;
         baseR[i] = p.baseRadius;
         noiseBand[i] = p.noiseIntensity;
+        for (int k = 0; k < 5; k++)
+            for (int ch = 0; ch < 3; ch++)
+                tones[(i * 5 + k) * 3 + ch] = p.look.tones[k][ch];
     }
 
     GLuint pr = app.bodyProgram;
@@ -881,6 +1942,8 @@ static void drawBodyPass() {
     glUniform1fv(glGetUniformLocation(pr, "u_planetMaxR"), N, maxR);
     glUniform1fv(glGetUniformLocation(pr, "u_baseRadius"), N, baseR);
     glUniform1fv(glGetUniformLocation(pr, "u_noiseBand"), N, noiseBand);
+    glUniform3fv(glGetUniformLocation(pr, "u_tone"), N * 5, tones);
+    setLightUniforms(pr);
     glUniform1i(glGetUniformLocation(pr, "u_activeField"), app.activeFieldIdx);
     glUniform1f(glGetUniformLocation(pr, "u_nightDarkness"), gDebug.nightDarkness);
     glUniform1f(glGetUniformLocation(pr, "u_softness"), gDebug.nightSoftness);
@@ -892,7 +1955,97 @@ static void drawBodyPass() {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, app.fieldTex);
     glUniform1i(glGetUniformLocation(pr, "u_fieldTex"), 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, app.carveTex);
+    glUniform1i(glGetUniformLocation(pr, "u_carveTex"), 2);
     glActiveTexture(GL_TEXTURE0);   // leave unit 0 active for the other passes
+    {
+        // The carve window is stored planet-local; hand the shader its world
+        // position this frame (the planet has moved along its orbit).
+        const Planet* ap = app.activeFieldIdx >= 0 ? &app.planets[app.activeFieldIdx] : nullptr;
+        bool carved = ap && ap->carve.ready();
+        glUniform1f(glGetUniformLocation(pr, "u_carveSize"), carved ? (float)CarveMap::N : 0.0f);
+        // The front strip runs from the walking line to where the nearest
+        // plants stand (NearField owns those numbers).
+        glUniform1f(glGetUniformLocation(pr, "u_walkDrop"), NearField::WALK_DROP);
+        glUniform1f(glGetUniformLocation(pr, "u_mouthRise"), NearField::MOUTH_RISE);
+        glUniform1f(glGetUniformLocation(pr, "u_mouthRound"), NearField::MOUTH_ROUND);
+        glUniform1i(glGetUniformLocation(pr, "u_veilPass"),
+                    pass == BodyPass::Veil ? 1 : (pass == BodyPass::CaveMask ? 2 : 0));
+        // The front strip starts just under a hole's mouth and runs to where
+        // the nearest plants stand.
+        glUniform1f(glGetUniformLocation(pr, "u_veilTop"), NearField::WALK_DROP + NearField::MOUTH);
+        glUniform1f(glGetUniformLocation(pr, "u_veilBottom"), NearField::groundDrop(NearField::FRONT_DEPTH));
+        glUniform1f(glGetUniformLocation(pr, "u_veilAlpha"), gDebug.frontVeil);
+        glUniform1f(glGetUniformLocation(pr, "u_holeFloor"), gDebug.holeFloor);
+        glUniform1f(glGetUniformLocation(pr, "u_holeDepth"), gDebug.holeDepth);
+        Vec2 pp = playerPos();
+        glUniform2f(glGetUniformLocation(pr, "u_playerPos"), pp.x, pp.y);
+        glUniform1f(glGetUniformLocation(pr, "u_playerIn"), app.inHole);
+        // Hot bites, at their world positions this frame.
+        float burn[App::MAX_BURNS * 4] = {0};
+        int nb = 0;
+        if (ap) {
+            for (const App::Burn& b : app.burns) {
+                if (b.heat <= 0.0f || nb >= App::MAX_BURNS) continue;
+                burn[nb * 4 + 0] = ap->center.x + b.local.x;
+                burn[nb * 4 + 1] = ap->center.y + b.local.y;
+                burn[nb * 4 + 2] = b.heat;
+                burn[nb * 4 + 3] = b.radius;
+                nb++;
+            }
+        }
+        glUniform4fv(glGetUniformLocation(pr, "u_burn"), App::MAX_BURNS, burn);
+        glUniform1i(glGetUniformLocation(pr, "u_burnCount"), nb);
+
+        // Cave lights: the player's lamp first (only down a hole), then the
+        // glowing props nearest the camera.
+        const int MAX_GLOW = 14;
+        float glow[MAX_GLOW * 4] = {0}, glowCol[MAX_GLOW * 3] = {0};
+        int ng = 0;
+        bool here = ap && app.dominantIdx == app.activeFieldIdx;
+        if (here && app.spacewalking && app.inHole > 0.01f) {
+            Vec2 lamp = app.astronaut.pos + (app.astronaut.pos - ap->center).normalize() * 18.0f;
+            glow[0] = lamp.x; glow[1] = lamp.y; glow[2] = 135.0f;
+            glowCol[0] = 0.20f * app.inHole; glowCol[1] = 0.185f * app.inHole; glowCol[2] = 0.155f * app.inHole;
+            ng = 1;
+        }
+        if (here && carved) {
+            CaveField::Light lights[MAX_GLOW];
+            int n = CaveField::lights(*ap, caveFrame(0.0f), lights, MAX_GLOW - ng);
+            for (int k = 0; k < n; k++, ng++) {
+                glow[ng * 4 + 0] = lights[k].pos.x; glow[ng * 4 + 1] = lights[k].pos.y;
+                glow[ng * 4 + 2] = lights[k].radius;
+                glowCol[ng * 3 + 0] = lights[k].r; glowCol[ng * 3 + 1] = lights[k].g; glowCol[ng * 3 + 2] = lights[k].b;
+            }
+        }
+        glUniform4fv(glGetUniformLocation(pr, "u_glow"), MAX_GLOW, glow);
+        glUniform3fv(glGetUniformLocation(pr, "u_glowCol"), MAX_GLOW, glowCol);
+        glUniform1i(glGetUniformLocation(pr, "u_glowCount"), ng);
+
+        // Natural cave mouths near the view.
+        const int MAX_MOUTHS = 8;
+        float mouths[MAX_MOUTHS * 2] = {0};
+        int nm = 0;
+        if (ap) {
+            float va = atan2d(app.view.focusY - ap->center.y, app.view.focusX - ap->center.x);
+            float span = 0.5f * sqrtf((float)app.width * app.width + (float)app.height * app.height) /
+                         app.view.scale / (ap->baseRadius > 1.0f ? ap->baseRadius : 1.0f) * RAD2DEG * 1.2f;
+            for (const Planet::CaveMouth& cm : ap->caveMouths) {
+                float da = fabsf(fmodf(cm.angle - va + 540.0f, 360.0f) - 180.0f);
+                if (da > span + cm.half || nm >= MAX_MOUTHS) continue;
+                mouths[nm * 2] = fmodf(cm.angle + 360.0f, 360.0f);
+                mouths[nm * 2 + 1] = cm.half;
+                nm++;
+            }
+        }
+        glUniform2fv(glGetUniformLocation(pr, "u_natMouth"), MAX_MOUTHS, mouths);
+        glUniform1i(glGetUniformLocation(pr, "u_natMouthCount"), nm);
+        glUniform1f(glGetUniformLocation(pr, "u_carveCell"), CarveMap::CELL);
+        glUniform2f(glGetUniformLocation(pr, "u_carveOrigin"),
+                    carved ? ap->center.x + ap->carve.originX() : 0.0f,
+                    carved ? ap->center.y + ap->carve.originY() : 0.0f);
+    }
     if (app.activeFieldIdx >= 0) {
         const TerrainField& f = app.planets[app.activeFieldIdx].field;
         glUniform2f(glGetUniformLocation(pr, "u_fieldOrigin"), f.originX(), f.originY());
@@ -907,7 +2060,37 @@ static void drawBodyPass() {
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   // premultiplied "over"
     glBindVertexArray(app.fsVao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+    return true;
 }
+
+// Cave formations grow out of the wall: they are clipped to the cave's open
+// space so the rock hides their roots (the flat bases of the spikes). One
+// stencil bit, above the ones the ridge layers count in (drawRidges), marks
+// that space for the frame; the frame's clear wipes it.
+static const GLuint CAVE_STENCIL_BIT = 0x80;
+static bool gCaveMasked = false;    // whether this frame's mask was drawn
+
+static void drawCaveMask() {
+    glEnable(GL_STENCIL_TEST);
+    glStencilMask(CAVE_STENCIL_BIT);
+    glStencilFunc(GL_ALWAYS, CAVE_STENCIL_BIT, CAVE_STENCIL_BIT);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    gCaveMasked = drawBodyPass(BodyPass::CaveMask);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glStencilMask(0xFF);
+    glDisable(GL_STENCIL_TEST);
+}
+
+// Bracket drawing with these to clip it to the cave's open space. Without a
+// mask this frame (no carve window) nothing is clipped.
+static void beginInCave() {
+    if (!gCaveMasked) return;
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, CAVE_STENCIL_BIT, CAVE_STENCIL_BIT);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+}
+static void endInCave() { glDisable(GL_STENCIL_TEST); }
 
 // One atmosphere disk (radius = atmosphere top), drawn twice per frame:
 // mode 0 = the scattering sky band above the terrain (before the ridges, so
@@ -916,7 +2099,8 @@ static void drawBodyPass() {
 // terrain line (after the body, so the from-space sky sphere tints the rock).
 static void drawAtmospherePass(float t, int mode) {
     const int N = SHADER_MAX_PLANETS;
-    float pos[N * 2] = {0}, prad[N] = {0}, arad[N] = {0};
+    float pos[N * 2] = {0}, prad[N] = {0}, arad[N] = {0}, gain[N] = {0};
+    float betaR[N * 3] = {0}, betaM[N * 3] = {0}, haze[N * 3] = {0};
     int count = (int)app.planets.size();
     if (count > N) count = N;
     for (int i = 0; i < count; i++) {
@@ -927,6 +2111,12 @@ static void drawAtmospherePass(float t, int mode) {
         // actual ground/sky boundary per angle comes from the silhouette rows.
         prad[i] = p.baseRadius;
         arad[i] = p.atmosphereOuterRadius();
+        gain[i] = p.look.skyGain;
+        for (int k = 0; k < 3; k++) {
+            betaR[i * 3 + k] = p.look.skyBeta[k];
+            betaM[i * 3 + k] = p.look.mieBeta[k];
+            haze[i * 3 + k] = p.look.haze[k];
+        }
     }
 
     GLuint pr = app.atmoProgram;
@@ -937,6 +2127,17 @@ static void drawAtmospherePass(float t, int mode) {
     glUniform2fv(glGetUniformLocation(pr, "u_planetPos"), N, pos);
     glUniform1fv(glGetUniformLocation(pr, "u_planetRadius"), N, prad);
     glUniform1fv(glGetUniformLocation(pr, "u_atmoRadius"), N, arad);
+    glUniform3fv(glGetUniformLocation(pr, "u_betaR"), N, betaR);
+    glUniform3fv(glGetUniformLocation(pr, "u_betaM"), N, betaM);
+    glUniform1fv(glGetUniformLocation(pr, "u_skyGain"), N, gain);
+    glUniform3fv(glGetUniformLocation(pr, "u_hazeCol"), N, haze);
+    setLightUniforms(pr);
+    glUniform1f(glGetUniformLocation(pr, "u_horizonHaze"), gDebug.horizonHaze);
+    glUniform1i(glGetUniformLocation(pr, "u_hazeIdx"), app.dominantIdx);
+    glUniform1f(glGetUniformLocation(pr, "u_hazeRef"), app.camGround);
+    // About a third of the visible height.
+    glUniform1f(glGetUniformLocation(pr, "u_hazeView"),
+                0.30f * app.height / (app.view.scale > 1e-6f ? app.view.scale : 1e-6f));
     glUniform1f(glGetUniformLocation(pr, "u_rayleighH"), gDebug.atmRayleighH);
     glUniform1f(glGetUniformLocation(pr, "u_rimH"), gDebug.atmRimH);
     glUniform1f(glGetUniformLocation(pr, "u_mieH"), gDebug.atmMieH);
@@ -956,46 +2157,33 @@ static void drawAtmospherePass(float t, int mode) {
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+static void syncDebugFromJS();   // defined below
+
 static void init() {
     app.renderer.init();
     initShaderPasses();
 
-    // ---- Build the solar system -------------------------------------------
-    app.planets.clear();
-    app.planets.reserve(4);
-
-    // [0] The sun. It kinematically orbits the home planet at the old fake
-    // day-cycle rate (0.005 rad per shader-time unit ≈ 0.0143°/frame-unit), so
-    // the drifting terminator/sunsets the atmosphere was tuned around carry
-    // over unchanged. Physically silly, visually identical; flip the parent
-    // once the home planet orbits for real.
-    Planet sun;
-    sun.isSun = true;
-    sun.atmosphere = false;
-    sun.generate(Vec2(0, -256000.0f), 12000.0f, 500.0f, 64, gDebug.planetDensity, 99);
-    app.planets.push_back(sun);
-    app.sunIdx = 0;
-
-    // [1] Home: the starter cow world, ported tuning (radiusScale 4.0 * 8000
-    // base, big noise span, dense sampling for a jagged silhouette). Pinned at
-    // the origin while the rest of the system is tuned around it.
-    Planet home;
-    home.generate(Vec2(0, 0), 8000.0f * 4.0f, 2000.0f, 255, gDebug.planetDensity, 1337);
-    app.planets.push_back(home);
-    app.homeIdx = 1;
-    app.planets[app.sunIdx].setOrbit(app.homeIdx, 256000.0f, 0.0143f, -90.0f);
-
-    // [2] An airless moon orbiting the home planet — the first "background
-    // planet" hanging in the sky, and the first body to fly to and land on.
-    // Far enough out that its own surface gravity dominates the home pull.
-    Planet moon;
-    moon.atmosphere = false;
-    moon.generate(Vec2(0, 0), 6000.0f, 600.0f, 160, gDebug.planetDensity, 4242);
-    moon.setOrbit(app.homeIdx, 112000.0f, 0.010f, 35.0f);
-    app.planets.push_back(moon);
-
-    // Settle orbit positions before anything reads centers.
-    for (Planet& p : app.planets) p.updateOrbit(app.planets, 0.0f);
+    // ---- Generate the solar system ----------------------------------------
+    // One seed -> star, planets, moons, orbits, looks, names (system_gen.cpp).
+    // The host page picks the seed (?seed= in the URL, else the one remembered
+    // in localStorage, else random) and publishes it as window.GAME_SEED.
+    unsigned int seed = (unsigned int)EM_ASM_INT({
+        var s = (window.GAME_SEED >>> 0) % 2147483647;
+        return s > 0 ? s : 1;
+    });
+    app.system = generateSystem(seed, app.planets);
+    app.sunIdx = app.system.sunIdx;
+    app.homeIdx = app.system.homeIdx;
+    app.dominantIdx = app.stuckIdx = app.homeIdx;
+    homePlanet().visited = true;
+    printf("=== System %s (seed %u): %d bodies ===\n", app.system.starName.c_str(), seed,
+           (int)app.planets.size());
+    for (int i = 0; i < (int)app.planets.size(); i++) {
+        const Planet& p = app.planets[i];
+        printf("  [%d] %-10s %-16s r=%6.0f orbit=%8.0f parent=%d g=%.3f\n", i, p.name.c_str(),
+               p.kind.c_str(), p.baseRadius, p.orbitRadius, p.orbitParent,
+               p.gravity / (p.baseRadius * p.baseRadius));
+    }
 
     // Home starts with the live destructible field (the player spawns there).
     app.activeFieldIdx = app.homeIdx;
@@ -1018,7 +2206,21 @@ static void init() {
                              0.0010f + depth * 0.0040f});
     }
 
+    // Hand the body list to the debug panel (its "Warp to" buttons).
+    {
+        std::string list;
+        for (int i = 0; i < (int)app.planets.size(); i++) {
+            const Planet& p = app.planets[i];
+            list += std::to_string(i) + "," + p.name + "," + p.kind + "," + (p.isSun ? "1" : "0") + ";";
+        }
+        EM_ASM({ if (window.setBodies) window.setBodies(UTF8ToString($0)); }, list.c_str());
+    }
+
     Input::init("#canvas");
+    // Pull the debug panel's values in BEFORE the first reset, so the run
+    // starts with them (a customised Max Fuel used to start at the built-in
+    // 250 and only fill up after the first landing).
+    syncDebugFromJS();
     resetGame();
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -1027,29 +2229,7 @@ static void init() {
     app.lastFrameTime = app.startTime;
 
     printf("=== Cow Abductor (C++/WebGL) ===\n");
-    printf("W/Up - thrust | A/D or Left/Right - rotate\n");
-}
-
-// Carve the crust just under the ship's belly, then refresh the body mesh +
-// silhouette LUT. Carving at the belly (not at the surface line) means a held
-// press makes one crater; you deepen a shaft only by flying down into it, so the
-// hole stays controllable instead of drilling to the core in one go.
-static constexpr float DIG_RADIUS = 150.0f;
-static void doDig() {
-    if (!app.spacewalking) return;   // only the suited astronaut can build
-    if (app.dominantIdx != app.activeFieldIdx) return;  // need the live field underfoot
-    Astronaut& a = app.astronaut;
-    Planet& p = dominantPlanet();
-    float dx = p.center.x - a.pos.x;
-    float dy = p.center.y - a.pos.y;
-    float d  = sqrtf(dx * dx + dy * dy);
-    if (d < 1.0f) return;
-    Vec2 digPt(a.pos.x + (dx / d) * (Astronaut::RADIUS + DIG_RADIUS * 0.25f),
-               a.pos.y + (dy / d) * (Astronaut::RADIUS + DIG_RADIUS * 0.25f));
-    if (p.dig(digPt, DIG_RADIUS)) {
-        uploadTerrainLUT(app.dominantIdx);
-        uploadFieldRegion(p.field.digRect());   // just the brush's dirty rect
-    }
+    printf("W/Up - thrust | A/D or Left/Right - rotate | M - system map\n");
 }
 
 static void pollInput(float timeScale) {
@@ -1073,10 +2253,9 @@ static void pollInputAstronaut(float timeScale) {
 
     bool left  = Input::isKeyDown(Input::KEY_A) || Input::isKeyDown(Input::KEY_LEFT);
     bool right = Input::isKeyDown(Input::KEY_D) || Input::isKeyDown(Input::KEY_RIGHT);
-    if (a.grounded) {
-        if (left)  a.walkLeft(p, timeScale);
-        if (right) a.walkRight(p, timeScale);
-    }
+    // On the ground these run; in the air they steer (see Astronaut::move).
+    if (left)  a.walkLeft(p, timeScale);
+    if (right) a.walkRight(p, timeScale);
 
     bool jumpKey = Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP);
     if (jumpKey && a.grounded) a.jump(p);
@@ -1084,10 +2263,16 @@ static void pollInputAstronaut(float timeScale) {
     a.jetting = false;
     if (Input::isKeyDown(Input::KEY_SPACE)) a.jetpack(p, timeScale);
 
-    // E digs only when far from the ship; close to the ship, E re-enters (edge
-    // trigger in the main loop handles that case before this runs).
-    float dToShip = dist(a.pos.x, a.pos.y, app.lander.pos.x, app.lander.pos.y);
-    if (Input::isKeyDown(Input::KEY_E) && dToShip >= app.lander.radius * 4.0f) doDig();
+}
+
+// One step for the herd; a cow that reaches the hatch is cargo.
+static void updateCows(float timeScale) {
+    for (Cow& cow : app.cows) {
+        if (cow.update(homePlanet(), app.lander, app.cargo, MAX_CARGO, timeScale)) {
+            app.cargo += 1;
+            app.score += 50;
+        }
+    }
 }
 
 // Decide each frame whether each loose cow is inside the active beam cone and
@@ -1110,47 +2295,103 @@ static void runBeamGrab() {
 
 static void updateView(float timeScale) {
     View& v = app.view;
-
-    Vec2 focusPos = app.spacewalking ? app.astronaut.pos : app.lander.pos;
-    Vec2 focusVel = app.spacewalking ? app.astronaut.vel : app.lander.vel;
-
-    // Altitude-based framing, split at the atmosphere boundary (see updateView
-    // in sketch.js). surfaceDistance is measured from the spherical base radius.
     const Planet& body = dominantPlanet();
-    float d = dist(focusPos.x, focusPos.y, body.center.x, body.center.y);
-    float surfaceDistance = d - body.baseRadius;
-    float atmoThickness = body.atmosphereOuterRadius() - body.baseRadius;
-    if (atmoThickness < 1) atmoThickness = 1;
-    float boundaryScale = (app.height * gDebug.cameraFraming) / atmoThickness;
 
-    float targetScale;
-    if (surfaceDistance <= atmoThickness) {
-        float f = surfaceDistance / atmoThickness;       // 1 at top, 0 at surface
-        if (f < 0) f = 0;
-        float gz = gDebug.cameraGroundZoom;
-        targetScale = gz + (boundaryScale - gz) * f;
-    } else {
-        targetScale = (app.height * gDebug.cameraFraming) / surfaceDistance;
+    Vec2 focusPos = playerPos();
+    // The astronaut simulates in the body's co-moving frame, so their world
+    // velocity is that plus the body's orbital motion.
+    Vec2 focusVel = app.spacewalking ? app.astronaut.vel + body.orbitVel : app.lander.vel;
+
+    // Altitude above the ground under the player — the true terrain, averaged
+    // over a ~1400-unit stretch so flying across a jagged range doesn't pump
+    // the zoom. (Not the spherical base radius: that put a ship parked on a
+    // mountain "high up", and made airless bodies — which have no atmosphere
+    // band to interpolate across — zoom wildly on touchdown.)
+    float d = dist(focusPos.x, focusPos.y, body.center.x, body.center.y);
+    float ang = atan2d(focusPos.y - body.center.y, focusPos.x - body.center.x);
+    float stepDeg = (700.0f / 3.0f) / (body.baseRadius > 1.0f ? body.baseRadius : 1.0f) * RAD2DEG;
+    float ground = 0.0f;
+    for (int k = -3; k <= 3; k++) ground += body.surfaceRadius(ang + k * stepDeg);
+    ground /= 7.0f;
+    float alt = d - ground;
+    if (alt < 0) alt = 0;
+    app.camAlt += (alt - app.camAlt) * 0.12f * timeScale;
+    app.camGround = ground;
+
+    // One framing rule from the ground to deep space: hold the ground zoom
+    // while low, then pull back just fast enough that the surface stays
+    // `cameraFraming` screen-heights below the ship. The horizon never leaves
+    // the frame on the way up or down, and you watch it curve as you climb.
+    float gz = gDebug.cameraGroundZoom;
+    float framingPx = app.height * gDebug.cameraFraming;
+    float targetScale = framingPx / (alt > 1.0f ? alt : 1.0f);
+    if (targetScale > gz) targetScale = gz;
+    // Speed look-ahead: never so close that the next `cameraSpeedLook` seconds
+    // of travel (relative to the world you're at) run off the screen. Standing
+    // or walking leaves the ground zoom alone; a ship coming in fast, or
+    // skimming the surface, gets a wider view and closes in as it slows.
+    if (gDebug.cameraSpeedLook > 0.0f) {
+        float relSpeed = (focusVel - body.orbitVel).length();       // world units / frame
+        float travel = relSpeed * 60.0f * gDebug.cameraSpeedLook;   // world units in that time
+        float speedScale = app.height / (travel > 1.0f ? travel : 1.0f);
+        if (targetScale > speedScale) targetScale = speedScale;
     }
     // Deep-space floor: low enough that cruising between bodies keeps the
-    // whole neighborhood in frame (the old 0.02 was single-planet tuning).
+    // whole neighborhood in frame.
     if (targetScale < 0.0008f) targetScale = 0.0008f;
     targetScale *= v.userZoom;
 
+    Vec2 target = focusPos;
+    if (app.mapMode) {
+        // System map: frame every orbit around the star.
+        float extent = 1.0f;
+        for (const Planet& p : app.planets) {
+            float reach = dist(p.center.x, p.center.y, app.planets[app.sunIdx].center.x,
+                               app.planets[app.sunIdx].center.y) + p.atmosphereOuterRadius();
+            if (reach > extent) extent = reach;
+        }
+        float fit = (app.width < app.height ? app.width : app.height) * 0.46f;
+        targetScale = fit / extent;
+        target = app.planets[app.sunIdx].center;
+        focusVel = Vec2(0, 0);
+    } else {
+        // Horizon on the lower third: near the ground the camera looks a
+        // little above the ship, so the sky gets most of the frame and the
+        // rock cross-section below the surface gets less. Eases back to
+        // centered by the altitude where the zoom starts pulling out.
+        float knee = framingPx / (gz > 1e-4f ? gz : 1e-4f);
+        float drop = gDebug.cameraHorizon * (1.0f - smoothstepf(0.0f, knee, alt));
+        Vec2 up = (focusPos - body.center).normalize();
+        target = focusPos + up * (drop * app.height / (v.scale > 1e-6f ? v.scale : 1e-6f));
+    }
+
     v.scale += (targetScale - v.scale) * View::ZOOM_EASE * timeScale;
 
-    // Velocity-predictive follow so easing only corrects displacement.
-    v.focusX += focusVel.x * timeScale + (focusPos.x - v.focusX) * View::FOLLOW_EASE * timeScale;
-    v.focusY += focusVel.y * timeScale + (focusPos.y - v.focusY) * View::FOLLOW_EASE * timeScale;
+    // Velocity-predictive follow so easing only corrects displacement: first
+    // advance the focus by the target's own motion, THEN ease out whatever
+    // offset is left. (Easing against the un-advanced focus, as this used to,
+    // leaves the camera a full frame of motion ahead of the target forever —
+    // invisible while worlds stood still, but a planet now travels ~60 units a
+    // frame along its orbit, which put the player visibly off-center when
+    // zoomed in.)
+    v.focusX += focusVel.x * timeScale;
+    v.focusY += focusVel.y * timeScale;
+    v.focusX += (target.x - v.focusX) * View::FOLLOW_EASE * timeScale;
+    v.focusY += (target.y - v.focusY) * View::FOLLOW_EASE * timeScale;
 
     // Roll so the dominant body's gravity points screen-down (single body, so
     // standing on a moon doesn't tilt toward the planet pulling from afar).
+    // The system map levels out instead.
+    float targetRot = v.rotation;
     Vec2 g = app.lander.gravityAt(dominantPlanet(), focusPos);
-    if (g.lengthSq() > 1e-12f) {
-        float target = 90.0f - atan2d(g.y, g.x);
-        float delta = std::fmod(target - v.rotation + 540.0f, 360.0f) - 180.0f;
-        v.rotation += delta * View::ROLL_EASE * timeScale;
-    }
+    if (app.mapMode) targetRot = 0.0f;
+    else if (g.lengthSq() > 1e-12f) targetRot = 90.0f - atan2d(g.y, g.x);
+    float delta = std::fmod(targetRot - v.rotation + 540.0f, 360.0f) - 180.0f;
+    v.rotation += delta * View::ROLL_EASE * timeScale;
+
+    // Nav overlay fades in once worlds have shrunk to specks.
+    float navTarget = 1.0f - smoothstepf(0.0035f, 0.0070f, v.scale);
+    app.navAlpha += (navTarget - app.navAlpha) * 0.15f * timeScale;
 }
 
 // Manual zoom: scroll wheel (exponential, constant ratio per notch) plus
@@ -1172,20 +2413,62 @@ static void updateZoom(float timeScale) {
     if (v.userZoom > View::USER_ZOOM_MAX) v.userZoom = View::USER_ZOOM_MAX;
 }
 
+// Reference body for the trajectory aid: whichever body pulls hardest on the
+// ship, the star included. Near a world the path is drawn as seen from that
+// world (a moving planet's frame — the only frame in which "will I hit it?"
+// reads directly); out in open space it is the star's frame.
+static int trajectoryFrame() {
+    int best = app.sunIdx;
+    float bestG = -1.0f;
+    for (int i = 0; i < (int)app.planets.size(); i++) {
+        const Planet& pl = app.planets[i];
+        float dx = pl.center.x - app.lander.pos.x, dy = pl.center.y - app.lander.pos.y;
+        float distSq = dx * dx + dy * dy;
+        if (distSq < 1.0f) distSq = 1.0f;
+        float g = pl.gravity / distSq;
+        if (g > bestG) { bestG = g; best = i; }
+    }
+    return best;
+}
+
 // Predicted coast path, drawn as a fading line that thins/fades along its
 // length. Width is kept ~constant on screen by dividing by the view scale.
+// If the path passes close to (or ends on) another world, a ghost ring marks
+// where that world will be at that moment — it is moving too, so the place to
+// aim is ahead of where it is now.
 static void drawTrajectory() {
     Renderer2D& r = app.renderer;
-    app.lander.predictTrajectory(app.planets, app.trajectory);
+    app.lander.predictTrajectory(app.planets, trajectoryFrame(), app.trajectory, app.encounter);
     const auto& pts = app.trajectory;
     int n = (int)pts.size();
     if (n < 2) return;
-    float w = 1.6f / app.view.scale;
+    float px = 1.0f / app.view.scale;
+    float w = 1.6f * px;
     for (int i = 0; i + 1 < n; i++) {
         // Gentle fade so the far end of the arc stays visible (brightest at ship).
         float fade = 1.0f - 0.6f * ((float)i / n);
         r.fill(0.72f, 0.85f, 1.0f, 0.5f * fade);
         r.line(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, w);
+    }
+
+    const Lander::Encounter& e = app.encounter;
+    if (e.body < 0 || e.body >= (int)app.planets.size()) return;
+    const Planet& b = app.planets[e.body];
+    // Only worth a ghost if the world will have MOVED by then; otherwise the
+    // ring would just sit on top of the real thing.
+    if (dist(e.bodyPos.x, e.bodyPos.y, b.center.x, b.center.y) < b.baseRadius * 0.75f) return;
+    float ringR = b.baseRadius > 7.0f * px ? b.baseRadius : 7.0f * px;
+    const int segs = 48;
+    r.fill(b.look.sig[0], b.look.sig[1], b.look.sig[2], e.impact ? 0.85f : 0.55f);
+    for (int i = 0; i < segs; i += 2) {   // dashed ring
+        float a0 = (float)i / segs * 360.0f, a1 = (float)(i + 1) / segs * 360.0f;
+        r.line(e.bodyPos.x + cosd(a0) * ringR, e.bodyPos.y + sind(a0) * ringR,
+               e.bodyPos.x + cosd(a1) * ringR, e.bodyPos.y + sind(a1) * ringR, 1.6f * px);
+    }
+    if (!e.impact) {
+        // Closest-approach tick on the path.
+        r.fill(0.72f, 0.85f, 1.0f, 0.8f);
+        r.circle(e.shipPos.x, e.shipPos.y, 3.2f * px, 12);
     }
 }
 
@@ -1208,10 +2491,12 @@ static void drawSun(const Mat3& viewMat) {
         float linear = (float)i / (layers - 1);
         float tt = powf(linear, 2.5f);
         float rad = outer - (outer - coreR) * tt;
-        r.fill(1.0f, 0.86f, 0.39f, 14.0f / 255.0f);
+        r.fill(sun.look.sig[0], sun.look.sig[1], sun.look.sig[2], 14.0f / 255.0f);
         r.circle(sun.center.x, sun.center.y, rad, 48);
     }
-    r.fill(1.0f, 0.96f, 0.80f, 1.0f);
+    // Core: the star's color pushed most of the way to white-hot.
+    r.fill(sun.look.sig[0] * 0.3f + 0.7f, sun.look.sig[1] * 0.3f + 0.7f,
+           sun.look.sig[2] * 0.3f + 0.7f, 1.0f);
     r.circle(sun.center.x, sun.center.y, coreR, 48);
     r.setBlend(Renderer2D::Blend::Normal);
     r.end();
@@ -1289,12 +2574,6 @@ static void drawHeadingArrow() {
     r.line(tip.x, tip.y, hl.x, hl.y, 1.5f * s);
     r.line(tip.x, tip.y, hr.x, hr.y, 1.5f * s);
     r.setBlend(Renderer2D::Blend::Normal);
-}
-
-static float smoothstepf(float e0, float e1, float x) {
-    float t = (x - e0) / (e1 - e0);
-    t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    return t * t * (3.0f - 2.0f * t);
 }
 
 // Soft elliptical ground shadow under an entity: projected radially onto the
@@ -1377,13 +2656,26 @@ static void drawEntityShadows() {
     Vec2 toSunHome = (sunW - homePlanet().center).normalize();
     for (const Cow& cow : app.cows) {
         if (cow.state == Cow::State::Stowed) continue;
-        drawBlobShadow(homePlanet(), cow.pos, 14.0f, 320.0f, toSunHome);
+        // (Not for one that has dropped into a hole — same reason as the
+        // astronaut's, below.)
+        const Planet& hp = homePlanet();
+        float below = hp.surfaceRadius(atan2d(cow.pos.y - hp.center.y, cow.pos.x - hp.center.x)) -
+                      dist(cow.pos.x, cow.pos.y, hp.center.x, hp.center.y);
+        if (below > Cow::STAND_UP) continue;
+        drawBlobShadow(hp, cow.pos, 14.0f, 320.0f, toSunHome);
     }
     const Planet& dom = dominantPlanet();
     Vec2 toSunDom = (sunW - dom.center).normalize();
     drawBlobShadow(dom, app.lander.pos, app.lander.radius * 1.5f, 650.0f, toSunDom);
-    if (app.spacewalking)
-        drawBlobShadow(dom, app.astronaut.pos, Astronaut::RADIUS * 1.7f, 320.0f, toSunDom);
+    if (app.spacewalking) {
+        // Not when they are down a hole: the shadow is projected onto the
+        // terrain's outline, which would put it on the ground above them.
+        const Vec2 ap = app.astronaut.pos;
+        float below = dom.surfaceRadius(atan2d(ap.y - dom.center.y, ap.x - dom.center.x)) -
+                      dist(ap.x, ap.y, dom.center.x, dom.center.y);
+        if (below < 12.0f)
+            drawBlobShadow(dom, ap, Astronaut::RADIUS * 1.7f, 320.0f, toSunDom);
+    }
 }
 
 // Distant ridge silhouettes: haze-tinted mountain ranges that follow a
@@ -1404,10 +2696,10 @@ static void drawEntityShadows() {
 static void drawTerrainShadows(const Mat3& viewMat) {
     const Planet& p = dominantPlanet();
     if (p.isSun) return;
-    float strength = 1.0f - spaceOverlay();
+    float strength = surfaceDressing();
     if (strength <= 0.01f) return;
 
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
+    Vec2 focus = playerPos();
     float viewAngle = atan2d(focus.y - p.center.y, focus.x - p.center.x);
     Vec2 toSun = (sunWorldPos() - p.center).normalize();
     float sunAng = atan2d(toSun.y, toSun.x);
@@ -1472,59 +2764,174 @@ static void drawTerrainShadows(const Mat3& viewMat) {
     r.end();
 }
 
-// A cosmetic looming gas giant high in the sky — a big banded disc that swings
-// slowly across the view as you orbit (a fixed celestial azimuth), dimmed on
-// the night side. Purely visual (no gravity/simulation); a large body at real
-// scale in the distance is a strong depth anchor. Drawn in screen space behind
-// the clouds/ridges. Slices are circle-clipped so bands stay inside the disc.
-static void drawLoomingBody(float time) {
-    const Planet& p = dominantPlanet();
-    if (p.isSun) return;
-    float strength = 1.0f - spaceOverlay();
+// "Behind the mountains" clipping. The ridge layers are translucent on purpose
+// — letting the sky tint them is what makes a range read as far away — but a
+// mountain is still solid: nothing behind it may show through. drawRidges
+// marks every pixel a ridge layer covers in the stencil buffer; whatever is
+// drawn between these two calls (sky bodies, the far cloud band, shooting
+// stars) is kept out of those pixels. The sky still shows through the layers,
+// because it was drawn before them — only the things BEHIND them are cut.
+static void beginBehindRidges() {
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+}
+static void endBehindRidges() { glDisable(GL_STENCIL_TEST); }
+
+// The other worlds of the system, hanging in the sky. Seen from the ground the
+// real bodies are far off-screen (the nearest is tens of screens away), so each
+// is projected onto a sky dome around the player: its TRUE direction in the
+// plane is kept, only the distance is compressed. A body straight overhead sits
+// near the top of the frame; one near the horizon sits low to the side, and as
+// it sets it slides behind the ridges and the terrain. Because the star goes on
+// the same dome, sunrise and sunset happen where the lighting says they do: the
+// disc touches the horizon exactly when the terminator reaches you.
+//
+// Size follows the real angular size (radius / distance), so a moon's parent
+// planet looms and a far neighbor is a small disc.
+//
+// Only the SUNLIT part of a world is drawn — like the Moon in our own sky, the
+// unlit part is simply not visible. The shape is a true phase: full when the
+// world is opposite the star, a thin crescent when it is nearly between you
+// and the star, with the bright limb pointing at the star's place in the sky.
+// One flat tone (the art style's flat fields); no outline around the dark side.
+//
+// occluders = true is the pre-sky pass: each world's whole disc in black,
+// drawn over the starfield before the sky goes on. Against black space that is
+// invisible, but it stops stars shining through the unlit part of a crescent.
+//
+// Purely visual; fades out with the rest of the surface dressing as the real
+// bodies come into view.
+static void drawSkyBodies(const Mat3& viewMat, bool occluders = false) {
+    const Planet& here = dominantPlanet();
+    if (here.isSun) return;
+    float strength = surfaceDressing();
     if (strength <= 0.01f) return;
 
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
-    float viewAngle = atan2d(focus.y - p.center.y, focus.x - p.center.x);
-    const float azimuth = -52.0f;          // fixed direction in the sky
-    float diff = viewAngle - azimuth;
-    while (diff > 180.0f) diff -= 360.0f;
-    while (diff < -180.0f) diff += 360.0f;
-    float sx = diff / 64.0f;               // screen-x: on screen within ~±64deg
-    if (fabsf(sx) > 1.6f) return;
-    const float sy = 0.55f, R = 0.36f;
-    float aspect = (float)app.width / (float)app.height;
+    Vec2 focus = playerPos();
+    Vec2 up = (focus - here.center).normalize();
+    Vec2 sunW = sunWorldPos();
+    Vec2 toSunHere = (sunW - here.center).normalize();
+    // Daylight washes the worlds out; the star itself only shows by day.
+    float day = here.atmosphere ? smoothstepf(-0.20f, 0.30f, up.dot(toSunHere)) : 0.0f;
 
-    Vec2 toSun = (sunWorldPos() - p.center).normalize();
-    Vec2 up(cosd(viewAngle), sind(viewAngle));
-    float day = up.x * toSun.x + up.y * toSun.y;
-    float lit = 0.30f + 0.70f * smoothstepf(-0.35f, 0.35f, day);
-    float a = strength;
+    float W = (float)app.width, H = (float)app.height;
+    Vec2 pc = viewMat.transform(focus);                 // player, clip space
+    float rot = app.view.rotation;
+    const float domeX = 0.44f * W, domeY = 0.52f * H;   // dome radii, px
+    // Where a world direction lands on the dome, in px from the player (+y down).
+    auto domePos = [&](Vec2 target) {
+        float sAng = atan2d(target.y - focus.y, target.x - focus.x) + rot;
+        return Vec2(cosd(sAng) * domeX, sind(sAng) * domeY);
+    };
+    Vec2 sunDome = domePos(sunW);
 
-    Renderer2D& r = app.renderer;
-    r.beginScreenSpace();
-    // Soft atmosphere halo.
-    for (int i = 5; i >= 1; i--) {
-        float rr = R * (1.0f + 0.12f * i);
-        r.fill(0.52f * lit, 0.60f * lit, 0.76f * lit, 0.045f * a);
-        r.ellipse(sx, sy, rr / aspect, rr, 28);
+    // Far-to-near so a near body overlaps a far one.
+    int order[SHADER_MAX_PLANETS + 6];
+    float dists[SHADER_MAX_PLANETS + 6];
+    int count = 0;
+    for (int i = 0; i < (int)app.planets.size() && count < SHADER_MAX_PLANETS + 6; i++) {
+        if (i == app.dominantIdx) continue;
+        const Planet& b = app.planets[i];
+        float dd = dist(focus.x, focus.y, b.center.x, b.center.y);
+        int j = count++;
+        while (j > 0 && dists[j - 1] < dd) { dists[j] = dists[j - 1]; order[j] = order[j - 1]; j--; }
+        dists[j] = dd; order[j] = i;
     }
-    // Banded disc: horizontal slices, each clipped to the circle's half-width.
-    const int slices = 16;
-    for (int s = 0; s < slices; s++) {
-        float fy = ((float)s / (slices - 1)) * 2.0f - 1.0f;   // -1..1
-        float dy = fy * R;
-        float hw = R * R - dy * dy;
-        hw = hw > 0 ? sqrtf(hw) : 0;
-        float band = 0.5f + 0.5f * sinf(fy * 5.3f + time * 0.04f)
-                   + 0.25f * sinf(fy * 11.0f - time * 0.02f);
-        if (band < 0) band = 0; if (band > 1) band = 1;
-        float tr = 0.46f + (0.70f - 0.46f) * band;
-        float tg = 0.37f + (0.54f - 0.37f) * band;
-        float tb = 0.30f + (0.42f - 0.30f) * band;
-        r.fill(tr * lit, tg * lit, tb * lit, a);
-        r.ellipse(sx, sy + dy, hw / aspect, (R / slices) * 1.5f, 26);
+
+    // Own begin/end: a screen-space batch left pending is DISCARDED by the next
+    // begin(), so every screen-space pass must flush itself.
+    Renderer2D& r = app.renderer;
+    r.begin(viewMat, app.width, app.height);
+    r.beginScreenSpace();
+    for (int oi = 0; oi < count; oi++) {
+        const Planet& b = app.planets[order[oi]];
+        float dd = dists[oi];
+        if (dd < 1.0f) continue;
+        Vec2 dp = domePos(b.center);
+        float rpx = 0.7f * H * b.baseRadius / dd;
+        if (b.isSun) rpx *= 0.45f;
+        if (rpx < 2.5f) rpx = 2.5f;
+        if (rpx > 0.22f * H) rpx = 0.22f * H;
+        if (dp.y > rpx * 3.0f + 0.1f * H) continue;      // well below the horizon
+        float cx = pc.x + dp.x * 2.0f / W, cy = pc.y - dp.y * 2.0f / H;
+        float rx = rpx * 2.0f / W, ry = rpx * 2.0f / H;
+        if (cx < -1.0f - rx * 3.0f || cx > 1.0f + rx * 3.0f) continue;
+
+        const float* sig = b.look.sig;
+        if (occluders) {
+            if (b.isSun) continue;
+            r.fill(0.0f, 0.0f, 0.0f, strength);
+            r.ellipse(cx, cy, rx, ry, 36);
+            continue;
+        }
+        if (b.isSun) {
+            // Seen through more and more air as it sinks, the sun reddens and
+            // its glow spreads: the same extinction that grades the light on
+            // the ground. (No change on an airless world.)
+            float sunS = up.dot(toSunHere);
+            float low = here.atmosphere ? 1.0f - smoothstepf(0.0f, 0.40f, sunS) : 0.0f;
+            LightParams LP = lightParams(here);
+            float excess = std::fmax(1.0f / std::fmax(sunS * 0.9f + 0.1f, 0.05f) - 2.0f, 0.0f);
+            float tint[3];
+            for (int k = 0; k < 3; k++) tint[k] = expf(-LP.extK[k] * excess * 0.8f);
+            // One smooth glow: a gradient fan from the disc out to nothing
+            // (stacked translucent discs would read as concentric rings).
+            r.setBlend(Renderer2D::Blend::Additive);
+            const int segs = 40;
+            const float glowK = 3.4f + 5.0f * low;       // glow radius, in core radii
+            Renderer2D::Color hot{sig[0] * tint[0], sig[1] * tint[1], sig[2] * tint[2],
+                                  (0.60f + 0.15f * low) * strength};
+            Renderer2D::Color none{hot.r, hot.g, hot.b, 0.0f};
+            Vec2 c(cx, cy);
+            for (int k = 0; k < segs; k++) {
+                float a0 = (float)k / segs * 6.2831853f, a1 = (float)(k + 1) / segs * 6.2831853f;
+                Vec2 e0(cx + cosf(a0) * rx * glowK, cy + sinf(a0) * ry * glowK);
+                Vec2 e1(cx + cosf(a1) * rx * glowK, cy + sinf(a1) * ry * glowK);
+                r.triangleV(c, hot, e0, none, e1, none);
+            }
+            r.setBlend(Renderer2D::Blend::Normal);
+            r.fill((sig[0] * 0.25f + 0.75f) * (0.35f + 0.65f * tint[0]),
+                   (sig[1] * 0.25f + 0.75f) * (0.35f + 0.65f * tint[1]),
+                   (sig[2] * 0.25f + 0.75f) * (0.35f + 0.65f * tint[2]), strength);
+            r.ellipse(cx, cy, rx, ry, 36);
+            continue;
+        }
+
+        // Phase. cosPhase = +1: the lit hemisphere faces us (full); -1: we are
+        // looking at the night side (new — nothing to draw).
+        Vec2 bodyToSun = (sunW - b.center).normalize();
+        Vec2 bodyToUs = (focus - b.center).normalize();
+        float cosPhase = bodyToSun.dot(bodyToUs);
+        if (cosPhase < -0.985f) continue;
+        // Bright limb toward the star's place on the dome (px, +y down).
+        Vec2 limb(sunDome.x - dp.x, sunDome.y - dp.y);
+        float ll = limb.length();
+        limb = ll > 1.0f ? limb * (1.0f / ll) : Vec2(1.0f, 0.0f);
+        Vec2 across(-limb.y, limb.x);
+
+        // The lit region of a sphere, seen in projection: for every height
+        // across the disc it runs from the terminator (a half-ellipse whose
+        // width is cosPhase) out to the bright limb. Emitted as strips.
+        float a = strength * (1.0f - 0.45f * day);
+        r.fill(sig[0], sig[1], sig[2], a);
+        auto toClip = [&](float alongPx, float acrossPx) {
+            float ox = limb.x * alongPx + across.x * acrossPx;
+            float oy = limb.y * alongPx + across.y * acrossPx;
+            return Vec2(cx + ox * 2.0f / W, cy - oy * 2.0f / H);
+        };
+        const int segs = 24;
+        for (int k = 0; k < segs; k++) {
+            float s0 = -90.0f + 180.0f * (float)k / segs;
+            float s1 = -90.0f + 180.0f * (float)(k + 1) / segs;
+            float c0 = cosd(s0), c1 = cosd(s1), y0 = sind(s0) * rpx, y1 = sind(s1) * rpx;
+            Vec2 o0 = toClip(rpx * c0, y0), o1 = toClip(rpx * c1, y1);                     // limb
+            Vec2 t0 = toClip(-rpx * cosPhase * c0, y0), t1 = toClip(-rpx * cosPhase * c1, y1);  // terminator
+            r.quad(o0.x, o0.y, o1.x, o1.y, t1.x, t1.y, t0.x, t0.y);
+        }
     }
     r.endScreenSpace();
+    r.end();
 }
 
 // A far, hazy cloud band high in the sky behind the ridges — a soft undulating
@@ -1534,11 +2941,11 @@ static void drawLoomingBody(float time) {
 // shaded and faded out toward space like the rest of the surface dressing.
 static void drawFarClouds(const Mat3& viewMat, float time) {
     const Planet& p = dominantPlanet();
-    if (p.isSun || !p.atmosphere) return;
-    float strength = 1.0f - spaceOverlay();
+    if (p.isSun || !p.atmosphere || p.look.cloudCover <= 0.0f) return;
+    float strength = surfaceDressing() * (p.look.cloudCover < 1.0f ? p.look.cloudCover : 1.0f);
     if (strength <= 0.01f) return;
 
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
+    Vec2 focus = playerPos();
     Vec2 toSun = (sunWorldPos() - p.center).normalize();
     float viewAngle = atan2d(focus.y - p.center.y, focus.x - p.center.x);
     float thickness = p.atmosphereOuterRadius() - p.baseRadius;
@@ -1555,10 +2962,11 @@ static void drawFarClouds(const Mat3& viewMat, float time) {
         n = n < 0 ? 0 : n;
         return powf(n * 0.62f, 1.6f);              // sparse, soft gaps
     };
-    auto shadeAt = [&](float ang) {
-        float sunDot = cosd(ang) * toSun.x + sind(ang) * toSun.y;
-        return gDebug.nightDarkness + (1.0f - gDebug.nightDarkness) *
-               smoothstepf(-gDebug.nightSoftness, gDebug.nightSoftness, sunDot);
+    // Lit like the main cloud layer: the graded day/dusk light, a little
+    // ahead of the ground because the band stands high.
+    LightParams LP = lightParams(p);
+    auto lightAt = [&](float ang, float out[3]) {
+        groundLight(LP, cosd(ang) * toSun.x + sind(ang) * toSun.y + 0.10f, out);
     };
 
     Renderer2D& r = app.renderer;
@@ -1566,13 +2974,17 @@ static void drawFarClouds(const Mat3& viewMat, float time) {
     for (int i = 0; i < seg; i++) {
         float a1 = viewAngle - span + 2.0f * span * ((float)i / seg);
         float a2 = viewAngle - span + 2.0f * span * ((float)(i + 1) / seg);
-        float p1 = puff(a1) * shadeAt(a1) * strength;
-        float p2 = puff(a2) * shadeAt(a2) * strength;
-        auto col = [&](float ang, float pa, float sh) {
-            // pale cloud, slightly warmed toward the sun side
-            return Renderer2D::Color{0.84f * sh, 0.86f * sh, 0.92f * sh, pa * 0.55f};
+        float l1[3], l2[3];
+        lightAt(a1, l1);
+        lightAt(a2, l2);
+        float p1 = puff(a1) * strength;
+        float p2 = puff(a2) * strength;
+        auto col = [&](float pa, const float l[3]) {
+            // pale cloud in this world's cloud color, in that light
+            return Renderer2D::Color{p.look.cloudLit[0] * 0.86f * l[0], p.look.cloudLit[1] * 0.88f * l[1],
+                                     p.look.cloudLit[2] * 0.96f * l[2], pa * 0.55f};
         };
-        Renderer2D::Color c1 = col(a1, p1, shadeAt(a1)), c2 = col(a2, p2, shadeAt(a2));
+        Renderer2D::Color c1 = col(p1, l1), c2 = col(p2, l2);
         Renderer2D::Color clr1{c1.r, c1.g, c1.b, 0.0f}, clr2{c2.r, c2.g, c2.b, 0.0f};
         Vec2 i1(p.center.x + cosd(a1) * R0, p.center.y + sind(a1) * R0);
         Vec2 i2(p.center.x + cosd(a2) * R0, p.center.y + sind(a2) * R0);
@@ -1598,11 +3010,11 @@ static void drawFarClouds(const Mat3& viewMat, float time) {
 // body so the terrain occludes their lower ends, like real shafts hitting ground.
 static void drawLightShafts(const Mat3& viewMat, float time) {
     const Planet& p = dominantPlanet();
-    if (p.isSun) return;
-    float strength = 1.0f - spaceOverlay();
+    if (p.isSun || !p.atmosphere) return;                // shafts need air to scatter in
+    float strength = surfaceDressing();
     if (strength <= 0.01f) return;
 
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
+    Vec2 focus = playerPos();
     Vec2 toSun = (sunWorldPos() - p.center).normalize();
     float viewAngle = atan2d(focus.y - p.center.y, focus.x - p.center.x);
     Vec2 up(cosd(viewAngle), sind(viewAngle));
@@ -1619,10 +3031,21 @@ static void drawLightShafts(const Mat3& viewMat, float time) {
     float worldPerPx = 1.0f / app.view.scale;
     float halfW = app.width * worldPerPx * 0.7f;
 
+    // Brightness along a beam follows the air it passes through: nothing above
+    // the atmosphere (a beam is only visible where there is air to scatter
+    // it — without this the upper ends showed as streaks against space once
+    // the camera pulled back), strongest in the middle of the shell, dimmer
+    // again toward the ground.
+    auto airGlow = [&](Vec2 pt) {
+        float h = (dist(pt.x, pt.y, p.center.x, p.center.y) - p.baseRadius) / thickness;
+        return (1.0f - smoothstepf(0.50f, 0.92f, h)) * (0.18f + 0.82f * smoothstepf(-0.05f, 0.45f, h));
+    };
+
     Renderer2D& r = app.renderer;
     r.begin(viewMat, app.width, app.height);
     r.setBlend(Renderer2D::Blend::Additive);
     const int N = 9;
+    const int SEG = 6;
     for (int i = 0; i < N; i++) {
         float f = (float)i / (N - 1) - 0.5f;             // -0.5..0.5 across view
         float drift = sinf(time * 0.05f + i * 1.7f) * halfW * 0.09f;
@@ -1630,184 +3053,352 @@ static void drawLightShafts(const Mat3& viewMat, float time) {
         Vec2 c(focus.x + perp.x * off, focus.y + perp.y * off);
         float w = thickness * 0.10f * (0.55f + 0.5f * sinf(time * 0.07f + i * 2.3f));
         if (w < thickness * 0.03f) w = thickness * 0.03f;
-        Vec2 a0(c.x - d.x * len * 0.5f, c.y - d.y * len * 0.5f);  // toward sun (sky)
-        Vec2 a1(c.x + d.x * len * 0.5f, c.y + d.y * len * 0.5f);  // toward ground
         float baseA = 0.06f * vis * (0.7f + 0.3f * sinf(time * 0.09f + i));
-        Renderer2D::Color cNear{1.0f, 0.93f, 0.74f, baseA};
-        Renderer2D::Color cFar{1.0f, 0.93f, 0.74f, baseA * 0.18f};
-        Renderer2D::Color edge{1.0f, 0.93f, 0.74f, 0.0f};
-        Vec2 e0m(a0.x - perp.x * w, a0.y - perp.y * w), e0p(a0.x + perp.x * w, a0.y + perp.y * w);
-        Vec2 e1m(a1.x - perp.x * w, a1.y - perp.y * w), e1p(a1.x + perp.x * w, a1.y + perp.y * w);
-        r.triangleV(e0m, edge, a0, cNear, a1, cFar);     // left half
-        r.triangleV(e0m, edge, a1, cFar, e1m, edge);
-        r.triangleV(a0, cNear, e0p, edge, e1p, edge);    // right half
-        r.triangleV(a0, cNear, e1p, edge, a1, cFar);
+        Vec2 prev(c.x - d.x * len * 0.5f, c.y - d.y * len * 0.5f);   // sky end
+        float prevA = baseA * airGlow(prev);
+        for (int k = 1; k <= SEG; k++) {
+            float t = (float)k / SEG - 0.5f;
+            Vec2 cur(c.x + d.x * len * t, c.y + d.y * len * t);
+            float curA = baseA * airGlow(cur);
+            if (prevA > 0.0005f || curA > 0.0005f) {
+                Renderer2D::Color c0{1.0f, 0.93f, 0.74f, prevA}, c1{1.0f, 0.93f, 0.74f, curA};
+                Renderer2D::Color edge{1.0f, 0.93f, 0.74f, 0.0f};
+                Vec2 p0m(prev.x - perp.x * w, prev.y - perp.y * w), p0p(prev.x + perp.x * w, prev.y + perp.y * w);
+                Vec2 p1m(cur.x - perp.x * w, cur.y - perp.y * w), p1p(cur.x + perp.x * w, cur.y + perp.y * w);
+                r.triangleV(p0m, edge, prev, c0, cur, c1);       // left half
+                r.triangleV(p0m, edge, cur, c1, p1m, edge);
+                r.triangleV(prev, c0, p0p, edge, p1p, edge);     // right half
+                r.triangleV(prev, c0, p1p, edge, cur, c1);
+            }
+            prev = cur;
+            prevA = curA;
+        }
     }
     r.setBlend(Renderer2D::Blend::Normal);
     r.end();
 }
 
-// foreground=false draws the distant haze layers (behind the body, painter's
-// occlusion); foreground=true draws the near framing plane (over the body, so
-// it passes in front of the terrain). Called in two passes around the body.
-static void drawRidges(const Mat3& viewMat, bool foreground) {
+// The distant haze layers of the world you're at, drawn behind the body so the
+// terrain occludes everything below the horizon (painter's order).
+//
+// The layers are translucent on purpose: letting the sky show through is how a
+// range gets its haze and reads as far away. But a mountain is solid, so the
+// translucency must only ever reveal SKY — never a star, a planet, or the
+// outline of another range behind it. Three things enforce that:
+//   - starMask = true draws the silhouettes in opaque black right after the
+//     starfield and BEFORE the sky. The backdrop there is black space, so this
+//     erases exactly the stars (and the distant star's disc) behind the
+//     mountains and changes nothing else.
+//   - the color pass draws the layers nearest-first with a stencil test, so
+//     each pixel is owned by the nearest range that covers it and blends with
+//     the sky alone: one flat, hazed color per range, no farther range showing
+//     through a nearer one.
+//   - that same stencil marks "mountain here" for everything drawn behind the
+//     ranges afterwards (see beginBehindRidges).
+static void drawRidges(const Mat3& viewMat, bool starMask = false) {
     Renderer2D& r = app.renderer;
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
+    const Planet& p = dominantPlanet();
+    if (p.ridges.empty()) return;
+    Vec2 focus = playerPos();
     Vec2 sunW = sunWorldPos();
     // Ridges are a surface-view dressing: fade them out on the climb to space
     // along with the face fill, so the limb doesn't grow a colored fringe.
-    float strength = 1.0f - spaceOverlay();
+    float strength = surfaceDressing();
     if (strength <= 0.01f) return;
 
-    // The pastel haze the layers dissolve into (warm cream-blue, not pure
-    // blue) — the Summer Afternoon trick: distance reads as light, not grey.
-    const float hazeR = 168.0f / 255.0f, hazeG = 182.0f / 255.0f, hazeB = 208.0f / 255.0f;
+    // The pale haze the layers dissolve into (per world; the home's is a warm
+    // cream-blue, not pure blue) — the Summer Afternoon trick: distance reads
+    // as light, not grey.
+    const float hazeR = p.look.haze[0], hazeG = p.look.haze[1], hazeB = p.look.haze[2];
 
     r.begin(viewMat, app.width, app.height);
-    for (const Planet& p : app.planets) {
-        if (p.ridges.empty()) continue;
-        float viewAngle = atan2d(focus.y - p.center.y, focus.x - p.center.x);
-        Vec2 toSun = (sunW - p.center).normalize();
-        float pRad = sqrtf((focus.x - p.center.x) * (focus.x - p.center.x) +
-                           (focus.y - p.center.y) * (focus.y - p.center.y));
-        // Soft "hole" in the foreground around the player so it never hides
-        // them: fade toward transparent where the foreground is BOTH near the
-        // player's angle AND rising in front of (crest above) the player. Purely
-        // angular, so the hole tracks the player at any zoom. 1 = fully opaque.
-        auto occFade = [&](float ang, float topR) -> float {
-            if (!foreground) return 1.0f;
-            float da = ang - viewAngle;
-            while (da > 180.0f) da -= 360.0f;
-            while (da < -180.0f) da += 360.0f;
-            float holeHalf = (520.0f / (pRad > 1.0f ? pRad : 1.0f)) * 57.2957795f;
-            float angProx = 1.0f - smoothstepf(holeHalf, holeHalf * 2.4f, fabsf(da));
-            float cover = smoothstepf(pRad - 80.0f, pRad + 80.0f, topR);
-            return 1.0f - 0.86f * angProx * cover;
+    float viewAngle = atan2d(focus.y - p.center.y, focus.x - p.center.x);
+    Vec2 toSun = (sunW - p.center).normalize();
+    LightParams LP = lightParams(p);
+    // p.ridges is stored far-to-near; walk it backwards so the nearest layer
+    // is emitted (and claims its pixels) first.
+    for (int li = (int)p.ridges.size() - 1; li >= 0; li--) {
+        const auto& layer = p.ridges[li];
+        // Layer tint faded toward the sky haze by distance (skyMix).
+        float cr = layer.tintR + (hazeR - layer.tintR) * layer.skyMix;
+        float cg = layer.tintG + (hazeG - layer.tintG) * layer.skyMix;
+        float cb = layer.tintB + (hazeB - layer.tintB) * layer.skyMix;
+        float shift = viewAngle * layer.follow;
+
+        // ONE flat color per layer (see docs/art-style.md): the layer tint
+        // hazed by distance, darkened across the terminator, and hue-
+        // shifted to ember inside the dusk band. No gradients, no rim.
+        auto colorAt = [&](float angle) {
+            // Mask pass: black, fading with the dressing so the stars come
+            // back as the ridges fade out on the climb to space.
+            if (starMask) return Renderer2D::Color{0.0f, 0.0f, 0.0f, strength};
+            // The layer's flat tint in the graded day/dusk/night light — the
+            // warm and rose phases of the terminator come from the light.
+            float l[3];
+            groundLightAt(p, LP, toSun, angle, l);
+            return Renderer2D::Color{cr * l[0], cg * l[1], cb * l[2], layer.alpha * strength};
         };
-        for (const auto& layer : p.ridges) {
-            if (layer.foreground != foreground) continue;
-            // Layer tint faded toward the sky haze by distance (skyMix).
-            float cr = layer.tintR + (hazeR - layer.tintR) * layer.skyMix;
-            float cg = layer.tintG + (hazeG - layer.tintG) * layer.skyMix;
-            float cb = layer.tintB + (hazeB - layer.tintB) * layer.skyMix;
-            float shift = viewAngle * layer.follow;
 
-            // ONE flat color per layer (see docs/art-style.md): the layer tint
-            // hazed by distance, darkened across the terminator, and hue-
-            // shifted to ember inside the dusk band. No gradients, no rim.
-            auto colorAt = [&](float angle) {
-                float sunDot = cosd(angle) * toSun.x + sind(angle) * toSun.y;
-                float shade = gDebug.nightDarkness +
-                              (1.0f - gDebug.nightDarkness) *
-                                  smoothstepf(-gDebug.nightSoftness, gDebug.nightSoftness, sunDot);
-                float dusk = expf(-sunDot * sunDot * 6.0f) * layer.skyMix * shade;
-                float r0 = cr * shade, g0 = cg * shade, b0 = cb * shade;
-                r0 += (1.05f * shade - r0) * dusk;
-                g0 += (0.46f * shade - g0) * dusk * 0.85f;
-                b0 += (0.24f * shade - b0) * dusk * 0.85f;
-                return Renderer2D::Color{r0, g0, b0, layer.alpha * strength};
+        // Full unclipped bands: crest line down to a fixed skirt radius
+        // well below any terrain. The body pass paints the rock over the
+        // lower parts (painter's-order occlusion), so the visible color
+        // field is continuous everywhere — no terrain reference, no seams,
+        // and nothing shifts when the player (and the parallax) moves.
+        // Only the stretch around the view is emitted.
+        float skirtR = p.baseRadius * 0.85f;
+        for (size_t i = 0; i + 1 < layer.points.size(); i++) {
+            float a1 = layer.points[i].angle + shift;
+            float a2 = layer.points[i + 1].angle + shift;
+            float da = std::fmod(a1 - viewAngle + 540.0f, 360.0f) - 180.0f;
+            if (fabsf(da) > 50.0f) continue;
+            float rt1 = layer.points[i].r + layer.lift;
+            float rt2 = layer.points[i + 1].r + layer.lift;
+            Vec2 t1(p.center.x + cosd(a1) * rt1, p.center.y + sind(a1) * rt1);
+            Vec2 t2(p.center.x + cosd(a2) * rt2, p.center.y + sind(a2) * rt2);
+            Vec2 b1(p.center.x + cosd(a1) * skirtR, p.center.y + sind(a1) * skirtR);
+            Vec2 b2(p.center.x + cosd(a2) * skirtR, p.center.y + sind(a2) * skirtR);
+            Renderer2D::Color c1 = colorAt(a1);
+            Renderer2D::Color c2 = colorAt(a2);
+            r.triangleV(b1, c1, t1, c1, t2, c2);
+            r.triangleV(b1, c1, t2, c2, b2, c2);
+        }
+    }
+    if (starMask) {
+        r.end();
+        return;
+    }
+    // Color pass: draw only where no nearer layer has drawn yet, and mark the
+    // pixel. Triangles within the one batch are rasterized in order, so the
+    // nearest-first emission above is what makes "nearest wins" hold.
+    glEnable(GL_STENCIL_TEST);
+    glStencilMask(0xFF);
+    glStencilFunc(GL_EQUAL, 0, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+    r.end();
+    glDisable(GL_STENCIL_TEST);
+}
+
+static float hash01(unsigned int n) {
+    n = (n ^ 61u) ^ (n >> 16);
+    n *= 9u;
+    n ^= n >> 4;
+    n *= 0x27d4eb2du;
+    n ^= n >> 15;
+    return (n & 0xffffffu) * (1.0f / 16777216.0f);
+}
+
+// The near framing planes: two dark silhouette bands along the bottom of the
+// frame, closer to the camera than the action — the plane that passes in front
+// of everything and shoves the scene behind it into depth.
+//
+// They are anchored to the SCREEN, not to the planet: the band always occupies
+// the bottom edge and can never rise over the player, so nothing needs to be
+// cut out of it to keep the ship visible. They still behave like near geometry:
+//   - the silhouette is a fixed profile around the planet (noise sampled on a
+//     circle, so it wraps), scrolled by the player's travel along the surface
+//     times the layer's depth factor — nearer = faster;
+//   - climbing makes them drop away faster than the ground does, so they are
+//     gone within a few ship-lengths of lift-off;
+//   - pulling the camera back shrinks them off the bottom of the frame.
+// Spires and fronds stand on each band and sway. Flat color per layer,
+// terminator-shaded, tinted from the world's own basin tone.
+static void drawForeground(float time) {
+    const Planet& p = dominantPlanet();
+    if (p.isSun || gDebug.foreground <= 0.001f) return;
+    float W = (float)app.width, H = (float)app.height;
+    float zoomK = app.view.scale / (gDebug.cameraGroundZoom > 1e-4f ? gDebug.cameraGroundZoom : 1e-4f);
+    if (zoomK < 0.25f) return;                     // pulled back: the near plane has left the frame
+    if (zoomK > 1.5f) zoomK = 1.5f;
+    float grow = smoothstepf(0.25f, 0.6f, zoomK) * zoomK * gDebug.foreground;
+    // Never taller than the room under the player: the tallest band plus the
+    // tallest prop on it is ~0.36 of the screen at grow = 1, and the player's
+    // ground line sits (0.5 - cameraHorizon) above the bottom edge. Without
+    // this cap, zooming in grew the band (and its fronds) up over the ship.
+    float maxGrow = (0.5f - gDebug.cameraHorizon) / 0.36f;
+    if (grow > maxGrow) grow = maxGrow;
+
+    Vec2 focus(app.view.focusX, app.view.focusY);  // the camera point: already smoothed
+    float theta = atan2f(focus.y - p.center.y, focus.x - p.center.x);
+    float S = theta * p.baseRadius;                // travel along the surface
+    float sinkBase = app.camAlt * app.view.scale / H;   // how far the ground has dropped, screen heights
+
+    Vec2 up(cosf(theta), sinf(theta));
+    Vec2 toSun = (sunWorldPos() - p.center).normalize();
+    float light[3];
+    groundLight(lightParams(p), up.dot(toSun), light);
+
+    struct Layer { float depth, base, amp, feature, tone, propSpacing; unsigned int salt; };
+    const Layer layers[2] = {
+        {1.5f, 0.070f, 0.170f, 1500.0f, 1.00f, 760.0f, 11u},   // mid-dark plane
+        {2.3f, 0.015f, 0.130f, 1100.0f, 0.55f, 520.0f, 29u},   // nearest: darkest, fastest
+    };
+
+    Renderer2D& r = app.renderer;
+    r.begin(Mat3(), app.width, app.height);
+    r.beginScreenSpace();
+    for (const Layer& L : layers) {
+        float sink = sinkBase * L.depth * 1.25f;
+        float planePerPx = 1.0f / (app.view.scale * L.depth);   // plane units per screen px
+        // The lump and prop spacings in the table are world units at a ground
+        // zoom of 0.2. Rescale them to the actual ground zoom, so the band
+        // shows the same number of hills and props across the screen whatever
+        // that is set to (at a close zoom they would otherwise stretch into
+        // one flat slope with a prop every few screens).
+        float zoomRef = 0.2f / (gDebug.cameraGroundZoom > 1e-4f ? gDebug.cameraGroundZoom : 1e-4f);
+        float feature = L.feature * zoomRef, propSpacing = L.propSpacing * zoomRef;
+        float F = p.baseRadius / feature;                        // noise-circle radius
+        float ox = (float)(p.seed % 97u) + L.salt * 7.3f;
+        // Band height (fraction of screen height) at a screen x in px from center.
+        auto heightAt = [&](float xpx) {
+            float a = (S + xpx * planePerPx) / p.baseRadius;     // angle around the planet
+            float n = app.fgNoise.noise(cosf(a) * F + ox, sinf(a) * F) * 0.75f +
+                      app.fgNoise.noise(cosf(a) * F * 2.3f - ox, sinf(a) * F * 2.3f + 31.0f) * 0.25f;
+            float v = smoothstepf(0.18f, 0.82f, 0.5f + 0.5f * n);
+            return (L.base + L.amp * v) * grow - sink;
+        };
+
+        r.fill(p.look.fgTint[0] * L.tone * light[0], p.look.fgTint[1] * L.tone * light[1],
+               p.look.fgTint[2] * L.tone * light[2], 1.0f);
+        const int N = 80;
+        float hPrev = heightAt(-W * 0.5f);
+        for (int i = 0; i < N; i++) {
+            float x0 = -1.0f + 2.0f * (float)i / N, x1 = -1.0f + 2.0f * (float)(i + 1) / N;
+            float hNext = heightAt(x1 * W * 0.5f);
+            if (hPrev > 0.0f || hNext > 0.0f) {
+                float y0 = -1.0f + 2.0f * (hPrev > 0 ? hPrev : 0.0f);
+                float y1 = -1.0f + 2.0f * (hNext > 0 ? hNext : 0.0f);
+                r.quad(x0, -1.0f, x1, -1.0f, x1, y1, x0, y0);
+            }
+            hPrev = hNext;
+        }
+
+        // Props standing on the band, at fixed spots around the planet.
+        if (p.look.propDensity <= 0.0f) continue;
+        int perRev = (int)(6.2831853f * p.baseRadius / propSpacing);
+        if (perRev < 8) perRev = 8;
+        float spacing = 6.2831853f * p.baseRadius / perRev;
+        float halfSpan = (W * 0.5f + 120.0f) * planePerPx;
+        int k0 = (int)floorf((S - halfSpan) / spacing), k1 = (int)ceilf((S + halfSpan) / spacing);
+        if (k1 - k0 > 60) continue;
+        float keep = 0.55f * (p.look.propDensity < 1.5f ? p.look.propDensity : 1.5f);
+        for (int k = k0; k <= k1; k++) {
+            unsigned int idx = (unsigned int)(((k % perRev) + perRev) % perRev);
+            unsigned int h = idx * 7919u + L.salt * 104729u + p.seed * 31u;
+            if (hash01(h) > keep) continue;
+            float c = ((float)k + (hash01(h + 1u) - 0.5f) * 0.6f) * spacing;
+            float xpx = (c - S) / planePerPx;
+            float hf = heightAt(xpx);
+            if (hf <= 0.004f) continue;
+            float size = H * (0.050f + 0.065f * hash01(h + 2u)) * grow * (L.depth / 2.3f + 0.35f);
+            bool frond = hash01(h + 3u) < p.look.frondFrac;
+            float sway = sinf(time * 0.6f + hash01(h + 4u) * 6.2831853f) * (frond ? 4.0f : 1.2f) * DEG2RAD;
+            float baseX = xpx, baseY = (hf - 0.006f) * H;       // px; y up from the bottom edge
+            // Triangle in prop-local px (x right, y up), rotated by `rotRad`
+            // about the base point, emitted in clip space.
+            auto tri = [&](float rotRad, float ax, float ay, float bx, float by, float cx2, float cy2) {
+                float cs = cosf(rotRad), sn = sinf(rotRad);
+                auto conv = [&](float lx, float ly) {
+                    float rx = lx * cs - ly * sn, ry = lx * sn + ly * cs;
+                    return Vec2((baseX + rx) * 2.0f / W, -1.0f + (baseY + ry) * 2.0f / H);
+                };
+                Vec2 A = conv(ax, ay), B = conv(bx, by), C = conv(cx2, cy2);
+                r.triangle(A.x, A.y, B.x, B.y, C.x, C.y);
             };
-
-            // Full unclipped bands: crest line down to a fixed skirt radius
-            // well below any terrain. The body pass paints the rock over the
-            // lower parts (painter's-order occlusion), so the visible color
-            // field is continuous everywhere — no terrain reference, no seams,
-            // and nothing shifts when the player (and the parallax) moves.
-            float skirtR = p.baseRadius * 0.85f;
-            for (size_t i = 0; i + 1 < layer.points.size(); i++) {
-                float a1 = layer.points[i].angle + shift;
-                float a2 = layer.points[i + 1].angle + shift;
-                float rt1 = layer.points[i].r + layer.lift;
-                float rt2 = layer.points[i + 1].r + layer.lift;
-                Vec2 t1(p.center.x + cosd(a1) * rt1, p.center.y + sind(a1) * rt1);
-                Vec2 t2(p.center.x + cosd(a2) * rt2, p.center.y + sind(a2) * rt2);
-                Vec2 b1(p.center.x + cosd(a1) * skirtR, p.center.y + sind(a1) * skirtR);
-                Vec2 b2(p.center.x + cosd(a2) * skirtR, p.center.y + sind(a2) * skirtR);
-                Renderer2D::Color c1 = colorAt(a1);
-                Renderer2D::Color c2 = colorAt(a2);
-                c1.a *= occFade(a1, rt1);
-                c2.a *= occFade(a2, rt2);
-                r.triangleV(b1, c1, t1, c1, t2, c2);
-                r.triangleV(b1, c1, t2, c2, b2, c2);
+            if (!frond) {
+                tri(sway, -0.13f * size, 0, 0, size, 0.13f * size, 0);
+                tri(sway, -0.24f * size, 0, -0.07f * size, 0.42f * size, 0.05f * size, 0);
+            } else {
+                for (int b = -2; b <= 2; b++) {
+                    float bl = (1.0f - fabsf((float)b) * 0.16f) * size;
+                    tri(sway + (float)b * 15.0f * DEG2RAD, -0.07f * size, 0, 0, bl, 0.07f * size, 0);
+                }
             }
         }
     }
+    r.endScreenSpace();
     r.end();
 }
 
-// Silhouette clutter (planet.props): foreground props on the near framing plane
-// (drawn closest, big and swaying) and ground tufts pinned to the real surface.
-// `foreground` selects which set this pass draws. Dark shapes, terminator-
-// shaded, faded out on the climb to space like the ridges. Local frame matches
-// the cow/astronaut convention: rotate(angle+90) puts +Y toward the planet, so
-// the props grow along -Y (outward, away from the center).
-static void drawProps(const Mat3& viewMat, float time, bool foreground) {
+// Navigation overlay for the zoomed-out view: faint orbit rings, a marker disc
+// for every world too small to see at this zoom, and a ring around the one you
+// are flying around. Names are DOM labels (shell.html's #nav-labels), placed
+// from here each frame. Undiscovered worlds are grey and unnamed.
+static void drawNavOverlay(const Mat3& viewMat) {
+    float a = app.navAlpha;
+    if (a <= 0.02f) {
+        if (app.navLabelsShown) {
+            EM_ASM({ if (window.setNavLabels) window.setNavLabels(""); });
+            app.navLabelsShown = false;
+        }
+        return;
+    }
     Renderer2D& r = app.renderer;
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
-    Vec2 sunW = sunWorldPos();
-    float strength = 1.0f - spaceOverlay();
-    if (strength <= 0.01f) return;
-
+    float px = 1.0f / app.view.scale;
     r.begin(viewMat, app.width, app.height);
-    for (const Planet& p : app.planets) {
-        if (p.isSun || p.props.empty()) continue;
-        float viewAngle = atan2d(focus.y - p.center.y, focus.x - p.center.x);
-        Vec2 toSun = (sunW - p.center).normalize();
-        float pRad = sqrtf((focus.x - p.center.x) * (focus.x - p.center.x) +
-                           (focus.y - p.center.y) * (focus.y - p.center.y));
-        for (const Planet::Prop& pr : p.props) {
-            if (pr.foreground != foreground) continue;
-            float drawAngle = pr.angle + viewAngle * pr.follow;
-            // Cull to a window around the view: only what's on screen draws.
-            float da = drawAngle - viewAngle;
-            while (da > 180.0f) da -= 360.0f;
-            while (da < -180.0f) da += 360.0f;
-            if (fabsf(da) > 32.0f) continue;
 
-            float baseR = foreground ? p.baseRadius + p.noiseIntensity * pr.radialFrac
-                                     : p.surfaceRadius(pr.angle);
-            float sunDot = cosd(drawAngle) * toSun.x + sind(drawAngle) * toSun.y;
-            float shade = gDebug.nightDarkness + (1.0f - gDebug.nightDarkness) *
-                          smoothstepf(-gDebug.nightSoftness, gDebug.nightSoftness, sunDot);
-            float tone = foreground ? 0.10f : 0.17f;
-            float S = pr.scale * (foreground ? 260.0f : 22.0f);
-
-            // Same player "hole" as the foreground ridges: fade foreground props
-            // near the player's angle when they'd stand in front of them.
-            float alpha = strength;
-            if (foreground) {
-                float holeHalf = (520.0f / (pRad > 1.0f ? pRad : 1.0f)) * 57.2957795f;
-                float angProx = 1.0f - smoothstepf(holeHalf, holeHalf * 2.4f, fabsf(da));
-                float cover = smoothstepf(pRad - 80.0f, pRad + 80.0f, baseR + S);
-                alpha *= 1.0f - 0.86f * angProx * cover;
-            }
-            r.fill(tone * shade, tone * shade, (tone + 0.03f) * shade, alpha);
-
-            Vec2 base(p.center.x + cosd(drawAngle) * baseR,
-                      p.center.y + sind(drawAngle) * baseR);
-            float sway = sinf(time * 0.6f + pr.phase) * (foreground ? 4.0f : 2.5f);
-
-            r.pushMatrix();
-            r.translate(base.x, base.y);
-            r.rotate(drawAngle + 90.0f + sway);   // +Y toward center; grow along -Y
-            if (pr.kind == 0) {
-                // Spire: tall narrow blade plus a shorter side spur.
-                r.triangle(-0.13f * S, 0, 0, -1.0f * S, 0.13f * S, 0);
-                r.triangle(-0.24f * S, 0, -0.07f * S, -0.42f * S, 0.05f * S, 0);
-            } else {
-                // Frond/tuft: a fan of tapering blades.
-                for (int b = -2; b <= 2; b++) {
-                    float bl = (1.0f - fabsf((float)b) * 0.16f) * S;
-                    r.pushMatrix();
-                    r.rotate((float)b * 15.0f);
-                    r.triangle(-0.07f * S, 0, 0, -bl, 0.07f * S, 0);
-                    r.popMatrix();
-                }
-            }
-            r.popMatrix();
+    // Orbit rings.
+    for (const Planet& b : app.planets) {
+        if (b.orbitParent < 0 || b.orbitParent >= (int)app.planets.size()) continue;
+        const Planet& par = app.planets[b.orbitParent];
+        bool moon = !par.isSun;
+        if (moon && b.orbitRadius * app.view.scale < 14.0f) continue;   // too tight to read
+        const int segs = 160;
+        r.fill(0.62f, 0.74f, 0.92f, (moon ? 0.10f : 0.16f) * a);
+        for (int i = 0; i < segs; i++) {
+            float a0 = (float)i / segs * 360.0f, a1 = (float)(i + 1) / segs * 360.0f;
+            r.line(par.center.x + cosd(a0) * b.orbitRadius, par.center.y + sind(a0) * b.orbitRadius,
+                   par.center.x + cosd(a1) * b.orbitRadius, par.center.y + sind(a1) * b.orbitRadius,
+                   1.1f * px);
         }
     }
+
+    // Markers + label list.
+    app.labelBuf.clear();
+    Vec2 ship = app.lander.pos;
+    for (int i = 0; i < (int)app.planets.size(); i++) {
+        const Planet& b = app.planets[i];
+        bool moon = b.orbitParent >= 0 && !app.planets[b.orbitParent].isSun;
+        float minR = (b.isSun ? 0.0f : (moon ? 3.0f : 4.5f)) * px;
+        float shown = b.baseRadius > minR ? b.baseRadius : minR;
+        if (!b.isSun && b.baseRadius < minR) {
+            if (b.discovered) r.fill(b.look.sig[0], b.look.sig[1], b.look.sig[2], a);
+            else              r.fill(0.50f, 0.52f, 0.56f, a);
+            r.circle(b.center.x, b.center.y, minR, 20);
+        }
+        if (i == app.dominantIdx) {
+            float ringR = (b.atmosphereOuterRadius() > shown ? b.atmosphereOuterRadius() : shown) + 5.0f * px;
+            const int segs = 40;
+            r.fill(0.45f, 1.0f, 0.86f, 0.55f * a);
+            for (int k = 0; k < segs; k++) {
+                float a0 = (float)k / segs * 360.0f, a1 = (float)(k + 1) / segs * 360.0f;
+                r.line(b.center.x + cosd(a0) * ringR, b.center.y + sind(a0) * ringR,
+                       b.center.x + cosd(a1) * ringR, b.center.y + sind(a1) * ringR, 1.2f * px);
+            }
+        }
+        // A moon hugging its planet at this zoom would only stack labels.
+        if (moon && b.orbitRadius * app.view.scale < 60.0f) continue;
+        Vec2 clip = viewMat.transform(b.center);
+        float sx = (clip.x * 0.5f + 0.5f) * app.width;
+        float sy = (1.0f - (clip.y * 0.5f + 0.5f)) * app.height;
+        // Worlds are labelled underneath; the star above (its corona is big,
+        // and an inner planet's label would otherwise land on top of it).
+        if (b.isSun) sy -= shown * 2.1f * app.view.scale + 34.0f;
+        else         sy += shown * app.view.scale + 8.0f;
+        if (sx < -40 || sx > app.width + 40 || sy < -20 || sy > app.height + 20) continue;
+        float dd = dist(ship.x, ship.y, b.center.x, b.center.y) - b.baseRadius;
+        char line[160];
+        snprintf(line, sizeof(line), "%d,%d,%s,%s,%d,%d;", (int)sx, (int)sy,
+                 b.discovered ? b.name.c_str() : "?",
+                 b.discovered ? b.kind.c_str() : "Uncharted",
+                 (int)(dd > 0 ? dd / 1000.0f : 0), i == app.dominantIdx ? 1 : 0);
+        app.labelBuf += line;
+    }
     r.end();
+
+    EM_ASM({
+        if (window.setNavLabels) window.setNavLabels(UTF8ToString($0), $1);
+    }, app.labelBuf.c_str(), a);
+    app.navLabelsShown = true;
 }
 
 // Cinematic depth vignette + near-ground grade: soft black gradient strips down
@@ -1815,10 +3406,14 @@ static void drawProps(const Mat3& viewMat, float time, bool foreground) {
 // closer and richer. Frames the whole scene and pushes the center forward. Pure
 // screen space, drawn last over everything.
 static void drawVignette() {
+    // gDebug.vignette scales the whole effect (1 = the strip alphas below).
+    float k = gDebug.vignette;
+    if (k <= 0.001f) return;
     Renderer2D& r = app.renderer;
+    r.begin(Mat3(), app.width, app.height);   // own batch, or the strips are never flushed
     r.beginScreenSpace();
     auto strip = [&](Vec2 e0, Vec2 e1, Vec2 i1, Vec2 i0, float a) {
-        Renderer2D::Color edge{0, 0, 0, a}, in{0, 0, 0, 0};
+        Renderer2D::Color edge{0, 0, 0, a * k}, in{0, 0, 0, 0};
         r.triangleV(e0, edge, e1, edge, i1, in);
         r.triangleV(e0, edge, i1, in, i0, in);
     };
@@ -1828,6 +3423,7 @@ static void drawVignette() {
     strip(Vec2(-1, -1), Vec2(-1, 1), Vec2(-0.62f, 1), Vec2(-0.62f, -1), 0.24f);
     strip(Vec2(1, -1),  Vec2(1, 1),  Vec2(0.62f, 1),  Vec2(0.62f, -1),  0.24f);
     r.endScreenSpace();
+    r.end();
 }
 
 // Drifting dust/spore motes at parallax depth planes — the cheap volume cue.
@@ -1835,9 +3431,20 @@ static void drawVignette() {
 // position (scaled by the mote's depth, so near planes slide more) plus a slow
 // sway, wrapped to stay on screen. Soft additive specks, faded out toward space.
 static void drawMotes(float time) {
-    float strength = 1.0f - spaceOverlay();
+    float strength = surfaceDressing() * gDebug.motes;   // off unless the knob is raised
     if (strength <= 0.01f) return;
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
+    // Position relative to the body: the planet itself is travelling along its
+    // orbit, and world coordinates would smear the motes across the screen.
+    Vec2 focus = playerPos() - dominantPlanet().center;
+    // Motes are sunlit dust: they follow the daylight where you stand and are
+    // gone at night (where pale specks drifting over the land would read as
+    // stars in front of the mountains).
+    {
+        Vec2 toSun = (sunWorldPos() - dominantPlanet().center).normalize();
+        Vec2 up = focus.normalize();
+        strength *= smoothstepf(-gDebug.nightSoftness, gDebug.nightSoftness, up.dot(toSun));
+        if (strength <= 0.01f) return;
+    }
     float aspect = (float)app.width / (float)app.height;
     auto wrap = [](float v) {                 // into [-1,1]
         v = fmodf(v + 1.0f, 2.0f);
@@ -1886,7 +3493,7 @@ static void updateShootingStar(float dt) {
         ss.life = 0.0f;
         ss.maxLife = 0.28f + frand() * 0.22f;             // fast dart
         ss.trail.clear();
-        ss.spawnFocus = app.astronaut.pos;
+        ss.spawnFocus = app.astronaut.pos - dominantPlanet().center;
         float travelPx = 90.0f + frand() * 30.0f;          // ~100 px of travel
         float ang = 200.0f + frand() * 140.0f;             // down-ish diagonal
         Vec2 dirU(cosd(ang), sind(ang));
@@ -1917,7 +3524,7 @@ static void drawShootingStar() {
     if (ss.trail.empty()) return;
 
     // Subtle parallax: the streak drifts opposite the ship's motion since spawn.
-    Vec2 focus = app.spacewalking ? app.astronaut.pos : app.lander.pos;
+    Vec2 focus = playerPos() - dominantPlanet().center;
     const float K = 0.00004f;
     Vec2 off(-(focus.x - ss.spawnFocus.x) * K, -(focus.y - ss.spawnFocus.y) * K);
     float aspect = (float)app.width / (float)app.height;
@@ -2015,13 +3622,258 @@ static void syncDebugFromJS() {
     gDebug.cameraGroundZoom = EM_ASM_DOUBLE({ return window.DBG.cameraGroundZoom; });
     gDebug.cameraFraming    = EM_ASM_DOUBLE({ return window.DBG.cameraFraming; });
     gDebug.sunOverride      = EM_ASM_DOUBLE({ return window.DBG.sunOverride !== undefined ? window.DBG.sunOverride : -5; });
+    // Newer knobs: fall back to the built-in default when the page predates them.
+    gDebug.fuelBurn         = EM_ASM_DOUBLE({ return window.DBG.fuelBurn !== undefined ? window.DBG.fuelBurn : $0; }, gDebug.fuelBurn);
+    gDebug.refuelRate       = EM_ASM_DOUBLE({ return window.DBG.refuelRate !== undefined ? window.DBG.refuelRate : $0; }, gDebug.refuelRate);
+    gDebug.cameraHorizon    = EM_ASM_DOUBLE({ return window.DBG.cameraHorizon !== undefined ? window.DBG.cameraHorizon : $0; }, gDebug.cameraHorizon);
+    gDebug.horizonHaze      = EM_ASM_DOUBLE({ return window.DBG.horizonHaze !== undefined ? window.DBG.horizonHaze : $0; }, gDebug.horizonHaze);
+    gDebug.foreground       = EM_ASM_DOUBLE({ return window.DBG.foreground !== undefined ? window.DBG.foreground : $0; }, gDebug.foreground);
+    gDebug.vignette         = EM_ASM_DOUBLE({ return window.DBG.vignette !== undefined ? window.DBG.vignette : $0; }, gDebug.vignette);
+    gDebug.motes            = EM_ASM_DOUBLE({ return window.DBG.motes !== undefined ? window.DBG.motes : $0; }, gDebug.motes);
+    gDebug.frontVeil        = EM_ASM_DOUBLE({ return window.DBG.frontVeil !== undefined ? window.DBG.frontVeil : $0; }, gDebug.frontVeil);
+    gDebug.holeFloor        = EM_ASM_DOUBLE({ return window.DBG.holeFloor !== undefined ? window.DBG.holeFloor : $0; }, gDebug.holeFloor);
+    gDebug.holeDepth        = EM_ASM_DOUBLE({ return window.DBG.holeDepth !== undefined ? window.DBG.holeDepth : $0; }, gDebug.holeDepth);
+    gDebug.cameraSpeedLook  = EM_ASM_DOUBLE({ return window.DBG.cameraSpeedLook !== undefined ? window.DBG.cameraSpeedLook : $0; }, gDebug.cameraSpeedLook);
+    gDebug.walkSpeed        = EM_ASM_DOUBLE({ return window.DBG.walkSpeed !== undefined ? window.DBG.walkSpeed : $0; }, gDebug.walkSpeed);
+    gDebug.jumpSpeed        = EM_ASM_DOUBLE({ return window.DBG.jumpSpeed !== undefined ? window.DBG.jumpSpeed : $0; }, gDebug.jumpSpeed);
 
+    // The gravity knob scales every body together (each keeps its own relative
+    // density; the star keeps its mass ratio), then the orbit rates are
+    // re-derived so planets still share orbits with ships coasting beside them.
     float dens = EM_ASM_DOUBLE({ return window.DBG.planetDensity; });
     if (dens != gDebug.planetDensity) {
         gDebug.planetDensity = dens;
-        for (Planet& p : app.planets) p.setDensity(dens);
+        for (Planet& p : app.planets) p.applyGlobalDensity(dens);
+        updateKeplerSpeeds(app.planets);
     }
     if (app.lander.fuel > gDebug.maxFuel) app.lander.fuel = gDebug.maxFuel;
+}
+
+// Put the ship above a point of a world's surface (angle around the body,
+// degrees) with a full tank, co-moving with it.
+static void warpAbove(int idx, float angle, float altitude) {
+    if (idx < 0 || idx >= (int)app.planets.size() || app.planets[idx].isSun) return;
+    Planet& p = app.planets[idx];
+    float r = p.surfaceRadius(angle) + altitude;
+    Lander& l = app.lander;
+    l.reset();
+    l.pos = p.center + Vec2(cosd(angle), sind(angle)) * r;
+    l.vel = p.orbitVel;
+    l.rotation = l.targetRotation = angle + 90.0f;
+    app.state = PLAYING;
+    app.spacewalking = false;
+    app.astronaut.active = false;
+    app.dominantIdx = app.stuckIdx = idx;
+    app.mapMode = false;
+    app.camAlt = altitude;
+    app.view.focusX = l.pos.x;
+    app.view.focusY = l.pos.y;
+    app.view.scale = std::fmin(gDebug.cameraGroundZoom, app.height * gDebug.cameraFraming / altitude);
+    Vec2 g = l.gravityAt(p, l.pos);
+    app.view.rotation = 90.0f - atan2d(g.y, g.x);
+}
+
+// Dev aid (debug panel "Warp to"): drop the ship above a world's day side.
+// Lets you tour a generated system without flying every leg. Exported to JS as
+// Module._debugWarpTo(index).
+extern "C" EMSCRIPTEN_KEEPALIVE void debugWarpTo(int idx) {
+    if (idx < 0 || idx >= (int)app.planets.size() || app.planets[idx].isSun) return;
+    const Planet& p = app.planets[idx];
+    Vec2 toSun = (sunWorldPos() - p.center).normalize();
+    warpAbove(idx, atan2d(toSun.y, toSun.x) + 30.0f, 1800.0f);     // mid-morning light
+}
+
+// Dev hook: the same, above a chosen point of the surface (angle around the
+// body, degrees) at a chosen altitude — for looking at one particular piece of
+// terrain. Module._debugWarpAngle(index, angle, altitude).
+extern "C" EMSCRIPTEN_KEEPALIVE void debugWarpAngle(int idx, float angle, float altitude) {
+    warpAbove(idx, angle, altitude < 20.0f ? 20.0f : altitude);
+}
+
+// Dev hook: put the astronaut (on foot) beside one of the dominant world's
+// cave props — for looking at / testing a particular part of a cave. Returns
+// how many props there are (so a test can walk the list); index < 0 just asks.
+// Module._debugTeleportProp(index).
+extern "C" EMSCRIPTEN_KEEPALIVE int debugTeleportProp(int idx) {
+    Planet& p = dominantPlanet();
+    int n = (int)p.caveProps.size();
+    if (idx < 0 || idx >= n) return n;
+    const Planet::CaveProp& q = p.caveProps[idx];
+    Vec2 at = p.center + q.local + Vec2(cosd(q.dir), sind(q.dir)) * 20.0f;
+    app.astronaut.spawn(at);
+    app.spacewalking = true;
+    return n;
+}
+// Dev hook: put the astronaut (on foot) on the surface of the dominant world
+// at an angle (degrees). Module._debugTeleportAngle(angle).
+extern "C" EMSCRIPTEN_KEEPALIVE void debugTeleportAngle(float angle) {
+    Planet& p = dominantPlanet();
+    float r = p.surfaceRadius(angle) + 6.0f;
+    app.astronaut.spawn(Vec2(p.center.x + cosd(angle) * r, p.center.y + sind(angle) * r));
+    app.spacewalking = true;
+}
+// Dev hook: cut a straight shaft `depth` deep and `radius` wide (bite
+// radius) into the dominant world, from the surface at an angle (degrees) —
+// the same bites the cutter makes, without driving it. A depth under the
+// radius leaves a shallow dish. Module._debugDigShaft(angle, depth, radius).
+extern "C" EMSCRIPTEN_KEEPALIVE void debugDigShaft(float angle, float depth, float radius) {
+    Planet& p = dominantPlanet();
+    if (radius < 2.0f) radius = 2.0f;
+    Vec2 out(cosd(angle), sind(angle));
+    float surf = p.surfaceRadius(angle);
+    // Bite centers from the bottom one (its lowest point at `depth`) up to
+    // one sitting at the surface.
+    float z = depth - radius;
+    NearField::Frame nf = nearFrame(0.0f);
+    for (int n = 0; n < 400; n++) {
+        p.dig(p.center + out * (surf - z), radius);
+        if (z < radius) NearField::uproot(p, nf, p.center + out * (surf - z), radius + 4.0f);
+        if (z <= 0.0f) break;
+        z = z - 6.0f > 0.0f ? z - 6.0f : 0.0f;
+    }
+    if (app.dominantIdx == app.activeFieldIdx) {
+        p.focusCarve(p.center + out * surf);
+        uploadCarveTexture();
+    }
+}
+// Kind and depth below the ground line of prop `idx` (kind * 10000 + depth),
+// or -1: lets a test pick out, say, the deepest crystal.
+extern "C" EMSCRIPTEN_KEEPALIVE int debugPropInfo(int idx) {
+    const Planet& p = dominantPlanet();
+    if (idx < 0 || idx >= (int)p.caveProps.size()) return -1;
+    const Planet::CaveProp& q = p.caveProps[idx];
+    float under = p.surfaceRadius(atan2d(q.local.y, q.local.x)) - q.local.length();
+    return (int)q.kind * 10000 + (int)(under < 0.0f ? 0.0f : under);
+}
+
+// Dev aid: snapshot the simulation into window.GAME_DUMP (JSON-able object) for
+// tests and console poking. Call Module._debugDump() then read the global.
+// Dev: how far straight down from the astronaut's center the first rock is,
+// and how far the astronaut is below the terrain's outline at their angle.
+static float dbgFloorGap() {
+    const Planet& p = dominantPlanet();
+    Vec2 up = (app.astronaut.pos - p.center).normalize();
+    for (float k = 0.0f; k <= 400.0f; k += 1.0f)
+        if (p.rockAt(app.astronaut.pos - up * k) > 0.0f) return k;
+    return 400.0f;
+}
+static float dbgBelowLine() {
+    const Planet& p = dominantPlanet();
+    Vec2 a = app.astronaut.pos;
+    return p.surfaceRadius(atan2d(a.y - p.center.y, a.x - p.center.x)) - dist(a.x, a.y, p.center.x, p.center.y);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void debugDump() {
+    std::string bodies = "[";
+    for (int i = 0; i < (int)app.planets.size(); i++) {
+        const Planet& p = app.planets[i];
+        char buf[256];
+        snprintf(buf, sizeof(buf), "%s{\"i\":%d,\"name\":\"%s\",\"x\":%.1f,\"y\":%.1f,\"vx\":%.3f,\"vy\":%.3f,\"r\":%.0f,\"found\":%d}",
+                 i ? "," : "", i, p.name.c_str(), p.center.x, p.center.y, p.orbitVel.x, p.orbitVel.y,
+                 p.baseRadius, p.discovered ? 1 : 0);
+        bodies += buf;
+    }
+    bodies += "]";
+    char head[1024];
+    snprintf(head, sizeof(head),
+             "{\"x\":%.1f,\"y\":%.1f,\"vx\":%.3f,\"vy\":%.3f,\"rot\":%.1f,\"state\":%d,\"dominant\":%d,"
+             "\"scale\":%.5f,\"walking\":%d,\"ax\":%.1f,\"ay\":%.1f,\"encounter\":%d,\"encDist\":%.0f,"
+             "\"cow0x\":%.1f,\"cow0y\":%.1f,\"fx\":%.1f,\"fy\":%.1f,\"avx\":%.3f,\"avy\":%.3f,"
+             "\"grounded\":%d,\"mx\":%.1f,\"my\":%.1f,\"cwx\":%.1f,\"cwy\":%.1f,\"lex\":%.1f,\"ley\":%.1f,"
+             "\"hover\":%d,\"laser\":%d,\"rotv\":%.2f,\"floorGap\":%.1f,\"belowLine\":%.1f,\"bodies\":",
+             app.lander.pos.x, app.lander.pos.y, app.lander.vel.x, app.lander.vel.y, app.lander.rotation,
+             (int)app.state, app.dominantIdx, app.view.scale, (int)app.spacewalking,
+             app.astronaut.pos.x, app.astronaut.pos.y, app.encounter.body, app.encounter.distance,
+             app.cows.empty() ? 0.0f : app.cows[0].pos.x, app.cows.empty() ? 0.0f : app.cows[0].pos.y,
+             app.view.focusX, app.view.focusY, app.astronaut.vel.x, app.astronaut.vel.y,
+             (int)app.astronaut.grounded, Input::getMouseX(), Input::getMouseY(),
+             screenToWorld(Input::getMouseX(), Input::getMouseY()).x,
+             screenToWorld(Input::getMouseX(), Input::getMouseY()).y,
+             app.laserEnd.x, app.laserEnd.y, app.hoverTarget, (int)app.laserOn, app.view.rotation,
+             dbgFloorGap(), dbgBelowLine());
+    // Harvestables within laser range of the astronaut, with where they are on
+    // screen (canvas pixels) — lets a test aim at them.
+    std::string items = ",\"items\":[";
+    if (app.spacewalking) {
+        const Planet& p = dominantPlanet();
+        NearField::Frame f = nearFrame(0.0f);
+        Mat3 vm = app.view.matrix(app.width, app.height);
+        bool first = true;
+        for (int i = 0; i < (int)p.harvest.size(); i++) {
+            const Planet::Harvestable& h = p.harvest[i];
+            float rel = std::fmod(h.angle - f.viewAngle + 540.0f, 360.0f) - 180.0f;
+            if (fabsf(rel) > f.halfSpanDeg) continue;
+            Vec2 c = NearField::center(p, h);
+            if (dist(c.x, c.y, app.astronaut.pos.x, app.astronaut.pos.y) > LASER_RANGE) continue;
+            Vec2 clip = vm.transform(c);
+            char buf[160];
+            snprintf(buf, sizeof(buf), "%s{\"i\":%d,\"x\":%.0f,\"y\":%.0f,\"kind\":%d,\"depth\":%.0f,\"alive\":%d}",
+                     first ? "" : ",", i, (clip.x * 0.5f + 0.5f) * app.width,
+                     (1.0f - (clip.y * 0.5f + 0.5f)) * app.height, (int)h.kind, h.depth,
+                     NearField::alive(h) ? 1 : 0);
+            items += buf;
+            first = false;
+        }
+    }
+    items += "]";
+    // The same for what grows in the caves, plus how much of each thing is
+    // being carried.
+    items += ",\"props\":[";
+    if (app.spacewalking) {
+        const Planet& p = dominantPlanet();
+        Mat3 vm = app.view.matrix(app.width, app.height);
+        bool first = true;
+        for (int i = 0; i < (int)p.caveProps.size(); i++) {
+            const Planet::CaveProp& q = p.caveProps[i];
+            Vec2 c = CaveField::center(p, q);
+            if (dist(c.x, c.y, app.astronaut.pos.x, app.astronaut.pos.y) > LASER_RANGE) continue;
+            Vec2 clip = vm.transform(c);
+            char buf[160];
+            snprintf(buf, sizeof(buf), "%s{\"i\":%d,\"x\":%.0f,\"y\":%.0f,\"kind\":%d,\"alive\":%d,\"hp\":%.2f}",
+                     first ? "" : ",", i, (clip.x * 0.5f + 0.5f) * app.width,
+                     (1.0f - (clip.y * 0.5f + 0.5f)) * app.height, (int)q.kind,
+                     CaveField::alive(q) ? 1 : 0, q.hp);
+            items += buf;
+            first = false;
+        }
+    }
+    items += "],\"hoverProp\":" + std::to_string(app.hoverProp) + ",\"inv\":[";
+    for (int i = 0; i < App::ITEM_COUNT; i++) items += (i ? "," : "") + std::to_string(app.inventory[i]);
+    items += "]";
+    std::string json = std::string(head) + bodies + items + "}";
+    EM_ASM({ window.GAME_DUMP = JSON.parse(UTF8ToString($0)); }, json.c_str());
+}
+
+// Chart a world the first time the player gets close to it.
+static void updateDiscovery() {
+    Vec2 sp = playerPos();
+    for (Planet& p : app.planets) {
+        if (p.discovered || p.isSun) continue;
+        float reach = p.baseRadius * 2.5f + 6000.0f;
+        if (dist(sp.x, sp.y, p.center.x, p.center.y) > reach) continue;
+        p.discovered = true;
+        app.score += 25;
+        showEvent("Discovered " + p.name, p.kind + "  +25");
+    }
+}
+
+// Push the "where am I" readout to the DOM HUD, only when it changes.
+static void updateNavHud() {
+    int total = 0, found = 0;
+    for (const Planet& p : app.planets) {
+        if (p.isSun) continue;
+        total++;
+        if (p.discovered) found++;
+    }
+    const Planet& b = dominantPlanet();
+    int key = app.dominantIdx * 10000 + found * 10 + (b.discovered ? 1 : 0);
+    if (key == app.navHudKey) return;
+    app.navHudKey = key;
+    EM_ASM({
+        if (window.updateNav) window.updateNav(UTF8ToString($0), UTF8ToString($1),
+                                               UTF8ToString($2), $3, $4, $5);
+    }, b.discovered ? b.name.c_str() : "Uncharted world", b.discovered ? b.kind.c_str() : "",
+       app.system.starName.c_str(), found, total, (int)app.system.seed);
 }
 
 static void mainLoop() {
@@ -2049,6 +3901,11 @@ static void mainLoop() {
     bool restartPressed = restartKey && !app.prevRestartKey;
     app.prevThrustKey = thrustKey;
     app.prevRestartKey = restartKey;
+
+    // M — toggle the system map (the camera frames every orbit; you keep flying).
+    bool mapKey = Input::isKeyDown(KEY_M);
+    if (mapKey && !app.prevMapKey) app.mapMode = !app.mapMode;
+    app.prevMapKey = mapKey;
 
     // E — exit ship (when landed) or re-enter (when close enough on foot).
     bool exitKey     = Input::isKeyDown(Input::KEY_E);
@@ -2079,62 +3936,170 @@ static void mainLoop() {
     // While landed/spacewalking the dominant body is frozen: you're ON it, and
     // letting it flip (e.g. tidal tug-of-war on a moon) would teleport the
     // stuck-to-surface ship.
-    for (Planet& p : app.planets) p.updateOrbit(app.planets, timeScale);
-    // Tuning aid: pin the sun's day-cycle angle from the debug panel (-5 = auto).
+    //
+    // Tuning aid: the debug panel can pin the time of day (-5 = auto). The
+    // world you're at (or its planet, if you're on a moon) is frozen on its
+    // orbit at the angle that puts the star in the requested direction —
+    // 270 = noon over the spawn point, ~350 = sunset there.
+    int pinIdx = -1;
     if (gDebug.sunOverride >= 0.0f) {
-        Planet& sun = app.planets[app.sunIdx];
-        sun.orbitAngle = gDebug.sunOverride;
-        sun.updateOrbit(app.planets, 0.0f);
+        pinIdx = app.dominantIdx;
+        while (app.planets[pinIdx].orbitParent >= 0 &&
+               !app.planets[app.planets[pinIdx].orbitParent].isSun)
+            pinIdx = app.planets[pinIdx].orbitParent;
+    }
+    const Vec2 domVelBefore = dominantPlanet().orbitVel;
+    for (int i = 0; i < (int)app.planets.size(); i++) {
+        Planet& p = app.planets[i];
+        p.orbitPinned = (i == pinIdx);
+        if (p.orbitPinned) p.orbitAngle = gDebug.sunOverride - 180.0f;
+        p.updateOrbit(app.planets, timeScale);
+    }
+    // Engaging, moving or releasing the pin is not physics: the world you're
+    // at jumps along its orbit and its velocity changes in a single frame.
+    // Carry a flying ship (and the camera) through the same jump so the slider
+    // can be used mid-flight; landed ships, the astronaut and the cows already
+    // ride the body's orbitStep.
+    bool pinEvent = pinIdx != app.prevPinIdx ||
+                    (pinIdx >= 0 && gDebug.sunOverride != app.prevSunOverride);
+    app.prevPinIdx = pinIdx;
+    app.prevSunOverride = gDebug.sunOverride;
+    if (pinEvent) {
+        const Planet& dom = dominantPlanet();
+        // The part of this frame's move that was a teleport rather than motion.
+        Vec2 jump = dom.orbitStep - dom.orbitVel * timeScale;
+        app.view.focusX += jump.x;
+        app.view.focusY += jump.y;
+        if (app.state == PLAYING) {
+            app.lander.pos += jump;
+            app.lander.vel += dom.orbitVel - domVelBefore;
+        }
     }
     if (app.state == PLAYING && !app.spacewalking) {
         app.dominantIdx = dominantBody(app.lander.pos);
     }
     updateActiveField();
 
+    // Everything standing on a world rides along with it. The cows live on the
+    // home planet; carry them by its exact move this frame so their own
+    // (ground-relative) motion is all that's left to simulate.
+    for (Cow& cow : app.cows) {
+        if (cow.state != Cow::State::Stowed) cow.pos += homePlanet().orbitStep;
+    }
+
     switch (app.state) {
         case PLAYING:
             pollInput(timeScale);
             app.lander.update(app.planets, timeScale);
             updateContact();
-            app.lander.updateBeam(dominantPlanet());
-            runBeamGrab();
-            for (Cow& cow : app.cows) {
-                if (cow.update(homePlanet(), app.lander, app.cargo, MAX_CARGO, timeScale)) {
-                    app.cargo += 1;
-                    app.score += 50;
+            // Flying into the star ends the run.
+            if (app.lander.active) {
+                const Planet& sun = app.planets[app.sunIdx];
+                if (dist(app.lander.pos.x, app.lander.pos.y, sun.center.x, sun.center.y) <
+                    sun.baseRadius * 0.9f) {
+                    app.lander.crash();
+                    app.stuckIdx = app.sunIdx;
+                    app.lander.landingOffset = app.lander.pos - sun.center;
+                    app.state = CRASHED;
                 }
             }
+            app.lander.updateBeam(dominantPlanet());
+            runBeamGrab();
+            updateCows(timeScale);
             break;
-        case LANDED:
-            // Stick to the body so the ship rides its orbit while parked.
-            app.lander.pos = dominantPlanet().center + app.lander.landingOffset;
+        case LANDED: {
+            // Stick to the body so the ship rides its orbit while parked, and
+            // share its velocity (the camera's follow prediction and the HUD
+            // speed both read it).
+            const Planet& body = app.planets[app.stuckIdx];
+            app.lander.settle(body, timeScale);
+            app.lander.pos = body.center + app.lander.landingOffset;
+            app.lander.vel = body.orbitVel;
             updateContact();                 // keep altitude readout fresh
+            // A safe landing is a pit stop: the tank tops itself back up.
+            if (gDebug.refuelRate > 0.0f && app.lander.fuel < gDebug.maxFuel) {
+                app.lander.fuel += gDebug.refuelRate * timeScale;
+                if (app.lander.fuel > gDebug.maxFuel) app.lander.fuel = gDebug.maxFuel;
+            }
             if (!app.spacewalking && thrustPressed) {
-                app.lander.liftOff(dominantPlanet());
+                app.lander.liftOff(body);
                 app.state = PLAYING;
             }
+            // The herd keeps living while you are parked or out on foot: that
+            // is when the ground can be cut out from under one.
+            updateCows(timeScale);
             break;
-        case CRASHED:
+        }
+        case CRASHED: {
+            // The wreck stays where it fell while the world moves on.
+            const Planet& body = app.planets[app.stuckIdx];
+            app.lander.pos = body.center + app.lander.landingOffset;
+            app.lander.vel = body.orbitVel;
             if (restartPressed) resetGame();
             break;
+        }
     }
 
     if (app.spacewalking) {
         // The astronaut simulates in the body's co-moving frame: carry them
         // with its orbital motion first, so their velocity stays relative to
-        // the ground. Without this an orbiting moon slides out from under them
-        // at orbital speed (~20 units/frame) — far faster than they can walk —
-        // and ground friction (which damps toward zero world velocity) makes
-        // catching up impossible. The planet already moved by orbitVel *
-        // timeScale in updateOrbit above; this applies the same translation.
-        app.astronaut.pos += dominantPlanet().orbitVel * timeScale;
+        // the ground. Without this the planet slides out from under them at
+        // orbital speed — far faster than they can walk — and ground friction
+        // (which damps toward zero world velocity) makes catching up
+        // impossible. orbitStep is the exact move updateOrbit just applied.
+        app.astronaut.pos += dominantPlanet().orbitStep;
+        // Keep the fine dig layer around the player BEFORE moving them: their
+        // collision reads it.
+        if (app.dominantIdx == app.activeFieldIdx && dominantPlanet().focusCarve(app.astronaut.pos))
+            uploadCarveTexture();
         pollInputAstronaut(timeScale);
         app.astronaut.update(dominantPlanet(), timeScale);
+
+        // Q switches the hand tool between mining laser and terrain cutter.
+        bool toolKey = Input::isKeyDown(Input::KEY_Q);
+        if (toolKey && !app.prevToolKey && app.cutterUnlocked) {
+            app.toolMode ^= 1;
+            EM_ASM({ if (window.setTool) window.setTool($0); }, app.toolMode);
+        }
+        app.prevToolKey = toolKey;
+    } else if ((app.state == LANDED || (app.state == PLAYING && app.lander.altitude < 1500.0f)) &&
+               app.dominantIdx == app.activeFieldIdx && dominantPlanet().hasDigs()) {
+        // Parked, or flying low: show the caves and whatever has been dug
+        // around the ship (the fine layer only covers ~3000 units around it).
+        if (dominantPlanet().focusCarve(app.lander.pos)) uploadCarveTexture();
     }
 
+    updateDiscovery();
     updateZoom(timeScale);
     updateView(timeScale);
     updateShootingStar(dt);
+
+    // Mining laser, regrowth of what it cut, and the bits it throws off. After
+    // the camera: the cursor is turned into a world point through the view,
+    // and the world moves ~60 units a frame along its orbit — aiming through
+    // last frame's view would put the beam that far off target.
+    updateLaser(dt, (float)(now - app.startTime) * 3.0f);
+    NearField::update(dominantPlanet(), dt, app.laserTarget);
+    CaveField::update(dominantPlanet(), dt, app.laserProp);
+    updateParticles(dt, timeScale);
+    for (App::Burn& b : app.burns) {
+        if (b.heat > 0.0f) b.heat -= dt / 1.7f;       // cools in under two seconds
+    }
+    // Down a hole? (On the surface the astronaut's center is a couple of units
+    // ABOVE the terrain line.) Eases, so the front ground thins and firms up
+    // rather than popping.
+    {
+        float want = 0.0f;
+        if (app.spacewalking) {
+            const Planet& hp = dominantPlanet();
+            Vec2 ap = app.astronaut.pos;
+            float under = hp.surfaceRadius(atan2d(ap.y - hp.center.y, ap.x - hp.center.x)) -
+                          dist(ap.x, ap.y, hp.center.x, hp.center.y);
+            want = under > 6.0f ? 1.0f : 0.0f;
+        }
+        float k = 0.14f * timeScale;
+        app.inHole += (want - app.inHole) * (k > 1.0f ? 1.0f : k);
+    }
 
     float shaderTime = (float)(now - app.startTime) * 3.0f;  // ~= original frameCount*0.05
 
@@ -2149,7 +4114,8 @@ static void mainLoop() {
                     Input::isKeyDown(Input::KEY_A) || Input::isKeyDown(Input::KEY_LEFT) ||
                     Input::isKeyDown(Input::KEY_D) || Input::isKeyDown(Input::KEY_RIGHT);
 
-    glClear(GL_COLOR_BUFFER_BIT);
+    glStencilMask(0xFF);
+    glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     Mat3 viewMat = app.view.matrix(app.width, app.height);
 
     // 1) Deep background: starfield.
@@ -2161,22 +4127,30 @@ static void mainLoop() {
     //     the planets so they occlude it when they pass in front.
     drawSun(viewMat);
 
+    // 1b) Star occluders: black out the starfield behind the (translucent)
+    //     mountain layers and behind the other worlds' discs, before the sky
+    //     is laid over it.
+    drawRidges(viewMat, true);
+    drawSkyBodies(viewMat, true);
+
     // 1c) Sky band (atmosphere mode 0): the open sky above the terrain line.
     drawAtmospherePass(shaderTime, 0);
 
-    // 1c1) Looming gas giant high in the sky, behind clouds and ridges.
-    drawLoomingBody(shaderTime);
-
-    // 1c2) Far hazy cloud band high in the sky, behind the ridges.
-    drawFarClouds(viewMat, shaderTime);
-
-    // 1c3) Occasional shooting star streaking across the background sky.
-    drawShootingStar();
-
     // 1d) Distant ridge silhouettes, painted over the sky. Full unclipped
-    //     bands — the terrain body drawn next occludes everything below the
-    //     horizon, which is what makes them read as ranges BEYOND it.
-    drawRidges(viewMat, false);
+    //     bands — the terrain body drawn later occludes everything below the
+    //     horizon, which is what makes them read as ranges BEYOND it. They
+    //     also stamp the stencil, so the next group stays behind them.
+    drawRidges(viewMat);
+
+    // 1d1) Everything that lives BEHIND the mountains, clipped to where no
+    //      ridge is: the system's other worlds and the star on the sky dome
+    //      (they rise and set behind the ranges), the far hazy cloud band,
+    //      and the occasional shooting star.
+    beginBehindRidges();
+    drawSkyBodies(viewMat);
+    drawFarClouds(viewMat, shaderTime);
+    drawShootingStar();
+    endBehindRidges();
 
     // 1e) Volumetric light shafts raking through the sky; the body (next) clips
     //     their lower ends so they read as landing on the ground.
@@ -2186,6 +4160,9 @@ static void mainLoop() {
     //    day/night terminator, one fullscreen pass over every body (near
     //    planet from the live density field, far ones from silhouette rows).
     drawBodyPass();
+    // ...and mark the cave's open space in the stencil, for the formations
+    // that grow out of its walls (beginInCave).
+    drawCaveMask();
 
     // 2a) Long cast shadows from peaks, darkening the valleys behind them.
     drawTerrainShadows(viewMat);
@@ -2196,34 +4173,84 @@ static void mainLoop() {
     for (const Cow& cow : app.cows) cow.draw(app.renderer, homePlanet());
     app.renderer.end();
 
-    // 2c) Ground tufts: small surface clutter pinned to the terrain, drawn over
-    //     the body so the ground reads as detailed, not bare.
-    drawProps(viewMat, shaderTime, false);
+    // 2c) Harvestable plants and minerals standing BEHIND the walking line
+    //     (between it and the horizon edge), over the terrain.
+    {
+        NearField::Frame nf = nearFrame(shaderTime);
+        app.renderer.begin(viewMat, app.width, app.height);
+        NearField::draw(app.renderer, dominantPlanet(), nf, false, app.laserTarget);
+        // ...and what grows in the caves, behind the walker. (Inside a cave
+        // these only show to someone who is down there; the front-ground veil
+        // and their own fade see to that.) The formations are clipped to the
+        // cave's open space, so the wall hides their roots.
+        CaveField::Frame cf = caveFrame(shaderTime);
+        CaveField::draw(app.renderer, dominantPlanet(), cf, false, app.laserProp, CaveField::Part::Loose);
+        app.renderer.end();
+        beginInCave();
+        app.renderer.begin(viewMat, app.width, app.height);
+        CaveField::draw(app.renderer, dominantPlanet(), cf, false, app.laserProp, CaveField::Part::Walled);
+        app.renderer.end();
+        endInCave();
+    }
 
     // 3) Face fill (atmosphere mode 1): from space, the sky sphere tints the
     //    planet face; near the surface it's gated to zero so the ground stays
     //    clear.
     drawAtmospherePass(shaderTime, 1);
 
+    // 3b) Navigation overlay (orbit rings, world markers, name labels) once
+    //     the view is far enough out that worlds are specks.
+    drawNavOverlay(viewMat);
+
     // 3c) Ship + astronaut + space aids stay crisp on top of the sky.
     app.renderer.begin(viewMat, app.width, app.height);
     if (spaceAids) drawTrajectory();
     app.lander.drawBeam(app.renderer);
     if (app.spacewalking) app.astronaut.draw(app.renderer, dominantPlanet());
+    // Cave formations standing in front of the walking plane (the walled ones
+    // clipped to the cave's open space, as behind).
+    {
+        CaveField::Frame cf = caveFrame(shaderTime);
+        CaveField::draw(app.renderer, dominantPlanet(), cf, true, app.laserProp, CaveField::Part::Loose);
+        app.renderer.end();
+        beginInCave();
+        app.renderer.begin(viewMat, app.width, app.height);
+        CaveField::draw(app.renderer, dominantPlanet(), cf, true, app.laserProp, CaveField::Part::Walled);
+        app.renderer.end();
+        endInCave();
+        app.renderer.begin(viewMat, app.width, app.height);
+    }
     app.lander.draw(app.renderer);   // always draw the actual ship
-    if (spaceAids) {
-        // In space the ship is sub-pixel, so overlay a locator beacon on top of it.
+    if (spaceAids || app.navAlpha > 0.5f) {
+        // In space the ship is sub-pixel, so overlay a locator beacon on top of
+        // it (also on the map while parked: it's the "you are here").
         drawShipBeacon();
-        if (steering) drawHeadingArrow();
+        if (spaceAids && steering) drawHeadingArrow();
     }
     app.renderer.end();
 
-    // 3d) Foreground framing ridges: the near dark plane, drawn AFTER the ship
-    //     so it genuinely passes IN FRONT of the player (the closest depth
-    //     plane), not behind. This is what sells the foreground as near-camera.
-    drawRidges(viewMat, true);
-    // ...plus the foreground props (spires/fronds) standing on that plane.
-    drawProps(viewMat, shaderTime, true);
+    // 3c0) Front-ground veil: the strip of ground in front of the walking line,
+    //      drawn back over any hole that passes behind it — and over the
+    //      astronaut while they are down there — see-through. After the
+    //      player, before the plants that stand on that strip.
+    drawBodyPass(BodyPass::Veil);
+
+    // 3c1) Harvestables IN FRONT of the walking line, over the ship and the
+    //      astronaut — you walk behind the grass — then the mining laser, its
+    //      sparks and the harvested bits on top of those.
+    {
+        NearField::Frame nf = nearFrame(shaderTime);
+        app.renderer.begin(viewMat, app.width, app.height);
+        NearField::draw(app.renderer, dominantPlanet(), nf, true, app.laserTarget);
+        drawLaserFx(shaderTime);
+        app.renderer.end();
+    }
+
+    // 3d) Near framing planes: dark silhouette bands (plus their spires and
+    //     fronds) along the bottom of the frame, drawn after the ship because
+    //     they are the closest depth plane. Screen-anchored, so they frame the
+    //     scene without ever covering the player.
+    drawForeground(shaderTime);
 
     // 4) Clouds (alpha) in front of everything, incl. the ship (fly behind them).
     drawCloudsPass(shaderTime);
@@ -2237,8 +4264,18 @@ static void mainLoop() {
     EM_ASM({
         if (window.updateHUD) window.updateHUD($0, $1, $2, $3, $4, $5, $6, $7, $8);
     }, app.lander.fuel, gDebug.maxFuel, app.lander.altitude,
-       app.lander.vel.length(), (int)app.state, app.cargo, MAX_CARGO, app.score,
+       // Speed relative to the world you're at — its own orbital motion is
+       // tens of units a frame and would swamp the number you fly by.
+       (app.lander.vel - dominantPlanet().orbitVel).length(),
+       (int)app.state, app.cargo, MAX_CARGO, app.score,
        (int)app.spacewalking);
+    updateNavHud();
+    if (app.inventoryDirty) {
+        app.inventoryDirty = false;
+        std::string counts;
+        for (int i = 0; i < App::ITEM_COUNT; i++) counts += std::to_string(app.inventory[i]) + ",";
+        EM_ASM({ if (window.setInventory) window.setInventory(UTF8ToString($0)); }, counts.c_str());
+    }
 }
 
 int main() {
@@ -2248,7 +4285,7 @@ int main() {
     attrs.minorVersion = 0;
     attrs.alpha = false;
     attrs.depth = false;
-    attrs.stencil = false;
+    attrs.stencil = true;    // "behind the mountains" clipping (see drawRidges)
     attrs.antialias = true;
 
     EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx = emscripten_webgl_create_context("#canvas", &attrs);

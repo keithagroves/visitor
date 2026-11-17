@@ -7,8 +7,10 @@
 // An abductable cow, ported from cow-abductor's cow.js. Lives on the planet
 // surface and runs a small state machine: it idles on the ground (wobbling back
 // to its origin), gets tractor-lifted toward the ship when caught in the beam,
-// falls back under gravity when released, and is "stowed" once it reaches the
-// hatch. The lander is forward-declared to avoid a circular include.
+// falls back under gravity when released — or when the ground under it is cut
+// away — and is "stowed" once it reaches the hatch. It lands on whatever rock
+// is below it, so it will drop to the floor of a hole. The lander is
+// forward-declared to avoid a circular include.
 class Lander;
 
 class Cow {
@@ -18,6 +20,9 @@ public:
     static constexpr float PULL_STRENGTH = 0.15f;
     static constexpr float LIFT_SPEED = 1.4f;   // heavy: capped reel-in speed
     static constexpr float SIZE = 50.0f;
+    // A standing cow's center is this far above the ground it stands on (its
+    // hooves are then drawn on the walking line, a little below the outline).
+    static constexpr float STAND_UP = 7.0f;
     static constexpr float SCALE = 0.8f;
 
     void spawn(const Planet& planet, float surfaceAngle, float surfaceRadius);

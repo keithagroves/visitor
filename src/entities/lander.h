@@ -36,7 +36,14 @@ public:
     void update(const std::vector<Planet>& planets, float timeScale);
 
     // State transitions ported from lander.js.
-    void land(const Planet& planet);   // settle: stop, stick to the surface
+    void land(const Planet& planet);   // touch down: stick to the surface, start settling
+    // While landed: ease from where the ship touched down to its resting pose
+    // (see land). Call every LANDED frame before reading landingOffset.
+    void settle(const Planet& planet, float timeScale);
+    // Has a ship that lifted off cleared the ground yet? Until it has (or it
+    // starts sinking back), touching the ground is not a new landing.
+    bool clearingGround() const { return liftingOff; }
+    void updateClearing(const Planet& planet, float altitude);
     void crash();                      // disable controls, mark wrecked
     void liftOff(const Planet& planet);// reactivate, nudge clear, ride the orbit
 
@@ -58,9 +65,26 @@ public:
     // Unit vector the nose points along (== thrust direction).
     Vec2 noseDir() const { return Vec2(sind(rotation), -cosd(rotation)); }
 
+    // Where the predicted coast path comes closest to a body other than the
+    // reference one (body < 0: nothing nearby). Positions are in the same
+    // frame as the path, so the caller can draw a "ghost" of the world at the
+    // place it will be when the ship arrives.
+    struct Encounter {
+        int body = -1;
+        bool impact = false;   // the path ends on this body's surface
+        float distance = 0;    // center-to-ship distance at closest approach
+        float score = 0;       // distance in body radii (lower = closer pass)
+        Vec2 bodyPos;          // body center at that moment
+        Vec2 shipPos;          // ship at that moment
+    };
+
     // Forward-simulate the coast path (gravity + drag, no thrust) into `out`,
-    // stopping at terrain impact on any body. Used for the space trajectory aid.
-    void predictTrajectory(const std::vector<Planet>& planets, std::vector<Vec2>& out) const;
+    // stopping at terrain impact on any body. The planets are advanced along
+    // their orbits during the simulation, and the path is expressed relative
+    // to body `frameIdx` (anchored at its current position; -1 = world frame)
+    // — i.e. it is the path as seen from the world you are flying around.
+    void predictTrajectory(const std::vector<Planet>& planets, int frameIdx,
+                           std::vector<Vec2>& out, Encounter& enc) const;
 
     Vec2 pos;
     Vec2 vel;
@@ -89,6 +113,15 @@ public:
     // (so it rides along once planets orbit in a later phase).
     bool landed = false;
     Vec2 landingOffset;
+
+    // Touchdown settle (see land/settle): how far above its resting depth the
+    // ship still is and how fast it is moving there, its leftover slide along
+    // the ground (world units / frame), and whether it is still moving at all.
+    bool  settling = false;
+    float settleHeight = 0.0f;
+    float settleSpeed = 0.0f;
+    float settleSlide = 0.0f;
+    bool  liftingOff = false;
 
     float radius = 20.0f;
 };

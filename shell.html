@@ -105,6 +105,8 @@
             line-height: 1.4;
         }
         #message .sub { font-size: 16px; font-weight: 400; opacity: 0.85; }
+        body.nav #message { top: auto; bottom: 46px; transform: translateX(-50%); font-size: 18px; }
+        body.nav #message .sub { font-size: 13px; }
 
         #toast {
             position: fixed;
@@ -151,6 +153,138 @@
             background: rgba(255, 255, 255, 0.10);
             color: #fff;
         }
+
+        /* ---- Event banner (discoveries, first landings) ---- */
+        #event {
+            position: fixed;
+            top: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 62;
+            padding: 9px 18px 10px;
+            background: rgba(8, 13, 22, 0.78);
+            border: 1px solid rgba(120, 255, 220, 0.30);
+            border-radius: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            text-align: center;
+            color: #eafff8;
+            pointer-events: none;
+            user-select: none;
+            opacity: 0;
+            transition: opacity 0.35s ease;
+        }
+        #event.show { opacity: 1; }
+        #event .title { font-size: 16px; font-weight: 700; }
+        #event .sub { font-size: 12px; color: rgba(234, 255, 248, 0.75); margin-top: 1px; }
+
+        /* ---- Nav labels (names of worlds in the zoomed-out view; placed from C++) ---- */
+        #nav-labels {
+            position: fixed;
+            inset: 0;
+            z-index: 40;
+            pointer-events: none;
+            user-select: none;
+            overflow: hidden;
+        }
+        #nav-labels .lbl {
+            position: absolute;
+            transform: translateX(-50%);
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+            font-size: 11px;
+            line-height: 1.25;
+            text-align: center;
+            white-space: nowrap;
+            color: #dfeaf6;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+        }
+        #nav-labels .lbl.here { color: #8fffe0; }
+        #nav-labels .lbl .sub { font-size: 10px; color: rgba(190, 208, 228, 0.75); }
+
+        #hud .sep { height: 1px; background: rgba(255, 255, 255, 0.12); margin: 7px 0 5px; }
+        #hud .keys { margin-top: 7px; font-size: 11px; color: rgba(159, 179, 200, 0.75); }
+
+        /* ---- Inventory (Tab) ---- */
+        #inventory {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.98);
+            z-index: 80;
+            width: min(644px, calc(100vw - 32px));
+            padding: 18px 20px 16px;
+            background: rgba(9, 13, 21, 0.86);
+            border: 1px solid rgba(140, 200, 255, 0.20);
+            border-radius: 12px;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #e8eef5;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
+            user-select: none;
+        }
+        #inventory.open {
+            opacity: 1;
+            visibility: visible;
+            transform: translate(-50%, -50%) scale(1);
+            transition: opacity 0.14s ease, transform 0.14s ease;
+        }
+        .inv-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+        .inv-title { font-size: 13px; font-weight: 700; letter-spacing: 0.16em; color: #8fffe0; }
+        .inv-sub { font-size: 13px; color: #9fb3c8; }
+        .inv-hint { margin-left: auto; font-size: 11px; color: rgba(159, 179, 200, 0.7);
+                    font-family: 'SFMono-Regular', Menlo, Consolas, monospace; }
+        #inv-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+        .inv-slot {
+            position: relative;
+            aspect-ratio: 1 / 1;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.045);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+        }
+        .inv-slot.filled { background: rgba(140, 200, 255, 0.09); border-color: rgba(140, 200, 255, 0.22); cursor: default; }
+        .inv-slot.filled:hover, .inv-slot.sel { border-color: #8fffe0; background: rgba(120, 255, 220, 0.12); }
+        .inv-slot svg { position: absolute; inset: 14% 14% 22% 14%; width: 72%; height: 64%; }
+        .inv-slot .name {
+            position: absolute; left: 6px; top: 5px; right: 6px;
+            font-size: 9px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+            color: rgba(232, 238, 245, 0.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .inv-slot .count {
+            position: absolute; right: 6px; bottom: 4px;
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 12px; font-weight: 600; color: #fff;
+        }
+        #inv-detail {
+            display: flex; gap: 14px; align-items: center;
+            margin-top: 14px; padding-top: 13px; border-top: 1px solid rgba(255, 255, 255, 0.10);
+            min-height: 66px;
+        }
+        #inv-detail-icon { width: 52px; height: 52px; flex: none; }
+        #inv-detail-icon svg { width: 100%; height: 100%; }
+        #inv-detail-name { font-size: 15px; font-weight: 700; }
+        #inv-detail-kind { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #8fffe0; margin: 1px 0 3px; }
+        #inv-detail-desc { font-size: 12.5px; line-height: 1.4; color: rgba(232, 238, 245, 0.78); }
+
+        /* ---- Pickup feed: what you just collected ---- */
+        #pickups {
+            position: fixed; right: 18px; bottom: 22px; z-index: 55;
+            display: flex; flex-direction: column-reverse; gap: 6px; align-items: flex-end;
+            pointer-events: none; user-select: none;
+        }
+        .pickup {
+            display: flex; align-items: center; gap: 8px;
+            padding: 5px 11px 5px 7px;
+            background: rgba(9, 13, 21, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 7px;
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 12px; color: #e8eef5;
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+        .pickup.out { opacity: 0; transform: translateX(14px); }
+        .pickup svg { width: 20px; height: 20px; }
+        .pickup .amt { color: #8fffe0; font-weight: 700; }
 
         /* ---- Debug panel ---- */
         #debug-toggle {
@@ -205,6 +339,21 @@
             font-size: 11px;
         }
         #debug-reset:hover { background: rgba(255, 255, 255, 0.16); }
+        #debug-system { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+        #debug-system .dbg-head { margin-bottom: 6px; }
+        #debug-system button {
+            background: rgba(255, 255, 255, 0.08);
+            color: #dde6f0;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 5px;
+            padding: 4px 7px;
+            margin: 0 4px 4px 0;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+        }
+        #debug-system button:hover { background: rgba(255, 255, 255, 0.16); }
+        #debug-system .hint { color: #9fb3c8; font-size: 11px; margin: 6px 0 4px; }
     </style>
 </head>
 <body>
@@ -218,8 +367,36 @@
         <div class="row"><span class="label">Cargo</span><span id="hud-cargo">0/3</span></div>
         <div class="row"><span class="label">Score</span><span id="hud-score">0</span></div>
         <div class="row"><span class="label">Status</span><span id="hud-status">FLYING</span></div>
+        <div class="row" id="hud-tool-row" style="display:none"><span class="label">Tool (Q)</span><span id="hud-tool">Mining laser</span></div>
+        <div class="sep"></div>
+        <div class="row"><span class="label">World</span><span id="hud-world">&mdash;</span></div>
+        <div class="row"><span class="label">Type</span><span id="hud-kind">&mdash;</span></div>
+        <div class="row"><span class="label">System</span><span id="hud-system">&mdash;</span></div>
+        <div class="row"><span class="label">Charted</span><span id="hud-charted">0/0</span></div>
+        <div class="keys">M map &nbsp;&middot;&nbsp; Tab inventory &nbsp;&middot;&nbsp; wheel zoom</div>
     </div>
 
+    <div id="nav-labels"></div>
+
+    <!-- Inventory: Tab / I opens it. Filled from C++ via window.setInventory. -->
+    <div id="inventory" role="dialog" aria-label="Inventory">
+        <div class="inv-head">
+            <span class="inv-title">EXOSUIT</span>
+            <span class="inv-sub">Cargo</span>
+            <span class="inv-hint">Tab to close</span>
+        </div>
+        <div id="inv-grid"></div>
+        <div id="inv-detail">
+            <div id="inv-detail-icon"></div>
+            <div class="inv-detail-text">
+                <div id="inv-detail-name">Nothing selected</div>
+                <div id="inv-detail-kind"></div>
+                <div id="inv-detail-desc">Point at something you are carrying.</div>
+            </div>
+        </div>
+    </div>
+    <div id="pickups"></div>
+    <div id="event"><div class="title" id="event-title"></div><div class="sub" id="event-sub"></div></div>
     <div id="message"></div>
     <div id="toast" role="status" aria-live="polite">
         <button id="toast-close" type="button" aria-label="Dismiss">&times;</button>
@@ -230,9 +407,42 @@
     <button id="debug-toggle">&#9776; Debug</button>
     <div id="debug-panel">
         <h3>DEBUG</h3>
+        <div id="debug-system">
+            <div class="dbg-head"><span>Star system</span><span class="val" id="debug-seed"></span></div>
+            <button id="debug-newsystem">New random system</button>
+            <div class="hint">Warp to (dev):</div>
+            <div id="debug-warp"></div>
+        </div>
         <div id="debug-rows"></div>
         <button id="debug-reset">Reset to defaults</button>
     </div>
+
+    <script>
+        // Which star system to generate. One seed builds the whole system
+        // (star, planets, moons, looks, names — see src/world/system_gen.cpp):
+        //   ?seed=1234 in the URL wins; otherwise the seed remembered from last
+        //   time (so reloading returns you to the same system); otherwise a
+        //   fresh random one. The debug panel's "New random system" rolls again.
+        (function () {
+            var KEY = 'rocket:seed';
+            var seed = 0;
+            try {
+                var q = new URLSearchParams(window.location.search).get('seed');
+                if (q !== null && /^\d+$/.test(q)) seed = parseInt(q, 10);
+            } catch (e) {}
+            if (!seed) { try { seed = parseInt(localStorage.getItem(KEY) || '0', 10) || 0; } catch (e) {} }
+            if (!seed) seed = 1 + Math.floor(Math.random() * 999998);
+            try { localStorage.setItem(KEY, String(seed)); } catch (e) {}
+            window.GAME_SEED = seed;
+            window.newRandomSystem = function () {
+                var next = 1 + Math.floor(Math.random() * 999998);
+                try { localStorage.setItem(KEY, String(next)); } catch (e) {}
+                var url = new URL(window.location.href);
+                url.searchParams.delete('seed');
+                window.location.href = url.toString();
+            };
+        })();
+    </script>
 
     <script>
         // window.DBG holds the live tunables; main.cpp reads it each frame via
@@ -242,20 +452,26 @@
             var DEFAULTS = {
                 // thrust 0.15 = the original game's tuning: thrust-to-weight
                 // ~1.25 at the home surface, enough to climb out to space.
-                thrust: 0.15, maxFuel: 250, beamRange: 300, beamWidth: 20,
+                thrust: 0.15, maxFuel: 250, fuelBurn: 0.05, refuelRate: 0.25,
+                beamRange: 300, beamWidth: 20,
                 planetDensity: 0.025, atmosphereScale: 0.4, atmosphereDrag: 0.015,
                 atmRayleighH: 1.5, atmRimH: 7.5, atmMieH: 2.0, atmSunIntensity: 44.0, atmExtinction: 4.5,
                 cloudHeight: 0.8, cloudCoverage: 1.0, cloudFalloff: 0.65, spaceHaze: 1.0,
                 nightDarkness: 0.16, nightSoftness: 0.30,
-                cameraGroundZoom: 0.2, cameraFraming: 0.4,
+                cameraGroundZoom: 1.8, cameraFraming: 0.4, cameraHorizon: 0.14, cameraSpeedLook: 2.2,
+                walkSpeed: 2.4, jumpSpeed: 3.0,
+                horizonHaze: 0.7, foreground: 1.0, vignette: 0.35, motes: 0, frontVeil: 0.45,
+                holeFloor: 0.34, holeDepth: 150,
                 sunOverride: -5
             };
             var PARAMS = [
                 { key: 'thrust',           label: 'Thrust',               min: 0.01,  max: 0.5,  step: 0.005 },
                 { key: 'maxFuel',          label: 'Max Fuel',             min: 100,   max: 1000, step: 25 },
+                { key: 'fuelBurn',         label: 'Fuel Burn (per frame)', min: 0.01, max: 0.3,  step: 0.01 },
+                { key: 'refuelRate',       label: 'Refuel While Landed',  min: 0,     max: 2.0,  step: 0.05 },
                 { key: 'beamRange',        label: 'Beam Range',           min: 50,    max: 800,  step: 10 },
                 { key: 'beamWidth',        label: 'Beam Width',           min: 5,     max: 200,  step: 1 },
-                { key: 'planetDensity',    label: 'Planet Density (gravity)', min: 0.005, max: 0.2, step: 0.005 },
+                { key: 'planetDensity',    label: 'Gravity (all bodies)', min: 0.005, max: 0.2, step: 0.005 },
                 { key: 'atmosphereScale',  label: 'Atmosphere Thickness', min: 0.1,   max: 3.0,  step: 0.05 },
                 { key: 'atmosphereDrag',   label: 'Atmosphere Drag',      min: 0,     max: 0.2,  step: 0.005 },
                 { key: 'atmRayleighH',     label: 'Sky: Surface Blue Falloff', min: 1, max: 12,  step: 0.5 },
@@ -271,18 +487,48 @@
                 { key: 'nightSoftness',    label: 'Terminator Softness',  min: 0.05,  max: 0.8,  step: 0.05 },
                 { key: 'cameraGroundZoom', label: 'Cam Ground Zoom',      min: 0.05,  max: 4.0,  step: 0.05 },
                 { key: 'cameraFraming',    label: 'Cam Framing',          min: 0.05,  max: 1.5,  step: 0.05 },
+                { key: 'cameraHorizon',    label: 'Cam Horizon Drop',     min: 0.0,   max: 0.3,  step: 0.01 },
+                { key: 'cameraSpeedLook',  label: 'Cam Speed Look-ahead (s, 0 = off)', min: 0.0, max: 6.0, step: 0.1 },
+                { key: 'walkSpeed',        label: 'Walk Speed',           min: 0.5,   max: 18.0, step: 0.1 },
+                { key: 'jumpSpeed',        label: 'Jump Speed',           min: 0.5,   max: 10.0, step: 0.1 },
+                { key: 'horizonHaze',      label: 'Horizon Haze',         min: 0.0,   max: 1.0,  step: 0.05 },
+                { key: 'foreground',       label: 'Foreground Band Height', min: 0.0, max: 1.6,  step: 0.05 },
+                { key: 'vignette',         label: 'Vignette',             min: 0.0,   max: 1.0,  step: 0.05 },
+                { key: 'motes',            label: 'Dust Motes (0 = off)', min: 0.0,   max: 1.0,  step: 0.05 },
+                { key: 'frontVeil',        label: 'Front Ground When In A Hole', min: 0.0, max: 1.0,  step: 0.05 },
+                { key: 'holeFloor',        label: 'Hole: darkest shade',  min: 0.1,   max: 0.8,  step: 0.02 },
+                { key: 'holeDepth',        label: 'Hole: depth it stops darkening', min: 40, max: 400, step: 10 },
                 { key: 'sunOverride',      label: 'Sun Angle (-5 = auto, 270 = noon)', min: -5, max: 360, step: 1 }
             ];
             var STORE_KEY = 'rocket:debug';
 
+            // Defaults that have since been replaced. A stored value that still
+            // equals one of these was never a choice — the panel used to save
+            // every slider whenever any one was touched — so it is dropped and
+            // the current default takes over. Add an entry here whenever a
+            // default changes.
+            var SUPERSEDED = { cameraGroundZoom: [0.2], frontVeil: [0.55] };
+
             var DBG = Object.assign({}, DEFAULTS);
             try {
                 var saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
-                for (var k in DEFAULTS) if (typeof saved[k] === 'number') DBG[k] = saved[k];
+                for (var k in DEFAULTS) {
+                    if (typeof saved[k] !== 'number') continue;
+                    if (SUPERSEDED[k] && SUPERSEDED[k].indexOf(saved[k]) !== -1) continue;
+                    DBG[k] = saved[k];
+                }
             } catch (e) {}
             window.DBG = DBG;
 
-            function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(DBG)); } catch (e) {} }
+            // Only sliders that differ from their default are stored, so a
+            // changed default reaches everyone who hasn't moved that slider.
+            function save() {
+                try {
+                    var custom = {};
+                    for (var k in DEFAULTS) if (DBG[k] !== DEFAULTS[k]) custom[k] = DBG[k];
+                    localStorage.setItem(STORE_KEY, JSON.stringify(custom));
+                } catch (e) {}
+            }
             function fmt(v) { return (Math.round(v * 1000) / 1000).toString(); }
 
             function build() {
@@ -304,6 +550,10 @@
                 document.getElementById('debug-toggle').addEventListener('click', function () {
                     var panel = document.getElementById('debug-panel');
                     panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+                });
+                document.getElementById('debug-seed').textContent = 'seed ' + window.GAME_SEED;
+                document.getElementById('debug-newsystem').addEventListener('click', function () {
+                    window.newRandomSystem();
                 });
                 document.getElementById('debug-reset').addEventListener('click', function () {
                     PARAMS.forEach(function (p) {
@@ -349,6 +599,222 @@
                 toastBody.textContent = body;
                 toastEl.style.display = 'block';
             }
+            // "Where am I": the world the ship answers to, plus chart progress.
+            window.updateNav = function (world, kind, system, found, total, seed) {
+                document.getElementById('hud-world').textContent = world;
+                document.getElementById('hud-kind').textContent = kind || '\u2014';
+                document.getElementById('hud-system').textContent = system;
+                document.getElementById('hud-charted').textContent = found + '/' + total;
+            };
+
+            // Hand tool mode (Q): 0 = mining laser, 1 = terrain cutter.
+            window.setTool = function (mode) {
+                var el = document.getElementById('hud-tool');
+                el.textContent = mode === 1 ? 'Terrain cutter' : 'Mining laser';
+                el.style.color = mode === 1 ? '#8fffe0' : '#ffb27a';
+            };
+
+            // ---- Inventory ------------------------------------------------
+            // Item catalog, by the ids main.cpp uses: 0 carbon, 1 ferrite, then
+            // one crystal per kind of world (2 + archetype), then what the
+            // caves hold (9 calcite, 10 glowcap, 11 gold).
+            var ITEMS = [
+                { name: 'Carbon', kind: 'Organic', icon: 'leaf', color: '#6fb05a',
+                  desc: 'Plant matter. Cut from grass and bulb plants with the mining laser.' },
+                { name: 'Ferrite', kind: 'Metal', icon: 'rock', color: '#b9ad9c',
+                  desc: 'Common metal-bearing rock. Mined from boulders, and dug out of the ground with the terrain cutter.' },
+                { name: 'Lumenite', kind: 'Crystal', icon: 'crystal', color: '#8cd9eb',
+                  desc: 'A pale blue crystal that grows on temperate worlds.' },
+                { name: 'Sunstone', kind: 'Crystal', icon: 'crystal', color: '#fa9e4d',
+                  desc: 'An amber crystal baked out of desert rock.' },
+                { name: 'Cryolite', kind: 'Crystal', icon: 'crystal', color: '#c7edff',
+                  desc: 'A clear, cold crystal found on ice worlds.' },
+                { name: 'Emberglass', kind: 'Crystal', icon: 'crystal', color: '#ff7533',
+                  desc: 'A glowing volcanic crystal, still warm.' },
+                { name: 'Verdite', kind: 'Crystal', icon: 'crystal', color: '#d9f280',
+                  desc: 'A lime-green crystal from jungle worlds.' },
+                { name: 'Xenolith', kind: 'Crystal', icon: 'crystal', color: '#e58cf0',
+                  desc: 'A crystal with no business existing. Found on exotic worlds.' },
+                { name: 'Moonshard', kind: 'Crystal', icon: 'crystal', color: '#d9dceb',
+                  desc: 'A hard, pale crystal from airless moons and barren worlds.' },
+                { name: 'Calcite', kind: 'Mineral', icon: 'spike', color: '#d8cdb8',
+                  desc: 'Dripstone. Mined from the stalactites, stalagmites and columns in natural caves.' },
+                { name: 'Glowcap', kind: 'Organic', icon: 'cap', color: '#6ff2cc',
+                  desc: 'A luminous cave mushroom. It grows back a while after it is picked.' },
+                { name: 'Gold', kind: 'Metal', icon: 'nugget', color: '#ffcc42',
+                  desc: 'Native gold, in veins in the walls of the deepest caves.' }
+            ];
+            var SLOT_COUNT = 18;
+            function shade(hex, k) {
+                var n = parseInt(hex.slice(1), 16);
+                var r = Math.round(((n >> 16) & 255) * k), g = Math.round(((n >> 8) & 255) * k), b = Math.round((n & 255) * k);
+                return 'rgb(' + r + ',' + g + ',' + b + ')';
+            }
+            // Flat two-tone icons, in the game's own style.
+            function iconSvg(item) {
+                var c = item.color, d = shade(item.color, 0.62);
+                var body;
+                if (item.icon === 'leaf') {
+                    body = '<path d="M20 36 L11 12 L18 30 Z" fill="' + d + '"/><path d="M20 36 L20 6 L24 30 Z" fill="' + c + '"/>' +
+                           '<path d="M20 36 L31 13 L25 31 Z" fill="' + d + '"/><path d="M20 36 L5 22 L15 32 Z" fill="' + c + '"/>' +
+                           '<path d="M20 36 L36 23 L26 33 Z" fill="' + c + '"/>';
+                } else if (item.icon === 'rock') {
+                    body = '<path d="M5 34 L8 20 L17 11 L29 13 L36 24 L35 34 Z" fill="' + d + '"/>' +
+                           '<path d="M10 21 L17 13 L28 15 L24 24 L13 26 Z" fill="' + c + '"/>';
+                } else if (item.icon === 'spike') {
+                    body = '<path d="M6 5 L20 5 L16 35 Z" fill="' + d + '"/><path d="M20 5 L26 5 L16 35 Z" fill="' + c + '"/>' +
+                           '<path d="M24 5 L30 5 L29 22 Z" fill="' + d + '"/><path d="M30 5 L35 5 L29 22 Z" fill="' + c + '"/>';
+                } else if (item.icon === 'cap') {
+                    body = '<path d="M18 36 L18 20 L22 20 L23 36 Z" fill="' + d + '"/>' +
+                           '<path d="M5 21 Q20 -2 35 21 Z" fill="' + c + '"/><path d="M5 21 L35 21 L33 24 L7 24 Z" fill="' + d + '"/>';
+                } else if (item.icon === 'nugget') {
+                    body = '<path d="M6 30 L10 16 L22 9 L33 15 L35 28 L24 35 L12 35 Z" fill="' + d + '"/>' +
+                           '<path d="M12 18 L22 11 L31 16 L25 23 L15 25 Z" fill="' + c + '"/>';
+                } else {
+                    body = '<path d="M9 36 L6 22 L11 14 L16 23 L15 36 Z" fill="' + d + '"/>' +
+                           '<path d="M25 36 L27 20 L32 13 L35 23 L32 36 Z" fill="' + d + '"/>' +
+                           '<path d="M14 36 L15 14 L20 4 L20 36 Z" fill="' + d + '"/><path d="M20 36 L20 4 L25 14 L26 36 Z" fill="' + c + '"/>';
+                }
+                return '<svg viewBox="0 0 40 40" aria-hidden="true">' + body + '</svg>';
+            }
+            var invCounts = [], invSelected = -1;
+            function showDetail(id) {
+                invSelected = id;
+                var item = ITEMS[id];
+                document.getElementById('inv-detail-icon').innerHTML = item ? iconSvg(item) : '';
+                document.getElementById('inv-detail-name').textContent = item ? item.name + '  \u00d7 ' + (invCounts[id] || 0) : 'Nothing selected';
+                document.getElementById('inv-detail-kind').textContent = item ? item.kind : '';
+                document.getElementById('inv-detail-desc').textContent = item ? item.desc : 'Point at something you are carrying.';
+                var slots = document.querySelectorAll('#inv-grid .inv-slot');
+                for (var i = 0; i < slots.length; i++) slots[i].classList.toggle('sel', slots[i].dataset.item === String(id));
+            }
+            function renderInventory() {
+                var grid = document.getElementById('inv-grid');
+                grid.innerHTML = '';
+                var held = [];
+                for (var id = 0; id < ITEMS.length; id++) if (invCounts[id] > 0) held.push(id);
+                for (var s = 0; s < SLOT_COUNT; s++) {
+                    var slot = document.createElement('div');
+                    slot.className = 'inv-slot';
+                    if (s < held.length) {
+                        var item = ITEMS[held[s]];
+                        slot.className += ' filled';
+                        slot.dataset.item = held[s];
+                        slot.innerHTML = '<div class="name">' + item.name + '</div>' + iconSvg(item) +
+                                         '<div class="count">' + invCounts[held[s]] + '</div>';
+                        (function (id2) { slot.addEventListener('mouseenter', function () { showDetail(id2); }); })(held[s]);
+                    }
+                    grid.appendChild(slot);
+                }
+                if (invSelected >= 0 && !(invCounts[invSelected] > 0)) invSelected = -1;
+                if (invSelected < 0 && held.length) invSelected = held[0];
+                showDetail(invSelected);
+            }
+            // "c0,c1,c2,..." from main.cpp whenever a count changes.
+            window.setInventory = function (packed) {
+                invCounts = packed.split(',').filter(function (x) { return x !== ''; }).map(Number);
+                renderInventory();
+            };
+            window.toggleInventory = function (open) {
+                var el = document.getElementById('inventory');
+                var want = open === undefined ? !el.classList.contains('open') : open;
+                el.classList.toggle('open', want);
+            };
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Tab' || e.key === 'i' || e.key === 'I') { e.preventDefault(); if (!e.repeat) window.toggleInventory(); }
+                else if (e.key === 'Escape') window.toggleInventory(false);
+            });
+
+            // Pickup feed: "+2 Lumenite" for a few seconds; repeats of the same
+            // item while it is still showing add up instead of stacking.
+            var feed = {};
+            window.notifyPickup = function (id, amount) {
+                var item = ITEMS[id];
+                if (!item) return;
+                var box = document.getElementById('pickups');
+                var entry = feed[id];
+                if (!entry) {
+                    entry = feed[id] = { el: document.createElement('div'), total: 0, timer: null };
+                    entry.el.className = 'pickup';
+                    box.appendChild(entry.el);
+                }
+                entry.total += amount;
+                entry.el.classList.remove('out');
+                entry.el.innerHTML = iconSvg(item) + '<span class="amt">+' + entry.total + '</span><span>' + item.name + '</span>';
+                clearTimeout(entry.timer);
+                entry.timer = setTimeout(function () {
+                    entry.el.classList.add('out');
+                    setTimeout(function () { if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el); delete feed[id]; }, 420);
+                }, 2600);
+            };
+
+            // One-line banner for discoveries / first landings; fades after a few seconds.
+            var eventTimer = null;
+            window.showEvent = function (title, sub) {
+                var el = document.getElementById('event');
+                document.getElementById('event-title').textContent = title;
+                document.getElementById('event-sub').textContent = sub || '';
+                el.classList.add('show');
+                if (eventTimer) clearTimeout(eventTimer);
+                eventTimer = setTimeout(function () { el.classList.remove('show'); }, 4500);
+            };
+
+            // World name labels for the zoomed-out view. C++ sends one record
+            // per visible world: "x,y,name,kind,distanceK,here;" in CSS pixels.
+            var labelPool = [];
+            window.setNavLabels = function (packed, alpha) {
+                var layer = document.getElementById('nav-labels');
+                var recs = packed ? packed.split(';') : [];
+                var n = 0;
+                for (var i = 0; i < recs.length; i++) {
+                    if (!recs[i]) continue;
+                    var f = recs[i].split(',');
+                    var el = labelPool[n];
+                    if (!el) {
+                        el = document.createElement('div');
+                        el.className = 'lbl';
+                        el.appendChild(document.createElement('div'));
+                        var sub = document.createElement('div'); sub.className = 'sub';
+                        el.appendChild(sub);
+                        layer.appendChild(el);
+                        labelPool[n] = el;
+                    }
+                    var here = f[5] === '1';
+                    el.className = here ? 'lbl here' : 'lbl';
+                    el.style.display = 'block';
+                    el.style.left = f[0] + 'px';
+                    el.style.top = f[1] + 'px';
+                    el.firstChild.textContent = f[2];
+                    el.lastChild.textContent = here ? f[3] : f[3] + ' \u00b7 ' + f[4] + 'k';
+                    n++;
+                }
+                for (var j = n; j < labelPool.length; j++) labelPool[j].style.display = 'none';
+                layer.style.opacity = (alpha === undefined ? 1 : alpha);
+                // The centered status message would sit on top of the chart.
+                document.body.classList.toggle('nav', n > 0 && alpha > 0.5);
+            };
+
+            // Body list for the debug panel's "Warp to" buttons:
+            // "index,name,kind,isSun;" (sent once at startup).
+            window.setBodies = function (packed) {
+                var box = document.getElementById('debug-warp');
+                if (!box) return;
+                box.innerHTML = '';
+                packed.split(';').forEach(function (rec) {
+                    if (!rec) return;
+                    var f = rec.split(',');
+                    if (f[3] === '1') return;   // can't land on the star
+                    var b = document.createElement('button');
+                    b.textContent = f[1];
+                    b.title = f[2];
+                    b.addEventListener('click', function () {
+                        if (window.Module && Module._debugWarpTo) Module._debugWarpTo(parseInt(f[0], 10));
+                        b.blur();
+                    });
+                    box.appendChild(b);
+                });
+            };
+
             // state: 0 = playing, 1 = landed, 2 = crashed  spacewalking: 0/1
             window.updateHUD = function (fuel, maxFuel, altitude, velocity, state, cargo, maxCargo, score, spacewalking) {
                 if (!fuelEl) cache();
@@ -358,9 +824,12 @@
                     toastEl.style.display = 'none';
                 }
                 if (enteredSpacewalk && !spacewalkToastDismissed) {
-                    showToast('Spacewalking', 'A/D or arrows walk. E re-enters the ship when you are close.');
+                    showToast('Spacewalking', 'A/D walk, W jump, Space jetpack. Hold the mouse button to fire the tool at the cursor; Q switches between the mining laser (plants, rocks, crystals) and the terrain cutter (digs). Tab opens your inventory. E re-enters the ship when you are close.');
                 }
                 wasSpacewalking = !!spacewalking;
+                // On foot the pointer aims the hand tool, and the HUD says which mode it is in.
+                document.getElementById('canvas').style.cursor = spacewalking ? 'crosshair' : 'default';
+                document.getElementById('hud-tool-row').style.display = spacewalking ? 'flex' : 'none';
 
                 var f = Math.max(0, Math.round(fuel));
                 var mf = Math.round(maxFuel);

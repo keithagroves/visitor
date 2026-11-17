@@ -6,6 +6,30 @@ namespace Input {
 
 static bool keys[256] = {false};
 static double wheelDelta = 0;
+static float mouseX = -1.0f, mouseY = -1.0f;
+static bool mouseDown = false;
+
+static EM_BOOL mouseMoveCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
+    mouseX = (float)e->targetX;
+    mouseY = (float)e->targetY;
+    return EM_FALSE;
+}
+
+static EM_BOOL mouseDownCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
+    if (e->button == 0) {
+        mouseX = (float)e->targetX;
+        mouseY = (float)e->targetY;
+        mouseDown = true;
+    }
+    return EM_FALSE;
+}
+
+// Release is caught on the whole window, so letting go outside the canvas
+// (over the HUD, off the page) can't leave the button stuck down.
+static EM_BOOL mouseUpCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
+    if (e->button == 0) mouseDown = false;
+    return EM_FALSE;
+}
 
 static EM_BOOL wheelCallback(int eventType, const EmscriptenWheelEvent* e, void* userData) {
     wheelDelta += e->deltaY;
@@ -31,7 +55,10 @@ void init(const char* canvasId) {
     // Wheel on the canvas only, so scrolling over the debug panel scrolls it
     // instead of zooming the world.
     emscripten_set_wheel_callback(canvasId, nullptr, true, wheelCallback);
-    printf("Input system initialized (keyboard + wheel)\n");
+    emscripten_set_mousemove_callback(canvasId, nullptr, true, mouseMoveCallback);
+    emscripten_set_mousedown_callback(canvasId, nullptr, true, mouseDownCallback);
+    emscripten_set_mouseup_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, true, mouseUpCallback);
+    printf("Input system initialized (keyboard + wheel + mouse)\n");
 }
 
 bool isKeyDown(int keyCode) {
@@ -44,6 +71,10 @@ bool isPointerLocked() { return false; }
 float getMouseDeltaX() { return 0.0f; }
 float getMouseDeltaY() { return 0.0f; }
 void resetMouseDelta() {}
+
+float getMouseX() { return mouseX; }
+float getMouseY() { return mouseY; }
+bool isMouseDown() { return mouseDown; }
 
 float getWheelDelta() { return (float)wheelDelta; }
 void resetWheelDelta() { wheelDelta = 0; }
