@@ -1,165 +1,115 @@
-# Infinite Terrain Explorer
+# Visitor
 
-A procedurally generated 3D terrain explorer built with C++ and OpenGL ES, compiled to WebAssembly for the browser.
+A 2D space-exploration game that runs in the browser. It's written in C++ and
+OpenGL ES 3.0, and compiled to WebAssembly and WebGL 2 with Emscripten.
 
-## Demo
+**[Play it here →](https://keithagroves.github.io/visitor/)**
 
-First-person exploration of an infinite procedural world with:
-- Mountains, valleys, and rivers generated with Perlin noise
-- Dynamic chunk loading/unloading as you move
-- Animated water with underwater effects
-- Height-based terrain coloring (water, sand, grass, rock, snow)
-- Atmospheric fog
+You fly a small lander through a procedurally generated solar system. Beam
+cows up from the home world, then step outside in a jetpack to dig into the
+crust, mine ore and explore caves. Sell what you find to the locals at their
+trading posts, buy upgrades, and fly on to chart the next planet.
 
-## How It Works
+- **A new solar system from every seed.** One number generates the star,
+  4–6 planets, their moons, and each world's colours, sky, clouds, terrain,
+  gravity and name.
+- **Fully destructible planets.** Each world is a huge solid body that you can
+  cut into anywhere. It has natural caves, buried ore, and water that floods
+  the holes you dig.
+- **Real orbital flight.** Gravity falls off with distance, planets and moons
+  follow Kepler orbits, and atmospheric drag lets you burn off speed and set
+  down gently.
+- **Computed skies.** Rayleigh and Mie atmospheric scattering, sunsets, drifting
+  clouds and a day/night terminator, all drawn by full-screen shader passes.
 
-```
-C++ / OpenGL ES 3.0          Emscripten (emcc)           Browser
-       │                           │                        │
-       ▼                           ▼                        ▼
-┌─────────────────┐         ┌─────────────┐         ┌──────────────┐
-│  src/**/*.cpp   │         │             │         │  game.wasm   │
-│  src/**/*.h     │ ──────► │   emcc      │ ──────► │  game.js     │
-│  (OpenGL ES)    │         │   compiler  │         │  game.html   │
-└─────────────────┘         └─────────────┘         └──────────────┘
-                                                           │
-                                                           ▼
-                                                    ┌──────────────┐
-                                                    │  WebGL 2.0   │
-                                                    │  (browser)   │
-                                                    └──────────────┘
-```
-
-| Source | Target |
-|--------|--------|
-| C++ | WebAssembly |
-| OpenGL ES 3.0 | WebGL 2.0 |
-| GLSL ES 300 | WebGL 2 shaders |
+> Visitor is still in active development. Expect rough edges and missing
+> features.
 
 ## Controls
 
+**In the ship**
+
 | Input | Action |
-|-------|--------|
-| Click canvas | Enable mouse look |
-| Mouse | Look around |
-| W / Up | Move forward |
-| S / Down | Move backward |
-| A / Left | Strafe left |
-| D / Right | Strafe right |
-| Space | Move up |
-| Shift | Move down (go underwater!) |
-| ESC | Release mouse |
+|---|---|
+| W / ↑ | Thrust |
+| A / D | Rotate |
+| Space | Tractor beam |
+| E | Leave / board the ship |
+| M | System map |
+| Mouse wheel or + / − | Zoom |
+| R | Restart after a crash |
 
-## Project Structure
+**On foot**
 
-```
-src/
-├── core/
-│   └── main.cpp              # Application entry point and game loop
-├── graphics/
-│   ├── shader.h/cpp          # Shader compilation utilities
-│   └── shaders.h             # GLSL shader source code
-├── input/
-│   ├── camera.h/cpp          # First-person camera
-│   ├── crosshair.h/cpp       # HUD crosshair
-│   └── input.h/cpp           # Keyboard/mouse handling
-├── math/
-│   ├── vecmath.h             # Vec3, Mat4 math types
-│   └── noise.h               # Perlin noise generator
-└── world/
-    ├── chunked_terrain.h/cpp # Infinite terrain chunk system
-    ├── terrain.h/cpp         # Single terrain (legacy)
-    └── water.h/cpp           # Animated water plane
-```
+| Input | Action |
+|---|---|
+| A / D | Walk (and steer in the air) |
+| W | Jump |
+| Space | Jetpack |
+| Hold mouse button | Fire your tool at the cursor |
+| Q | Switch between the mining laser and the terrain cutter |
+| E | Trade, when standing at a trader's stall |
+| Tab or I | Inventory |
+
+### URL options
+
+- `?seed=1234` plays a specific solar system. Without it you return to your
+  last system, and on your first visit you get a random one.
+- `?debug` turns on the developer panel, with live tuning sliders, warps
+  between worlds and new random systems. This setting is remembered on your
+  browser; `?debug=0` turns it off again.
 
 ## Building
 
-### Prerequisites
-
-1. **Emscripten SDK**
-   ```bash
-   git clone https://github.com/emscripten-core/emsdk.git
-   cd emsdk
-   ./emsdk install latest
-   ./emsdk activate latest
-   source ./emsdk_env.sh
-   ```
-
-2. **CMake** (optional, for IDE support)
-   ```bash
-   brew install cmake  # macOS
-   ```
-
-### Build & Run
+You need the [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html):
 
 ```bash
-# Activate Emscripten (if not already)
-source ./emsdk/emsdk_env.sh
-
-# Build
-./build.sh
-
-# Run local server
-cd build && python3 -m http.server 8080
-
-# Open browser
-open http://localhost:8080/game.html
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk && ./emsdk install latest && ./emsdk activate latest
+source ./emsdk_env.sh
 ```
 
-> Note: You must serve via HTTP server. `file://` URLs won't work due to CORS restrictions on WASM.
+Then build from the repo root, and serve the output over HTTP. Browsers won't
+load WebAssembly from `file://` URLs.
 
-## Technical Details
+```bash
+./build.sh
+cd build && python3 -m http.server 8080
+# open http://localhost:8080/game.html
+```
 
-### Terrain Generation (CPU)
+Every push to `main` builds and deploys the game to GitHub Pages
+([.github/workflows/deploy.yml](.github/workflows/deploy.yml)).
 
-- **Chunked system**: 128x128 world unit chunks with 64x64 vertex grids
-- **Perlin noise**: Multi-octave noise for varied terrain features
-- **Rivers**: Domain-warped noise creates natural meandering paths
-- **Dynamic loading**: Chunks load/unload based on camera position (5 chunk render distance)
+## How it's put together
 
-### Shaders (GPU)
+```
+src/
+├── core/       main loop, game state, camera, shader passes, trading, debug knobs
+├── entities/   the lander, the astronaut, cows
+├── world/      solar-system generation, planets, destructible terrain, caves,
+│               ore deposits, water, trading posts
+├── graphics/   immediate-mode 2D batch renderer, shader helper
+├── input/      browser keyboard/mouse bridge
+└── math/       Vec2/Mat3 (degree-based trig), Perlin noise
+shell.html      the page around the game: HUD, inventory, trading UI, debug panel
+```
 
-- **Terrain**: Height-based coloring, diffuse + specular lighting, distance fog
-- **Water surface**: Animated sine waves, fresnel reflection
-- **Underwater surface**: Caustic patterns, light rays from above
-- **Underwater overlay**: Screen-space distortion, vignette, caustic effects
+The architecture docs start at [docs/overview.md](docs/overview.md), and the
+visual rules are in [docs/art-style.md](docs/art-style.md).
 
-### Key Parameters
+## Acknowledgements
 
-| Parameter | Value | Location |
-|-----------|-------|----------|
-| Chunk size | 128 units | `chunked_terrain.h` |
-| Chunk vertices | 64x64 | `chunked_terrain.h` |
-| Mountain height | 80 units | `chunked_terrain.h` |
-| Render distance | 5 chunks | `chunked_terrain.h` |
-| Camera height | 1.8 units | `camera.h` |
-| Move speed | 6 units/sec | `camera.h` |
-
-## OpenGL ES 3.0 / WebGL 2.0 Notes
-
-- Use `#version 300 es` in shaders
-- GLSL ES requires precision qualifiers: `precision mediump float;`
-- Use `in`/`out` instead of `attribute`/`varying`
-- Fragment shader outputs to `out vec4 fragColor` instead of `gl_FragColor`
-- VAOs are required (unlike WebGL 1.0)
-
-## Useful Emscripten Flags
-
-| Flag | Purpose |
-|------|---------|
-| `-s USE_WEBGL2=1` | Enable WebGL 2.0 |
-| `-s FULL_ES3=1` | Full OpenGL ES 3.0 support |
-| `-s ALLOW_MEMORY_GROWTH=1` | Dynamic memory allocation |
-| `-s ASSERTIONS=1` | Debug assertions (dev only) |
-| `-O2` / `-O3` | Optimize for release |
-| `--preload-file dir@/mount` | Bundle assets |
-
-## Resources
-
-- [Emscripten Documentation](https://emscripten.org/docs/)
-- [OpenGL ES 3.0 Reference](https://registry.khronos.org/OpenGL-Refpages/es3.0/)
-- [WebGL2 Fundamentals](https://webgl2fundamentals.org/)
+- Visitor started as a C++ port of *cow-abductor*, an earlier p5.js game by
+  the same author.
+- The sky and lighting work drew on Maxime Heckel's
+  [shader articles](https://blog.maximeheckel.com/) on atmospheric scattering
+  and volumetric light, and on Sébastien Hillaire's
+  [*A Scalable and Production Ready Sky and Atmosphere Rendering Technique*](https://sebh.github.io/publications/egsr2020.pdf).
+- The art direction takes cues from *A Short Hike*.
 
 ## License
 
-MIT
+[AGPL-3.0](LICENSE). You're free to use, modify and share this code, but
+anything you build on it, including a modified version you host online, must
+be released under the same license with its full source.

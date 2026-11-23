@@ -1,6 +1,6 @@
 ---
 name: world
-description: The generated solar system — system_gen builds a star, planets and moons from one seed (archetype looks, Kepler orbits, names); each Planet owns a procedural silhouette, 1/r^2 gravity, atmosphere shell, ridge layers, a lazy coarse TerrainField, and a fine CarveMap of everything dug out of it, which the body shader pass renders per pixel.
+description: The generated solar system — system_gen builds a star, planets and moons from one seed (archetype looks, Kepler orbits, names); each Planet owns a procedural silhouette, 1/r^2 gravity, atmosphere shell, ridge layers, a sea level (ponds, lakes and seas on the wetter kinds of world), a lazy coarse TerrainField, and a fine CarveMap of everything dug out of it — and of which of that has flooded — which the body shader pass renders per pixel.
 tags: [world, planet, terrain, procedural, generation, density-field]
 ---
 
@@ -110,6 +110,40 @@ flowchart TD
   frame (`orbitStep`, what things standing on the surface are carried by).
   `applyGlobalDensity` applies the debug gravity knob to every body while
   preserving each one's relative density (and the star's mass ratio).
+- **Water** — a wet world has ONE water level (`Planet::seaLevel`, above
+  the base radius; `seaRadius()` is the surface as a circle round the
+  center). `generate()` sets it where a chosen share of the ground lies
+  below it, so the terrain's own low ground fills into a handful of ponds,
+  lakes and seas of whatever size it offers (typically five to ten bodies,
+  a few hundred to fifteen thousand units across, up to a few hundred
+  deep). The share comes from the archetype (`TerrainStyle::seaChance` /
+  `seaMin` / `seaMax`): temperate about a fifth, jungle a quarter to a
+  third, ice a tenth to a fifth, exotic worlds some liquid or other about
+  two times in three, desert the odd waterhole, volcanic and airless
+  worlds none; the colors are `PlanetLook::water` / `waterDeep`. It is
+  drawn from the planet's own seed with its own RNG, so dry worlds — and
+  everything else about wet ones — generate exactly as they did. Three
+  things are fitted to it: the home world's drop-in point is raised clear
+  of the water where it would have been awash (the rise slopes back down
+  into it as a shore); mesas keep off wet ground, so the caves in their
+  flanks open dry; and nothing is planted under water. `visibleRadius()`
+  is the ground as seen from above — terrain, or the water over it — which
+  is what the ship comes down on and shadows fall on. `waterDepth(point)`
+  says how far under the surface a point is *if it is in water*: in the
+  sea (open, above the ground, under the level), or in dug space the water
+  has got into. **Flooding.** A hole is dry until it connects to water:
+  `CarveMap` marks the dug samples that lie below the level and touch
+  water — the sea, or an already-flooded neighbor — and carries on along
+  the tunnel from there (`flood`, run over the block each bite changes;
+  water only ever gains ground, so nothing is recomputed). So a shaft sunk
+  beside a lake stays dry however deep, one cut in the lake bed fills as it
+  is cut, and a tunnel that breaks through into the lake floods at once,
+  back to its far end and up any shaft to the level. Each bite remembers
+  that it flooded (`Op::wet`), so a flooded tunnel is still flooded when
+  the window is rebuilt somewhere its link to the sea is out of sight. The
+  flooded samples are mirrored to the GPU (`wet()`, an R8 texture) for the
+  water shader. The level is a debug knob too (`waterLevel`: raise or
+  lower every sea; the dig window is re-flooded when it moves).
 - **Cave field** ([cavefield.cpp](../../src/world/cavefield.cpp)) — what
   grows in the natural caves: stalactites, stalagmites, columns (calcite),
   glowing crystal clusters (the world's crystal), glowcap mushrooms (grow
@@ -133,6 +167,34 @@ flowchart TD
   prop, times the light and the same shade, stepped up ~1.6x / ~2.2x so both
   faces sit above the wall. Crystals, glowcaps and gold are emitted light and
   keep their own colors.
+- **Buried ore** ([deposits.cpp](../../src/world/deposits.cpp)) — clumps of
+  ferrite, the world's crystal and gold through the rock of every rocky
+  world, invisible until digging exposes them. They are seeded on a grid of
+  150-unit squares (planet-local): each square holds a short vein of 1–5
+  clumps or nothing, worked out from the planet's seed and the square alone
+  whenever something asks — nothing is generated up front, and a planet
+  stores only the clumps found so far (`Planet::ores`) and the ids it has
+  looked at (`Planet::oreSeen`; -1 = a cave hollowed it out). A vein's kind
+  follows its depth below the ground line — ferrite from a little way down,
+  the crystal from ~80, gold from ~150 and more of it deeper — weighted by
+  the kind of world (volcanic leans gold, ice crystal, barren ferrite);
+  stretches of ground a few hundred strides long are rich or barren, and
+  `oreRichness` (debug panel) scales it all. The default (`BASE_CHANCE`)
+  was tuned with a headless run of straight tunnels: a vein every ~8–15 s
+  of cutting, the first within a few seconds; shallower than ~100 a little
+  sparser. A clump stops the cutter (see core.md), so tunnelling halts
+  at one and leaves it in the wall. A clump holds as many pieces as it
+  yields (`pieces`: 2–3 gold nuggets, 2–4 ferrite cubes, 3–4 crystal
+  shards, laid out by `layout`), and the mining laser takes them one at a
+  time (`taken`, from `Ore::hp`, which never recovers); with the last it
+  digs the clump's pocket, `POCKET` wider than it was, and a vein's clumps
+  sit just close enough that the pocket shows the next. The cutter held on
+  a clump destroys it instead: `Ore::heat` rises to 1 over `burnSeconds`
+  (toughness x the `oreBurn` knob) and the clump is taken out the same way
+  with nothing collected; heat cools at 0.45/s once the cutter is off it. When the carve window is
+  rebuilt (`scanWindow`) the clumps a cave's walls already run past are
+  revealed, so caves show some ore from the start. Clumps are drawn like
+  the caves' contents: `WALK_DROP` lower, only for a player underground.
 - **Near field** ([nearfield.cpp](../../src/world/nearfield.cpp)) — the strip
   of ground around the walking line and the **harvestables** standing on it
   (`Planet::harvest`: grass, bulb plants, crystals, rocks; what grows and how
@@ -157,6 +219,34 @@ flowchart TD
   the walking line is drawn — and therefore holes), the shape of a hole's
   mouth (`MOUTH`, `MOUTH_RISE`, `MOUTH_ROUND`) and how far the front strip
   reaches (`FRONT_DEPTH`).
+- **The locals and their trading posts**
+  ([outposts.cpp](../../src/world/outposts.cpp)) — every world has people of
+  its own. `Planet::foundOutposts` (the last step of `generate()`) draws one
+  **kind** per world from its seed (`Planet::Folk`: skin color — any hue but
+  the ground's or the world's crystal color — height, girth, one to three
+  eyes, one of three body plans: a one-piece gumdrop, a head on a neck, a
+  low dome with its eyes on stalks; antennae; a glass bubble helmet where
+  there is no air) and places their **posts** (`Planet::outposts`): about
+  one per 50,000 units of ground, one to a sector round the world, each on
+  the most level ground a couple of dozen looks turn up that is dry, clear
+  of mesas (and so of caves) and well apart from the others. The home
+  world's first post is always a short walk — 700 to 1500 units — from
+  where the ship drops in. Every world gets at least one. Plants and stones
+  are cleared off the ground a post stands on. A post is a domed hut, a
+  market stall with the **trader** behind its counter, a mast with a
+  lantern, a crate and a pot, standing on the strip of ground just behind
+  the walking line (so the ship and the astronaut pass in front), and one
+  to three more locals who wander the ground either side of it
+  (`Planet::Alien`). `Outposts::update` is their day: wanderers amble to a
+  spot on their stretch, stand, pick another; anyone you walk right up to
+  stops and turns to look; the trader faces you from further off and waves
+  when you first arrive. `Outposts::draw` draws it all in the hour's light
+  (each piece rooted at its own angle, on the lowest ground under it, no
+  parallax); `nearest` / `inReach` are what the HUD pointer and the E key
+  ask; `blocksDig` keeps the cutter `NO_DIG` units away, because a post
+  stands on the terrain's outline like the ship and would be left hanging
+  over a hole. What a post pays and sells is not here: see
+  [core](core.md) (`trade.cpp`).
 - **TerrainField** — a 2D signed-density grid in world space, organized around
   the planet centre. Each corner stores density (>0 solid rock, <0 open/cave,
   0-isoline = surface), seeded from the planet heightfield. It is the source of
@@ -193,8 +283,15 @@ flowchart TD
 - [src/world/cavefield.h](../../src/world/cavefield.h) ·
   [cavefield.cpp](../../src/world/cavefield.cpp) — cave props: drawing,
   picking, mining rules, lights.
+- [src/world/deposits.h](../../src/world/deposits.h) ·
+  [deposits.cpp](../../src/world/deposits.cpp) — buried ore: the seeding
+  grid, revealing, the cutter's rule, picking, mining, drawing.
 - [src/world/harvest_gen.cpp](../../src/world/harvest_gen.cpp) —
   `growHarvest`: where the plants and minerals grow.
+- [src/world/outposts.h](../../src/world/outposts.h) ·
+  [outposts.cpp](../../src/world/outposts.cpp) — the locals and their
+  trading posts: the per-world kind, placement, their daily life, drawing,
+  reach and the no-dig zone.
 - [src/world/nearfield.h](../../src/world/nearfield.h) ·
   [nearfield.cpp](../../src/world/nearfield.cpp) — harvestables in depth:
   placement on screen, drawing, picking, harvest rules, regrowth.

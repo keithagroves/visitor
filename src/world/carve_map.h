@@ -29,7 +29,11 @@ public:
     static constexpr float CELL = 6.0f;      // world units between samples
     static constexpr float OPEN = 1.0e4f;    // "nothing dug near here"
 
-    struct Op { Vec2 local; float radius; }; // one circular bite, planet-local
+    // One circular bite, planet-local. `wet`: water has got into it (see
+    // Water, below) — remembered with the bite, so a flooded tunnel is still
+    // flooded when the window is rebuilt somewhere its link to the sea is out
+    // of sight.
+    struct Op { Vec2 local; float radius; bool wet = false; };
     struct Rect { int i0 = 0, j0 = 0, i1 = -1, j1 = -1; bool empty() const { return i1 < i0 || j1 < j0; } };
     // The terrain's density (> 0 rock) at a planet-local point: where the sky
     // is, so open space over a hole's mouth counts as open.
@@ -40,6 +44,9 @@ public:
         d_.clear(); d_.shrink_to_fit();
         raw_.clear(); raw_.shrink_to_fit();
         terrain_.clear(); terrain_.shrink_to_fit();
+        flooded_.clear(); flooded_.shrink_to_fit();
+        wet_.clear(); wet_.shrink_to_fit();
+        wetDirty_ = Rect{};
     }
 
     // Center the window on a planet-local point and rebuild it from every bite
@@ -55,6 +62,25 @@ public:
     // Signed distance to dug space at a planet-local point (bilinear). OPEN
     // outside the window.
     float sample(Vec2 local) const;
+
+    // --- Water ----------------------------------------------------------------
+    // A world's water stands at one level (a radius from its center; set it
+    // before recenter). Above the ground that is simply the sea. Dug space
+    // takes water only where it CONNECTS to some: a sample that has been dug,
+    // lies below the level and touches water — the sea, or a flooded sample
+    // next to it — floods, and so on along the tunnel. Water only ever gets
+    // into more space, so each bite just carries on from what it opened.
+    void setSea(float radius) { seaR_ = radius; }
+    // Has the water got into the dug space at this point? (Says nothing of the
+    // level: the caller compares the point's radius with it.)
+    bool wetAt(Vec2 local) const;
+    // After recenter/apply: mark the bites whose space is now flooded.
+    void markWetOps(std::vector<Op>& ops) const;
+    // GPU mirror: 255 on every flooded sample and the ring of samples round
+    // it (so a bilinear read is solid right up to the tunnel's walls), N x N.
+    const std::vector<unsigned char>& wet() const { return wet_; }
+    // The samples of wet() changed since this was last asked.
+    Rect takeWetDirty() { Rect r = wetDirty_; wetDirty_ = Rect{}; return r; }
 
     // --- GPU mirror: the samples as an N x N single-channel texture ---------
     float originX() const { return ox_; }   // planet-local position of sample (0,0)
@@ -72,6 +98,9 @@ private:
     // Rebuild the open-space distances of d_ over a block of samples.
     void refreshInterior(int i0, int j0, int i1, int j1, const Terrain& terrain);
     float terrainAt(int i, int j, const Terrain& terrain);   // cached per sample
+    // Let the water into whatever dug space in this block of samples touches
+    // some, and on from there. `ops`: bites already known to be flooded.
+    void flood(int i0, int j0, int i1, int j1, const Terrain& terrain, const std::vector<Op>* ops);
 
     float ox_ = 0, oy_ = 0;
     // raw_: min over bites of (distance to the bite's center - its radius).
@@ -92,4 +121,8 @@ private:
     std::vector<float> raw_;                 // N*N, row-major
     std::vector<float> d_;                   // N*N, row-major
     std::vector<float> terrain_;             // N*N terrain density, NaN until first needed
+    float seaR_ = 0.0f;                      // the water level, as a planet-local radius (0 = none)
+    std::vector<unsigned char> flooded_;     // N*N: this dug sample is under water
+    std::vector<unsigned char> wet_;         // N*N: flooded_, grown by one sample (the GPU mirror)
+    Rect wetDirty_;
 };

@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Gameplay trailer/montage capture for Visitor: steps the web build frame by frame in headless Chrome and cuts the footage with ffmpeg.",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

@@ -175,6 +175,45 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
     // Close the loop.
     if (!landscape.empty()) landscape.push_back(landscape.front());
 
+    // Water. One level for the whole world, set where the wanted share of the
+    // ground lies below it: the low ground then fills into a handful of
+    // ponds, lakes and seas, whatever the terrain happens to offer. Its own
+    // RNG, so a dry world (and everything else about a wet one) generates
+    // exactly as before.
+    sea = false;
+    seaLevel = 0.0f;
+    if (!isSun && atmosphere && style.seaMax > 0.0f && landscape.size() > 2) {
+        Rng wrng(seed ^ 0x77617472u);
+        bool wet = wrng.next01() < style.seaChance;
+        float share = wrng.range(style.seaMin, style.seaMax);
+        if (wet && share > 0.0f) {
+            const int T = 4096;
+            std::vector<float> hs(T);
+            for (int k = 0; k < T; k++) hs[k] = seedRadiusBase(k * (360.0f / T)) - baseRadius;
+            std::sort(hs.begin(), hs.end());
+            int at = (int)(share * T);
+            seaLevel = hs[at < 0 ? 0 : (at > T - 1 ? T - 1 : at)];
+            sea = true;
+            // The drop-in point is dry land: where the ground round it would
+            // be under water (or awash), it is raised clear — fully at the
+            // spot itself, easing off to nothing a few degrees out, so the
+            // rise slopes back down into the water as a shore.
+            if (style.keepClearHalf > 0.0f) {
+                const float FULL = 1.6f, OUT = 4.5f, CLEAR = 80.0f;
+                for (size_t i = 0; i + 1 < landscape.size(); i++) {
+                    LandPoint& lp = landscape[i];
+                    float d = std::fabs(std::fmod(lp.angle - style.keepClearAngle + 540.0f, 360.0f) - 180.0f);
+                    if (d >= OUT) continue;
+                    float t = d <= FULL ? 0.0f : (d - FULL) / (OUT - FULL);
+                    float w = 1.0f - t * t * (3.0f - 2.0f * t);
+                    float want = baseRadius + seaLevel + CLEAR;
+                    if (lp.r < want) lp.r += (want - lp.r) * w;
+                }
+                landscape.back() = landscape.front();
+            }
+        }
+    }
+
     // Mesas: flat-topped raised areas, a few hundred units across and a couple
     // of hundred tall — person-sized ground you climb onto and walk under (most
     // get a cave; see buildCaves). The terrain grid is 250 units a cell, so a
@@ -196,6 +235,15 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
             float halfDeg = m.half / arcPerDeg;
             if (halfDeg > 40.0f) continue;                       // tiny moon: no room
             if (rangeWeight(m.angle) > 0.35f) continue;
+            // Not in the water, nor with its feet in it: a mesa stands on dry
+            // ground, so the caves that open in its flanks are dry too.
+            if (sea) {
+                bool awash = false;
+                float reach = m.half + 200.0f;
+                for (float x = -reach; x <= reach && !awash; x += 100.0f)
+                    awash = seedRadiusBase(m.angle + x / arcPerDeg) < baseRadius + seaLevel + 35.0f;
+                if (awash) continue;
+            }
             if (style.keepClearHalf > 0.0f) {
                 float d = std::fabs(std::fmod(m.angle - style.keepClearAngle + 540.0f, 360.0f) - 180.0f);
                 if (d < style.keepClearHalf + halfDeg) continue;
@@ -303,6 +351,9 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
     // walking line (harvest_gen.cpp).
     growHarvest();
 
+    // The locals and their trading posts (outposts.cpp).
+    foundOutposts(style);
+
     // The destructible field is LAZY (built on approach via ensureField); until
     // then the surface LUT comes straight from the analytic silhouette.
     fieldReady_ = false;
@@ -311,6 +362,8 @@ void Planet::generate(Vec2 c, float radius, float noiseIntensityIn,
     naturalOps_ = 0;
     caveProps.clear();
     caveMouths.clear();
+    ores.clear();
+    oreSeen.clear();
     rebuildSurfaceLUT();
 }
 
@@ -417,8 +470,28 @@ bool Planet::focusCarve(Vec2 world) {
         Vec2 c = carve.center();
         if (fabsf(local.x - c.x) < quarter && fabsf(local.y - c.y) < quarter) return false;
     }
+    carve.setSea(seaRadius());
     carve.recenter(local, digOps_, terrainLocal());
+    carve.markWetOps(digOps_);
     return true;
+}
+
+float Planet::visibleRadius(float angleDeg) const {
+    float r = surfaceRadius(angleDeg);
+    float s = seaRadius();
+    return s > r ? s : r;
+}
+
+float Planet::waterDepth(Vec2 world) const {
+    if (!sea) return 0.0f;
+    Vec2 local(world.x - center.x, world.y - center.y);
+    float depth = seaRadius() - local.length();
+    if (depth <= 0.0f) return 0.0f;
+    // Open above the ground and under the level: the sea itself.
+    if (terrainAt(world) <= 0.0f) return depth;
+    // In what was rock: only where it has been dug and the water has got in.
+    if (carve.ready() && carve.sample(local) < 0.0f && carve.wetAt(local)) return depth;
+    return 0.0f;
 }
 
 CarveMap::Rect Planet::dig(Vec2 world, float radius) {
@@ -430,7 +503,11 @@ CarveMap::Rect Planet::dig(Vec2 world, float radius) {
             return CarveMap::Rect{};
     }
     digOps_.push_back(op);
-    return carve.apply(op, terrainLocal());
+    carve.setSea(seaRadius());
+    CarveMap::Rect rc = carve.apply(op, terrainLocal());
+    // Water that got in may have run on into older tunnels.
+    carve.markWetOps(digOps_);
+    return rc;
 }
 
 void Planet::setKeplerSpeed(float parentGravity) {

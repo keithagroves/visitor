@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGL Game</title>
+    <title>Visitor</title>
     <style>
         * {
             margin: 0;
@@ -203,8 +203,8 @@
         #hud .sep { height: 1px; background: rgba(255, 255, 255, 0.12); margin: 7px 0 5px; }
         #hud .keys { margin-top: 7px; font-size: 11px; color: rgba(159, 179, 200, 0.75); }
 
-        /* ---- Inventory (Tab) ---- */
-        #inventory {
+        /* ---- Inventory (Tab) and the trading post's panel (E at a trader) ---- */
+        #inventory, #trade {
             position: fixed;
             top: 50%;
             left: 50%;
@@ -225,7 +225,7 @@
             transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
             user-select: none;
         }
-        #inventory.open {
+        #inventory.open, #trade.open {
             opacity: 1;
             visibility: visible;
             transform: translate(-50%, -50%) scale(1);
@@ -234,8 +234,60 @@
         .inv-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
         .inv-title { font-size: 13px; font-weight: 700; letter-spacing: 0.16em; color: #8fffe0; }
         .inv-sub { font-size: 13px; color: #9fb3c8; }
-        .inv-hint { margin-left: auto; font-size: 11px; color: rgba(159, 179, 200, 0.7);
+        .inv-hint { margin-left: 14px; font-size: 11px; color: rgba(159, 179, 200, 0.7);
                     font-family: 'SFMono-Regular', Menlo, Consolas, monospace; }
+        .inv-head .cr { margin-left: auto; font-size: 14px; }
+        /* Credits, wherever they are shown: the teal diamond and a number. */
+        .cr { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+              font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-weight: 700; color: #8fffe0; }
+        .cr svg { width: 0.85em; height: 0.85em; flex: none; }
+
+        /* ---- Trading post ---- */
+        #trade { z-index: 79; width: min(780px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; user-select: none; }
+        .trade-say { margin: -6px 0 13px; font-size: 12.5px; line-height: 1.4; color: rgba(232, 238, 245, 0.78); }
+        .trade-say .alien { color: #ffd66e; font-style: italic; margin-right: 7px; }
+        .trade-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+        @media (max-width: 640px) { .trade-cols { grid-template-columns: 1fr; } }
+        .trade-h { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 7px;
+                   font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #9fb3c8; }
+        .trade-h.gap { margin-top: 13px; }
+        .trade-list { display: flex; flex-direction: column; gap: 5px; }
+        .trade-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 9px;
+                     padding: 6px 8px; border-radius: 8px;
+                     background: rgba(255, 255, 255, 0.045); border: 1px solid rgba(255, 255, 255, 0.09); }
+        .trade-row > svg { width: 30px; height: 30px; }
+        .trade-row .nm { font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .trade-row .qty { font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-weight: 600; color: rgba(232, 238, 245, 0.7); margin-left: 3px; }
+        .trade-row .sub { font-size: 11px; color: rgba(159, 179, 200, 0.9); margin-top: 2px; }
+        .trade-row .sub .cr { font-size: 11px; }
+        .trade-row .act { display: flex; align-items: center; gap: 5px; }
+        .trade-up { color: #7fe3a0; margin-left: 5px; white-space: nowrap; }
+        .trade-down { color: #ff9a84; margin-left: 5px; white-space: nowrap; }
+        .trade-pips { display: inline-flex; gap: 3px; margin-left: 7px; vertical-align: 1px; }
+        .trade-pips i { width: 7px; height: 7px; border-radius: 2px; background: rgba(255, 255, 255, 0.16); }
+        .trade-pips i.on { background: #8fffe0; }
+        .trade-btn { font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 5px 9px; border-radius: 6px;
+                     border: 1px solid rgba(120, 255, 220, 0.38); background: rgba(120, 255, 220, 0.10);
+                     color: #dffcf4; cursor: pointer; white-space: nowrap; }
+        .trade-btn:hover { background: rgba(120, 255, 220, 0.24); }
+        .trade-btn .cr { font-size: 11.5px; color: inherit; }
+        .trade-btn[disabled] { opacity: 0.4; cursor: default; border-color: rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.04); }
+        .trade-max { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: #8fffe0; padding: 0 6px; }
+        .trade-empty { font-size: 12.5px; line-height: 1.45; color: rgba(159, 179, 200, 0.85); padding: 9px 2px; }
+        .trade-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
+
+        /* ---- "E  Trade with ..." hint ---- */
+        #prompt {
+            position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 58;
+            display: flex; align-items: center; gap: 9px; padding: 7px 14px 7px 8px;
+            background: rgba(9, 13, 21, 0.80); border: 1px solid rgba(120, 255, 220, 0.30); border-radius: 9px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #eafff8;
+            pointer-events: none; user-select: none; opacity: 0; transition: opacity 0.18s ease;
+        }
+        #prompt.show { opacity: 1; }
+        #prompt .key { min-width: 22px; height: 22px; padding: 0 5px; border-radius: 5px; background: #8fffe0; color: #06241f;
+                       display: inline-flex; align-items: center; justify-content: center;
+                       font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 12px; font-weight: 800; }
         #inv-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
         .inv-slot {
             position: relative;
@@ -285,9 +337,18 @@
         .pickup.out { opacity: 0; transform: translateX(14px); }
         .pickup svg { width: 20px; height: 20px; }
         .pickup .amt { color: #8fffe0; font-weight: 700; }
+        .pickup.find { border-color: rgba(255, 214, 110, 0.35); }
+        .pickup .tag { color: #ffd66e; font-weight: 700; letter-spacing: 0.04em; }
+        .pickup.lost { border-color: rgba(255, 110, 80, 0.40); }
+        .pickup.lost .tag { color: #ff7a5c; }
+        .pickup.lost svg { filter: grayscale(1) brightness(0.55); }
+        .pickup.credits { border-color: rgba(120, 255, 220, 0.35); }
+        .pickup.credits svg { width: 14px; height: 14px; margin: 0 3px; }
+        .pickup.credits.spent .amt { color: #ffb27a; }
 
         /* ---- Debug panel ---- */
         #debug-toggle {
+            display: none;  /* shown only in debug mode (?debug) */
             position: fixed;
             bottom: 14px;
             left: 14px;
@@ -366,6 +427,7 @@
         <div class="row"><span class="label">Velocity</span><span id="hud-vel">0.0</span></div>
         <div class="row"><span class="label">Cargo</span><span id="hud-cargo">0/3</span></div>
         <div class="row"><span class="label">Score</span><span id="hud-score">0</span></div>
+        <div class="row"><span class="label">Credits</span><span class="cr" id="hud-credits"></span></div>
         <div class="row"><span class="label">Status</span><span id="hud-status">FLYING</span></div>
         <div class="row" id="hud-tool-row" style="display:none"><span class="label">Tool (Q)</span><span id="hud-tool">Mining laser</span></div>
         <div class="sep"></div>
@@ -373,6 +435,7 @@
         <div class="row"><span class="label">Type</span><span id="hud-kind">&mdash;</span></div>
         <div class="row"><span class="label">System</span><span id="hud-system">&mdash;</span></div>
         <div class="row"><span class="label">Charted</span><span id="hud-charted">0/0</span></div>
+        <div class="row" id="hud-trader-row" style="display:none"><span class="label">Trader</span><span id="hud-trader"></span></div>
         <div class="keys">M map &nbsp;&middot;&nbsp; Tab inventory &nbsp;&middot;&nbsp; wheel zoom</div>
     </div>
 
@@ -383,6 +446,7 @@
         <div class="inv-head">
             <span class="inv-title">EXOSUIT</span>
             <span class="inv-sub">Cargo</span>
+            <span class="cr" id="inv-credits"></span>
             <span class="inv-hint">Tab to close</span>
         </div>
         <div id="inv-grid"></div>
@@ -395,6 +459,30 @@
             </div>
         </div>
     </div>
+    <!-- Trading post: E beside a trader opens it. Filled from C++ via window.showTrade. -->
+    <div id="trade" role="dialog" aria-label="Trading post">
+        <div class="inv-head">
+            <span class="inv-title">TRADING POST</span>
+            <span class="inv-sub" id="trade-who"></span>
+            <span class="cr" id="trade-credits"></span>
+            <span class="inv-hint">E to leave</span>
+        </div>
+        <div class="trade-say"><span class="alien" id="trade-alien"></span><span id="trade-line"></span></div>
+        <div class="trade-cols">
+            <div>
+                <div class="trade-h"><span>You sell</span></div>
+                <div class="trade-list" id="trade-sell"></div>
+                <div class="trade-foot"><button class="trade-btn" id="trade-sell-all" type="button"></button></div>
+            </div>
+            <div>
+                <div class="trade-h"><span>Upgrades</span></div>
+                <div class="trade-list" id="trade-upgrades"></div>
+                <div class="trade-h gap"><span>Goods</span><span id="trade-goods-note"></span></div>
+                <div class="trade-list" id="trade-goods"></div>
+            </div>
+        </div>
+    </div>
+    <div id="prompt"><span class="key">E</span><span id="prompt-text"></span></div>
     <div id="pickups"></div>
     <div id="event"><div class="title" id="event-title"></div><div class="sub" id="event-sub"></div></div>
     <div id="message"></div>
@@ -447,8 +535,27 @@
     <script>
         // window.DBG holds the live tunables; main.cpp reads it each frame via
         // EM_ASM. Defined immediately (before the wasm runtime starts) so the
-        // first frame already sees real values. Persisted to localStorage.
+        // first frame already sees real values.
+        //
+        // Debug mode: players get the defaults and no panel. `?debug` in the
+        // URL turns the panel (and slider persistence in localStorage) on and
+        // remembers that on this browser; `?debug=0` turns it back off.
+        // window.DBG exists either way — the trailer rig writes into it.
         (function () {
+            var MODE_KEY = 'rocket:debugMode';
+            var DEBUG_MODE = false;
+            try {
+                var dq = new URLSearchParams(window.location.search).get('debug');
+                if (dq !== null) {
+                    DEBUG_MODE = dq !== '0' && dq !== 'false';
+                    if (DEBUG_MODE) localStorage.setItem(MODE_KEY, '1');
+                    else localStorage.removeItem(MODE_KEY);
+                } else {
+                    DEBUG_MODE = localStorage.getItem(MODE_KEY) === '1';
+                }
+            } catch (e) {}
+            window.DEBUG_MODE = DEBUG_MODE;
+
             var DEFAULTS = {
                 // thrust 0.15 = the original game's tuning: thrust-to-weight
                 // ~1.25 at the home surface, enough to climb out to space.
@@ -461,7 +568,8 @@
                 cameraGroundZoom: 1.8, cameraFraming: 0.4, cameraHorizon: 0.14, cameraSpeedLook: 2.2,
                 walkSpeed: 2.4, jumpSpeed: 3.0,
                 horizonHaze: 0.7, foreground: 1.0, vignette: 0.35, motes: 0, frontVeil: 0.45,
-                holeFloor: 0.34, holeDepth: 150,
+                holeFloor: 0.34, holeDepth: 150, oreRichness: 1.0, oreBurn: 3.0,
+                waterLevel: 0, waterTint: 0.42,
                 sunOverride: -5
             };
             var PARAMS = [
@@ -498,6 +606,10 @@
                 { key: 'frontVeil',        label: 'Front Ground When In A Hole', min: 0.0, max: 1.0,  step: 0.05 },
                 { key: 'holeFloor',        label: 'Hole: darkest shade',  min: 0.1,   max: 0.8,  step: 0.02 },
                 { key: 'holeDepth',        label: 'Hole: depth it stops darkening', min: 40, max: 400, step: 10 },
+                { key: 'oreRichness',      label: 'Buried ore (0 = none, 1 = a find every ~10 s of digging)', min: 0, max: 3, step: 0.05 },
+                { key: 'oreBurn',          label: 'Cutter burns ore away in this many times its mining time', min: 1, max: 8, step: 0.25 },
+                { key: 'waterLevel',       label: 'Water level: raise / lower every sea', min: -300, max: 300, step: 5 },
+                { key: 'waterTint',        label: 'Water: how much it tints what is in it', min: 0.0, max: 0.9, step: 0.02 },
                 { key: 'sunOverride',      label: 'Sun Angle (-5 = auto, 270 = noon)', min: -5, max: 360, step: 1 }
             ];
             var STORE_KEY = 'rocket:debug';
@@ -510,7 +622,7 @@
             var SUPERSEDED = { cameraGroundZoom: [0.2], frontVeil: [0.55] };
 
             var DBG = Object.assign({}, DEFAULTS);
-            try {
+            if (DEBUG_MODE) try {
                 var saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
                 for (var k in DEFAULTS) {
                     if (typeof saved[k] !== 'number') continue;
@@ -523,6 +635,7 @@
             // Only sliders that differ from their default are stored, so a
             // changed default reaches everyone who hasn't moved that slider.
             function save() {
+                if (!DEBUG_MODE) return;
                 try {
                     var custom = {};
                     for (var k in DEFAULTS) if (DBG[k] !== DEFAULTS[k]) custom[k] = DBG[k];
@@ -532,6 +645,8 @@
             function fmt(v) { return (Math.round(v * 1000) / 1000).toString(); }
 
             function build() {
+                if (!DEBUG_MODE) return;
+                document.getElementById('debug-toggle').style.display = 'block';
                 var rows = document.getElementById('debug-rows');
                 PARAMS.forEach(function (p) {
                     var row = document.createElement('div'); row.className = 'dbg-row';
@@ -622,7 +737,7 @@
                 { name: 'Carbon', kind: 'Organic', icon: 'leaf', color: '#6fb05a',
                   desc: 'Plant matter. Cut from grass and bulb plants with the mining laser.' },
                 { name: 'Ferrite', kind: 'Metal', icon: 'rock', color: '#b9ad9c',
-                  desc: 'Common metal-bearing rock. Mined from boulders, and dug out of the ground with the terrain cutter.' },
+                  desc: 'Common metal-bearing rock. Mined from boulders, and from rust-flecked clumps buried a little way under the ground: dig with the terrain cutter until it stops at one, then take it out with the mining laser. (Keep the cutter on a clump and it burns away instead.)' },
                 { name: 'Lumenite', kind: 'Crystal', icon: 'crystal', color: '#8cd9eb',
                   desc: 'A pale blue crystal that grows on temperate worlds.' },
                 { name: 'Sunstone', kind: 'Crystal', icon: 'crystal', color: '#fa9e4d',
@@ -642,7 +757,7 @@
                 { name: 'Glowcap', kind: 'Organic', icon: 'cap', color: '#6ff2cc',
                   desc: 'A luminous cave mushroom. It grows back a while after it is picked.' },
                 { name: 'Gold', kind: 'Metal', icon: 'nugget', color: '#ffcc42',
-                  desc: 'Native gold, in veins in the walls of the deepest caves.' }
+                  desc: 'Native gold. In veins in the walls of the deepest caves, and in clumps buried deep in the rock: the further down you dig, the more of it there is.' }
             ];
             var SLOT_COUNT = 18;
             function shade(hex, k) {
@@ -667,6 +782,29 @@
                 } else if (item.icon === 'cap') {
                     body = '<path d="M18 36 L18 20 L22 20 L23 36 Z" fill="' + d + '"/>' +
                            '<path d="M5 21 Q20 -2 35 21 Z" fill="' + c + '"/><path d="M5 21 L35 21 L33 24 L7 24 Z" fill="' + d + '"/>';
+                } else if (item.icon === 'cow') {
+                    body = '<path d="M7 9 L14 13 L10 18 Z" fill="' + d + '"/><path d="M33 9 L26 13 L30 18 Z" fill="' + d + '"/>' +
+                           '<path d="M10 14 Q20 6 30 14 L29 26 Q20 37 11 26 Z" fill="' + c + '"/>' +
+                           '<path d="M10 14 Q15 9 20 10 L18 19 Q13 21 10.5 19 Z" fill="#2e2725"/>' +
+                           '<ellipse cx="20" cy="28" rx="8" ry="5.5" fill="' + d + '"/>' +
+                           '<circle cx="15.5" cy="20" r="1.6" fill="#141414"/><circle cx="24.5" cy="20" r="1.6" fill="#141414"/>';
+                } else if (item.icon === 'tank') {
+                    body = '<rect x="11" y="5" width="18" height="30" rx="8" fill="' + d + '"/>' +
+                           '<rect x="14" y="8" width="8" height="24" rx="4" fill="' + c + '"/>' +
+                           '<rect x="11" y="17" width="18" height="4" fill="' + d + '"/><rect x="17" y="2" width="6" height="5" rx="1.5" fill="' + c + '"/>';
+                } else if (item.icon === 'pack') {
+                    body = '<rect x="8" y="6" width="10" height="21" rx="4.5" fill="' + c + '"/><rect x="22" y="6" width="10" height="21" rx="4.5" fill="' + d + '"/>' +
+                           '<rect x="16" y="11" width="8" height="5" fill="' + d + '"/>' +
+                           '<path d="M9.500 28 L16.500 28 L13 38 Z" fill="' + c + '"/><path d="M23.500 28 L30.500 28 L27 38 Z" fill="' + c + '"/>';
+                } else if (item.icon === 'lens') {
+                    body = '<path d="M4 27 L21 15 L25 21 L8 33 Z" fill="' + d + '"/><path d="M9 26 L13 31 L10 37 L5 31 Z" fill="' + d + '"/>' +
+                           '<circle cx="24" cy="17" r="5" fill="' + c + '"/><path d="M27 13 L38 3 L30 18 Z" fill="' + c + '"/>';
+                } else if (item.icon === 'coil') {
+                    body = '<path d="M20 3 L24 9 L31 7 L31 14 L37 17 L32 22 L35 29 L28 30 L26 37 L20 33 L14 37 L12 30 L5 29 L8 22 L3 17 L9 14 L9 7 L16 9 Z" fill="' + d + '"/>' +
+                           '<circle cx="20" cy="20" r="8" fill="' + c + '"/><circle cx="20" cy="20" r="3" fill="' + d + '"/>';
+                } else if (item.icon === 'crate') {
+                    body = '<path d="M5 14 L20 7 L35 14 L35 29 L20 36 L5 29 Z" fill="' + d + '"/>' +
+                           '<path d="M5 14 L20 21 L35 14 L20 7 Z" fill="' + c + '"/><path d="M19 21 L21 21 L21 36 L19 36 Z" fill="' + c + '"/>';
                 } else if (item.icon === 'nugget') {
                     body = '<path d="M6 30 L10 16 L22 9 L33 15 L35 28 L24 35 L12 35 Z" fill="' + d + '"/>' +
                            '<path d="M12 18 L22 11 L31 16 L25 23 L15 25 Z" fill="' + c + '"/>';
@@ -722,8 +860,191 @@
             };
             document.addEventListener('keydown', function (e) {
                 if (e.key === 'Tab' || e.key === 'i' || e.key === 'I') { e.preventDefault(); if (!e.repeat) window.toggleInventory(); }
-                else if (e.key === 'Escape') window.toggleInventory(false);
+                else if (e.key === 'Escape') {
+                    window.toggleInventory(false);
+                    if (tradeOpen && window.Module && Module._tradeClose) Module._tradeClose();
+                }
             });
+
+            // ---- Credits ---------------------------------------------------
+            // The mark for credits: a two-tone teal diamond (the game draws the
+            // same one in the trader's speech bubble).
+            var COIN = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 0.5 L1.200 6 L6 11.5 Z" fill="#1f8580"/>' +
+                       '<path d="M6 0.5 L10.800 6 L6 11.5 Z" fill="#4ddbcc"/></svg>';
+            function cr(n) { return '<span class="cr">' + COIN + n + '</span>'; }
+            var credits = 0;
+            window.setCredits = function (n) {
+                credits = n;
+                document.getElementById('hud-credits').innerHTML = COIN + n;
+                document.getElementById('inv-credits').innerHTML = COIN + n;
+                document.getElementById('trade-credits').innerHTML = COIN + n;
+            };
+            // Money in or out, in the pickup feed: "+180 credits"; repeats
+            // while it shows add up.
+            var crFeed = null;
+            window.notifyCredits = function (amount) {
+                var box = document.getElementById('pickups');
+                if (!crFeed) {
+                    crFeed = { el: document.createElement('div'), total: 0, timer: null };
+                    box.appendChild(crFeed.el);
+                }
+                var entry = crFeed;
+                entry.total += amount;
+                entry.el.className = 'pickup credits' + (entry.total < 0 ? ' spent' : '');
+                entry.el.innerHTML = COIN + '<span class="amt">' + (entry.total < 0 ? '\u2212' : '+') + Math.abs(entry.total) +
+                                     '</span><span>credits</span>';
+                clearTimeout(entry.timer);
+                entry.timer = setTimeout(function () {
+                    entry.el.classList.add('out');
+                    setTimeout(function () { if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el); if (crFeed === entry) crFeed = null; }, 420);
+                }, 2600);
+            };
+
+            // ---- Trading post ------------------------------------------------
+            // What the traders sell besides goods, by Trade::Upgrade in
+            // trade.cpp (which owns the prices and what a level does; `fx`
+            // only words the number it sends).
+            var UPGRADES = [
+                { name: 'Fuel tank', icon: 'tank', color: '#50c878', what: 'Ship',
+                  fx: function (v) { return '+' + v + '% fuel'; } },
+                { name: 'Jetpack cell', icon: 'pack', color: '#f58f33', what: 'Suit',
+                  fx: function (v) { return '+' + v + '% jetpack fuel'; } },
+                { name: 'Laser focus', icon: 'lens', color: '#ffb27a', what: 'Tool',
+                  fx: function (v) { return '+' + v + '% mining speed'; } },
+                { name: 'Cutter coil', icon: 'coil', color: '#8fffe0', what: 'Tool',
+                  fx: function (v) { return '+' + v + '% digging speed'; } },
+                { name: 'Cargo bay', icon: 'crate', color: '#b9ad9c', what: 'Ship',
+                  fx: function (v) { return '+' + v + (v === 1 ? ' cow' : ' cows') + ' in the hold'; } }
+            ];
+            // A cow from the hold, as a thing to sell (Trade::COW).
+            var COW_ID = 100;
+            var COW_ITEM = { name: 'Cow', kind: 'Livestock', icon: 'cow', color: '#d9d1c7' };
+            // What the trader says, after the bit in their own tongue.
+            var LINES = [
+                'You fell out of the sky. Do you trade?',
+                'Good ground, good trade.',
+                'Show me what you dug up.',
+                'Things from other worlds fetch more here.',
+                'Is the sky-boat yours? Shiny.',
+                'Mind where you point that cutter.',
+                'Take your time. The sun is slow.',
+                'Everything has a price. Mine are fair.'
+            ];
+            var tradeOpen = false;
+            function tradeButton(html, enabled, fn) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'trade-btn';
+                b.innerHTML = html;
+                if (!enabled) b.disabled = true;
+                else b.addEventListener('click', function () { fn(); b.blur(); });
+                return b;
+            }
+            function tradeRow(item, nameHtml, subHtml) {
+                var row = document.createElement('div');
+                row.className = 'trade-row';
+                row.innerHTML = iconSvg(item) + '<div><div class="nm">' + nameHtml + '</div><div class="sub">' + subHtml +
+                                '</div></div><div class="act"></div>';
+                return row;
+            }
+            // The whole panel, from main.cpp (pushTrade) whenever it opens or
+            // anything in it changes.
+            window.showTrade = function (json) {
+                var d = JSON.parse(json);
+                var M = window.Module;
+                document.getElementById('trade-who').textContent = d.keeper + ' \u00b7 ' + d.world;
+                window.setCredits(d.credits);
+                document.getElementById('trade-alien').textContent = '\u201c' + d.say + '\u201d';
+                var wantItem = ITEMS[d.want];
+                document.getElementById('trade-line').textContent = LINES[d.line % LINES.length] +
+                    (wantItem ? ' We are short of ' + wantItem.name.toLowerCase() + '.' : '');
+
+                // What you can sell them.
+                var sell = document.getElementById('trade-sell');
+                sell.innerHTML = '';
+                var total = 0;
+                d.sell.forEach(function (r) {
+                    var item = r.id === COW_ID ? COW_ITEM : ITEMS[r.id];
+                    if (!item) return;
+                    if (r.id !== COW_ID) total += r.n * r.p;
+                    var trend = r.t > 0 ? '<span class="trade-up">\u25b2 wanted here</span>'
+                              : r.t < 0 ? '<span class="trade-down">\u25bc common here</span>' : '';
+                    var row = tradeRow(item, item.name + '<span class="qty">\u00d7' + r.n + '</span>', cr(r.p) + ' each' + trend);
+                    var act = row.querySelector('.act');
+                    act.appendChild(tradeButton('Sell 1', true, function () { M._tradeSell(r.id, 1); }));
+                    if (r.n > 1) act.appendChild(tradeButton('All ' + cr('+' + (r.n * r.p)), true, function () { M._tradeSell(r.id, 0); }));
+                    sell.appendChild(row);
+                });
+                if (!d.sell.length) {
+                    sell.innerHTML = '<div class="trade-empty">You have nothing to sell. Cut plants, rocks and crystals with the ' +
+                                     'mining laser, dig for ore, or bring cows in the hold of the ship.</div>';
+                }
+                var all = document.getElementById('trade-sell-all');
+                all.innerHTML = 'Sell everything carried ' + cr('+' + total);
+                all.style.display = total > 0 ? '' : 'none';
+                all.onclick = function () { M._tradeSell(-1, 0); all.blur(); };
+
+                // Upgrades.
+                var ups = document.getElementById('trade-upgrades');
+                ups.innerHTML = '';
+                d.up.forEach(function (u) {
+                    var info = UPGRADES[u.id];
+                    if (!info) return;
+                    var pips = '<span class="trade-pips">';
+                    for (var i = 0; i < u.max; i++) pips += '<i' + (i < u.lvl ? ' class="on"' : '') + '></i>';
+                    pips += '</span>';
+                    var maxed = u.lvl >= u.max;
+                    // "Ship . +30% fuel", and once you own a level: "now +30% . next +60% fuel".
+                    var sub = info.what + ' \u00b7 ' + (maxed ? info.fx(u.now)
+                              : (u.lvl > 0 ? 'now +' + u.now + (u.id === 4 ? '' : '%') + ' \u00b7 next ' : '') + info.fx(u.next));
+                    var row = tradeRow(info, info.name + pips, sub);
+                    var act = row.querySelector('.act');
+                    if (maxed) act.innerHTML = '<span class="trade-max">MAX</span>';
+                    else act.appendChild(tradeButton('Buy ' + cr(u.p), d.credits >= u.p, function () { M._tradeBuyUpgrade(u.id); }));
+                    ups.appendChild(row);
+                });
+
+                // Goods.
+                var goods = document.getElementById('trade-goods');
+                goods.innerHTML = '';
+                d.goods.forEach(function (g) {
+                    var item = ITEMS[g.id];
+                    if (!item) return;
+                    var row = tradeRow(item, item.name, g.stock > 0 ? cr(g.p) + ' each \u00b7 ' + g.stock + ' left' : 'Sold out');
+                    var act = row.querySelector('.act');
+                    act.appendChild(tradeButton('Buy 1', g.stock > 0 && d.credits >= g.p, function () { M._tradeBuyGoods(g.slot, 1); }));
+                    if (g.stock >= 5) act.appendChild(tradeButton('Buy 5', d.credits >= g.p * 5, function () { M._tradeBuyGoods(g.slot, 5); }));
+                    goods.appendChild(row);
+                });
+                document.getElementById('trade-goods-note').textContent = 'worth more on other worlds';
+
+                tradeOpen = true;
+                document.getElementById('trade').classList.add('open');
+            };
+            window.hideTrade = function () {
+                tradeOpen = false;
+                document.getElementById('trade').classList.remove('open');
+            };
+            window.notifyUpgrade = function (id, level, value) {
+                var info = UPGRADES[id];
+                if (info) window.showEvent(info.name + ' upgraded', 'Level ' + level + ' \u00b7 ' + info.fx(value));
+            };
+            // "E  Trade with Zuvi": what the interact key does where you stand ('' = nothing).
+            window.setPrompt = function (text) {
+                var el = document.getElementById('prompt');
+                if (text) document.getElementById('prompt-text').textContent = text;
+                el.classList.toggle('show', !!text);
+            };
+            // HUD: the nearest trading post on this world, along the ground
+            // (negative = to the left).
+            window.setTraderHint = function (along, show) {
+                document.getElementById('hud-trader-row').style.display = show ? 'flex' : 'none';
+                if (!show) return;
+                var dist = Math.abs(along);
+                var txt = dist < 1000 ? String(Math.round(dist / 10) * 10) : (dist / 1000).toFixed(1) + 'k';
+                document.getElementById('hud-trader').textContent =
+                    dist < 85 ? 'here' : (along < 0 ? '\u25c2 ' + txt : txt + ' \u25b8');
+            };
 
             // Pickup feed: "+2 Lumenite" for a few seconds; repeats of the same
             // item while it is still showing add up instead of stacking.
@@ -746,6 +1067,54 @@
                     entry.el.classList.add('out');
                     setTimeout(function () { if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el); delete feed[id]; }, 420);
                 }, 2600);
+            };
+
+            // Ore the terrain cutter has just uncovered: "Gold deposit" in the
+            // same feed, for a little longer. Repeats while it shows count up.
+            var finds = {};
+            window.notifyFind = function (id) {
+                var item = ITEMS[id];
+                if (!item) return;
+                var box = document.getElementById('pickups');
+                var entry = finds[id];
+                if (!entry) {
+                    entry = finds[id] = { el: document.createElement('div'), total: 0, timer: null };
+                    entry.el.className = 'pickup find';
+                    box.appendChild(entry.el);
+                }
+                entry.total += 1;
+                entry.el.classList.remove('out');
+                entry.el.innerHTML = iconSvg(item) + '<span class="tag">Found</span><span>' + item.name + ' deposit' +
+                                     (entry.total > 1 ? ' \u00d7' + entry.total : '') + '</span>';
+                clearTimeout(entry.timer);
+                entry.timer = setTimeout(function () {
+                    entry.el.classList.add('out');
+                    setTimeout(function () { if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el); delete finds[id]; }, 420);
+                }, 3400);
+            };
+
+            // Ore the terrain cutter has burnt away instead: "Burnt  Gold
+            // deposit", the same way, in red. Nothing was collected.
+            var losses = {};
+            window.notifyLost = function (id) {
+                var item = ITEMS[id];
+                if (!item) return;
+                var box = document.getElementById('pickups');
+                var entry = losses[id];
+                if (!entry) {
+                    entry = losses[id] = { el: document.createElement('div'), total: 0, timer: null };
+                    entry.el.className = 'pickup find lost';
+                    box.appendChild(entry.el);
+                }
+                entry.total += 1;
+                entry.el.classList.remove('out');
+                entry.el.innerHTML = iconSvg(item) + '<span class="tag">Burnt</span><span>' + item.name + ' deposit' +
+                                     (entry.total > 1 ? ' \u00d7' + entry.total : '') + '</span>';
+                clearTimeout(entry.timer);
+                entry.timer = setTimeout(function () {
+                    entry.el.classList.add('out');
+                    setTimeout(function () { if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el); delete losses[id]; }, 420);
+                }, 3400);
             };
 
             // One-line banner for discoveries / first landings; fades after a few seconds.
@@ -824,7 +1193,7 @@
                     toastEl.style.display = 'none';
                 }
                 if (enteredSpacewalk && !spacewalkToastDismissed) {
-                    showToast('Spacewalking', 'A/D walk, W jump, Space jetpack. Hold the mouse button to fire the tool at the cursor; Q switches between the mining laser (plants, rocks, crystals) and the terrain cutter (digs). Tab opens your inventory. E re-enters the ship when you are close.');
+                    showToast('Spacewalking', 'A/D walk, W jump, Space jetpack. In water, hold W to swim up and S to dive. Hold the mouse button to fire the tool at the cursor; Q switches between the mining laser (plants, rocks, crystals, ore) and the terrain cutter (digs; it cannot cut buried ore, so when it stops at some, take that out with the laser). Tab opens your inventory. E re-enters the ship when you are close, and trades with the locals at one of their stalls (the HUD points to the nearest).');
                 }
                 wasSpacewalking = !!spacewalking;
                 // On foot the pointer aims the hand tool, and the HUD says which mode it is in.

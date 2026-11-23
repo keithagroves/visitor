@@ -151,8 +151,17 @@ namespace {
 // ground-ellipse language). The hull base sits 22*SCALE below center; it
 // rests on the blob shadow's contact point, which sits radius*1.5*0.64 (the
 // shadow drop in drawBlobShadow) below the line.
+//
+// On water it floats: the same place against the water's surface, a little
+// lower in it — the water in front of the walking line then laps a third of
+// the way up the hull.
 float restRadius(const Planet& planet, float angleDeg, float shipRadius) {
-    return planet.surfaceRadius(angleDeg) + 22.0f * Lander::SCALE - shipRadius * 1.5f * 0.64f;
+    float rest = planet.surfaceRadius(angleDeg) + 22.0f * Lander::SCALE - shipRadius * 1.5f * 0.64f;
+    if (planet.overWater(angleDeg)) {
+        float afloat = planet.seaRadius() + 22.0f * Lander::SCALE - shipRadius * 1.5f * 0.64f - Lander::FLOAT_DRAFT;
+        if (afloat > rest) rest = afloat;
+    }
+    return rest;
 }
 
 // Shortest signed turn from one heading to another, degrees.
@@ -269,7 +278,7 @@ float beamLength(const Planet& planet, Vec2 origin, float dx, float dy, float ma
         float ddx = px - planet.center.x;
         float ddy = py - planet.center.y;
         float d = sqrtf(ddx * ddx + ddy * ddy);
-        if (d <= planet.surfaceRadius(atan2d(ddy, ddx))) return t;
+        if (d <= planet.visibleRadius(atan2d(ddy, ddx))) return t;   // the ground, or water
     }
     return maxRange;
 }
@@ -513,7 +522,7 @@ void Lander::predictTrajectory(const std::vector<Planet>& planets, int frameIdx,
                 // we skip the surfaceRadius() lookup. That keeps the long
                 // horizon affordable.
                 if (d <= pl.baseRadius + pl.noiseIntensity * 3.5f) {
-                    float surf = pl.isSun ? pl.baseRadius : pl.surfaceRadius(
+                    float surf = pl.isSun ? pl.baseRadius : pl.visibleRadius(
                         atan2d(sp.y - c[b].y, sp.x - c[b].x));
                     if (outside && d <= surf) {
                         out.push_back(framePoint(sp));
@@ -538,7 +547,7 @@ void Lander::predictTrajectory(const std::vector<Planet>& planets, int frameIdx,
 
 void Lander::draw(Renderer2D& r) {
     r.pushMatrix();
-    r.translate(pos.x, pos.y);
+    r.translate(pos.x + bob.x, pos.y + bob.y);
     r.scale(SCALE);
     r.rotate(rotation);
 

@@ -19,7 +19,7 @@ if ! command -v emcc &> /dev/null; then
     exit 1
 fi
 
-echo "=== Building WebGL Game ==="
+echo "=== Building Visitor ==="
 echo ""
 
 mkdir -p "$BUILD_DIR"
@@ -27,6 +27,7 @@ mkdir -p "$BUILD_DIR"
 # All source files (organized by module)
 SOURCES="
     $SRC_DIR/core/main.cpp
+    $SRC_DIR/core/trade.cpp
     $SRC_DIR/graphics/shader.cpp
     $SRC_DIR/graphics/renderer2d.cpp
     $SRC_DIR/world/planet.cpp
@@ -37,6 +38,8 @@ SOURCES="
     $SRC_DIR/world/cave_gen.cpp
     $SRC_DIR/world/harvest_gen.cpp
     $SRC_DIR/world/cavefield.cpp
+    $SRC_DIR/world/deposits.cpp
+    $SRC_DIR/world/outposts.cpp
     $SRC_DIR/entities/lander.cpp
     $SRC_DIR/entities/cow.cpp
     $SRC_DIR/entities/astronaut.cpp

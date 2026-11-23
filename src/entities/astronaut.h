@@ -38,6 +38,18 @@ public:
     static constexpr float JETPACK_THRUST   = 0.25f;
     static constexpr float JETPACK_DRAIN    = 0.55f;
     static constexpr float JETPACK_CHARGE   = 0.55f;
+    // In water (Planet::waterDepth). The suit is heavy, so you sink — slowly:
+    // the water carries SWIM_BUOYANCY of your weight once you are in over
+    // the chest, and slows everything (SWIM_DRAG is the speed kept per
+    // frame, fully in). You walk the bottom as you walk the ground, a little
+    // slower; holding jump swims up — a lift of SWIM_LIFT times your weight,
+    // easing off as your chest reaches the surface, so held there it treads
+    // water with your head out — and holding down dives faster than sinking.
+    static constexpr float SWIM_BUOYANCY    = 0.72f;
+    static constexpr float SWIM_DRAG        = 0.93f;
+    static constexpr float SWIM_LIFT        = 1.15f;
+    static constexpr float SWIM_DIVE        = 0.9f;
+    static constexpr float WET_FULL         = 20.0f;  // water this far over the feet = fully in
 
     void spawn(Vec2 position);
 
@@ -47,6 +59,7 @@ public:
     void move(const Planet& planet, float timeScale, int dir);   // -1 left, +1 right; runs or air-steers
     void jump(const Planet& planet);
     void jetpack(const Planet& planet, float timeScale);
+    void swim(const Planet& planet, float timeScale, int dir);   // +1 up, -1 down; nothing out of water
 
     void draw(Renderer2D& r, const Planet& planet) const;
 
@@ -55,6 +68,9 @@ public:
     float walkAnim    = 0.0f;
     float idleAnim    = 0.0f;
     float jetpackFuel = JETPACK_MAX_FUEL;
+    // How much the pack holds: JETPACK_MAX_FUEL, more with the jetpack
+    // upgrade the traders sell (the caller keeps this up to date).
+    float jetpackMax  = JETPACK_MAX_FUEL;
     int   facing      = 1;
     bool  grounded    = false;
     bool  walking     = false;
@@ -72,6 +88,15 @@ public:
     float air         = 0.0f;
     float aim         = 0.0f;
     float jumpGrace   = 0.0f;    // frames left in which a fresh jump can't be re-grounded
+    // Water: how far in (0 = dry .. 1 = over the chest), how deep the chest
+    // is under the surface (negative: that far above it; only meaningful
+    // while wet > 0), the swimming pose blend and its stroke clock.
+    float wet         = 0.0f;
+    float chestDepth  = 0.0f;
+    float swimPose    = 0.0f;
+    float swimAnim    = 0.0f;
+    float swimGo      = 0.0f;    // 0 treading water .. 1 swimming along
+    bool  stroking    = false;   // swam up or down this frame
 
 private:
     bool walkRequested = false;

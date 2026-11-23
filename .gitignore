@@ -32,3 +32,6 @@ emsdkbuild/
 
 # Playwright CLI artifacts (screenshots, console/network logs)
 .playwright-cli/
+
+# Local-only reference material (not for the public repo)
+.archive/

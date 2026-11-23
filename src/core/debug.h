@@ -74,6 +74,21 @@ struct Debug {
     // the ground once it is holeDepth deep, so it never goes black.
     float holeFloor = 0.34f;
     float holeDepth = 150.0f;
+    // How much ore is buried in the ground (deposits.cpp): scales every grid
+    // square's chance of holding a vein. 1 = a find every ten seconds or so
+    // of tunnelling; 0 = none.
+    float oreRichness = 1.0f;
+    // The terrain cutter, held on a clump of ore, burns it away (nothing is
+    // collected): this many times longer than the mining laser takes to mine
+    // it. 3 = about four seconds for gold.
+    float oreBurn = 3.0f;
+    // Water. waterLevel raises (+) or lowers (-) every sea by this many world
+    // units, for looking at a world wetter or drier (what was placed to suit
+    // the generated level — mesas, plants, the drop-in point — stays put).
+    // waterTint is how strongly whatever is under water takes its color
+    // (0 = clear as air, 1 = hidden).
+    float waterLevel = 0.0f;
+    float waterTint = 0.42f;
     // Sun-angle override for tuning time-of-day looks: -5 = auto day cycle;
     // 0..360 pins the sun's orbit angle (270 = noon over the spawn point,
     // ~350 = sunset there).

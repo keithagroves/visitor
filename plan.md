@@ -15,11 +15,16 @@ Decisions already made:
   you're near owns a live grid; distant planets are analytic silhouettes. Digs
   are recorded and replayed so they survive field unload/reload.
 - **No parallax starfield.** Depth comes from the planets themselves.
-- The p5 original (`/Users/keithgroves/projects/games/cow-abductor`) already has
+- The p5 original (the `cow-abductor` p5.js sketch) already has
   tuned implementations of orbits, discovery, map mode, ridges, water, and biome
   texture — port, don't reinvent. Math carries over (degrees, +y down).
 
 Each stage leaves the game playable.
+
+**What the game IS** — goal, loop, the equipment ladder, what failing costs —
+is decided in [docs/gameplay.md](docs/gameplay.md) (2026-11-22). It replaces
+Stage 5 below and has its own build order; this file remains the record of
+how the world got built.
 
 **Status (2026-11-15).** Stages 1–2 are done and Stage 3 mostly so; Stage 4's
 archetypes arrived early as part of system generation.
@@ -30,7 +35,16 @@ archetypes arrived early as part of system generation.
 - Flight was retuned so the system is reachable: fuel burn 0.2 → 0.05 per
   frame and the tank refills while landed (at 0.2 a full tank ran dry at
   ~8,400 altitude, below the 12,800 atmosphere top).
-- Still open from the stages below: water worlds, seeded caves, more
+- Water is in (2026-11-22): one sea level per wet world, so the low ground
+  fills into ponds, lakes and seas; the ship floats, the astronaut swims,
+  dug space floods where it connects to water. See docs/architecture/world.md.
+- The locals are in (2026-11-22): every world has its own kind of people and
+  a few trading posts. Sell what you mine (and the cows in the hold) for
+  credits, buy upgrades — fuel tank, jetpack, laser, cutter, cargo bay — and
+  goods that are worth more on other worlds. This is Stage 5's "upgrades",
+  bought with credits rather than score; see docs/architecture/core.md
+  (Trading) and world.md (the locals).
+- Still open from the stages below: seeded caves, more
   abductables (cows only spawn on the home world), dig feel, the whole of
   Stage 5. New candidates: time warp for long coasts, a pointer to the
   nearest uncharted world, things to do on the other worlds.

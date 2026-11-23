@@ -157,6 +157,72 @@ computed sky.**
      light, soft-capped so a room full of crystals never goes white. The
      player carries a faint lamp underground. Keep it dim: the astronaut and
      the things to mine must stay the brightest things in a cave.
+   - **Buried ore is a lump in the rock with the ore set in it.** The lump
+     is the rock around it a step darker (a shaded tone and a lit facet,
+     never as dark as a hole, or it reads as one). Each kind has its own
+     shape, big enough to read at a glance, in three flat tones (shaded,
+     lit, and one bright facet): gold is chunky rounded nuggets, ferrite is
+     tilted cubes (pale top, mid face, rust face), the world's crystal a fan
+     of shards with pale tips rooted in the lump. A clump shows exactly as
+     many pieces as it yields. One four-point glint twinkles on a piece at a
+     time; crystal has one smooth halo, gold a fainter one. The ore keeps
+     its own colors at any hour, so a find reads even at night.
+   - **Mining takes ore apart; the cutter burns it.** Under the mining
+     laser only the piece being worked whitens and shudders, then comes
+     loose and flies to the player as faceted chips of its own color; the
+     beam's glow stays small so the pieces are what you watch. Under the
+     cutter the whole clump heats instead: the ore goes orange, then red in
+     a lump of dull red rock, then yellow-hot just before it bursts into
+     embers and cinders, with one smooth red halo that grows with the heat.
+     It cools back through the same colors when left alone.
+   - **Water is flat fields at one level.** A world's water stands at a
+     single level right round it, so the low ground fills into ponds, lakes
+     and seas. Three flat tones by depth below the surface — the shallows, a
+     middle tone from about 90 units down, deep water from about 215 — the
+     lines between them wandering a little, in the world's own `water` /
+     `waterDeep` colors and the hour's light, like the ground. A pond is all
+     shallows; only a sea shows all three. No grain, no gradient, no
+     reflection of the scene.
+   - **Its surface is seen at the same low angle as the ground.** The level
+     itself is the FAR edge of the surface, and where the surface meets the
+     walking line is 13 units lower. The strip between is the far part of
+     the surface, behind whoever stands in the water: paler (toward the
+     sky's haze), with a few short glints drifting along it. From the lower
+     line down the water is in front of them and tints them (`waterTint`
+     knob), with one thin pale line where the surface crosses them. The
+     lake bed in front of the walking line shows through the water standing
+     on it — tinted more the deeper the water, not at all at the shore. The
+     only motion is a slow swell of a unit or two.
+   - **A flooded hole takes ONE tone.** Water in a hole or tunnel is laid
+     over the hole's back wall, thicker than in open water so it still reads
+     as water, in a single tone whatever the depth: a tone line across a
+     narrow shaft reads as a second water surface part-way down it.
+   - **Spray, bubbles and rings are flat and pale.** Drops thrown up where
+     something goes in or exhaust hits the water; bubbles from a helmet, a
+     jetpack or the cutter under water (which boils the cut instead of
+     burning it: no embers, no smoke down there); rings spreading on the
+     surface, outlines only, flatter than the ground ellipse (40% of their
+     width) because water is seen at a lower angle across it.
+   - **Each world's people are one kind, in the world's colors.** Flat
+     vector figures like the astronaut and the cows: a lit skin tone and
+     its shade, dark feet and pupils, pale eyes, and ONE accent — the
+     world's crystal color, as a deeper dye — for what they wear (a sash, a
+     scarf, a belt). Skin is any hue but the ground's or that accent's, so
+     they read against both. Shorter and rounder than the astronaut, who
+     must stay the one white figure in the scene. Where there is no air
+     they wear a glass bubble. They are in the hour's light like everything
+     on the ground (lifted at night, as the plants are).
+   - **A trading post is built in the same few colors.** The hut is the
+     world's own pale rock (its crest tone, shaded with the one below);
+     poles, counter and crates are one dark timber and one plank tone; the
+     awning's stripes, the cloth on the counter, the band round the hut and
+     the pennant are the accent dye beside a pale cloth. Pieces are flat
+     cutouts standing on the strip of ground behind the walking line, each
+     rooted where the ground is (no parallax), bases flat. No new hues.
+   - **Lamps are emitted light.** The lantern on a post's mast and the
+     hut's window keep their color at any hour and have one smooth halo
+     each, faint by day and bright at night. The lantern's halo never
+     shrinks below a few pixels, so it is what marks a post from the air.
    - **Dust motes are off by default** (`motes` knob). As small pale squares
      drawn over the whole frame they read as stars showing through the
      mountains and the ground. If they come back they need to read as dust,
@@ -188,11 +254,18 @@ computed sky.**
   colors; the rules above stay fixed.
 - Terrain banding + cel steps: `kBodyFrag` in [main.cpp](../src/core/main.cpp).
 - Sky, horizon haze, soft limb: `kAtmoFrag` in main.cpp (`horizonHaze` knob).
+- Water: `kWaterFrag` / `drawWaterPass` in main.cpp (three runs: behind the
+  crust, in front of the walker, over the bed in front); colors in
+  `PlanetLook::water` / `waterDeep`; spray, bubbles and rings are particle
+  modes 4–6 (`updateWaterFx`, `drawLaserFx`).
 - Ridge layers: the `specs[]` table in [planet.cpp](../src/world/planet.cpp)
   (alpha/skyMix per layer; tints from the look) + `drawRidges` in main.cpp
   (dusk/night grading, the black star mask, and the stencil that makes the
   nearest range own each pixel and keeps `beginBehindRidges()` draws out).
 - Ground ellipses: `drawBlobShadow` (main.cpp), beam splat (lander.cpp).
+- The locals and their posts: [outposts.cpp](../src/world/outposts.cpp)
+  (`Planet::Folk` is a world's kind, set in `Planet::foundOutposts`;
+  `drawAlien`, `Outposts::draw`).
 - Depth stack (main.cpp): `drawSkyBodies`, `drawFarClouds`, `drawRidges`,
   `drawLightShafts`, `drawTerrainShadows`, `NearField::draw` (harvestables in
   depth, data in `Planet::harvest`; [nearfield.cpp](../src/world/nearfield.cpp)),

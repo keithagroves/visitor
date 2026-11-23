@@ -52,6 +52,10 @@ void CarveMap::recenter(Vec2 local, const std::vector<Op>& ops, const Terrain& t
     }
     d_ = raw_;
     if (!all.empty()) refreshInterior(all.i0, all.j0, all.i1, all.j1, terrain);
+    flooded_.assign((size_t)N * N, 0);
+    wet_.assign((size_t)N * N, 0);
+    wetDirty_ = Rect{};
+    if (!all.empty()) flood(all.i0, all.j0, all.i1, all.j1, terrain, &ops);
 }
 
 bool CarveMap::contains(Vec2 local, float margin) const {
@@ -72,6 +76,7 @@ CarveMap::Rect CarveMap::apply(const Op& op, const Terrain& terrain) {
     rc.i1 = std::min(N - 1, rc.i1 + DEEP_CELLS);
     rc.j1 = std::min(N - 1, rc.j1 + DEEP_CELLS);
     refreshInterior(rc.i0, rc.j0, rc.i1, rc.j1, terrain);
+    flood(rc.i0, rc.j0, rc.i1, rc.j1, terrain, nullptr);
     return rc;
 }
 
@@ -139,4 +144,84 @@ float CarveMap::sample(Vec2 local) const {
     float top = row0[0] * (1 - fx) + row0[1] * fx;
     float bot = row1[0] * (1 - fx) + row1[1] * fx;
     return top * (1 - fy) + bot * fy;
+}
+
+// ---- Water -------------------------------------------------------------------
+
+void CarveMap::flood(int i0, int j0, int i1, int j1, const Terrain& terrain, const std::vector<Op>* ops) {
+    if (seaR_ <= 0.0f || flooded_.empty()) return;
+    const float seaSq = seaR_ * seaR_;
+    auto below = [&](int i, int j) {
+        float x = ox_ + i * CELL, y = oy_ + j * CELL;
+        return x * x + y * y < seaSq;
+    };
+    // Dug out of what was rock (the sky over a hole's mouth is not "dug").
+    auto dug = [&](int i, int j) { return raw_[(size_t)j * N + i] < 0.0f && terrainAt(i, j, terrain) > 0.0f; };
+    // Water already: the sea (open above the ground, under the level), or a
+    // flooded sample.
+    auto water = [&](int i, int j) {
+        if (i < 0 || j < 0 || i >= N || j >= N) return false;
+        if (flooded_[(size_t)j * N + i]) return true;
+        return below(i, j) && terrainAt(i, j, terrain) <= 0.0f;
+    };
+    std::vector<int> stack;
+    auto take = [&](int i, int j) {
+        flooded_[(size_t)j * N + i] = 1;
+        stack.push_back(j * N + i);
+    };
+    for (int j = j0; j <= j1; j++) {
+        for (int i = i0; i <= i1; i++) {
+            if (flooded_[(size_t)j * N + i] || raw_[(size_t)j * N + i] >= 0.0f) continue;
+            if (!below(i, j) || !dug(i, j)) continue;
+            if (water(i - 1, j) || water(i + 1, j) || water(i, j - 1) || water(i, j + 1)) take(i, j);
+        }
+    }
+    if (ops) {
+        for (const Op& op : *ops) {
+            if (!op.wet) continue;
+            int i = (int)floorf((op.local.x - ox_) / CELL + 0.5f), j = (int)floorf((op.local.y - oy_) / CELL + 0.5f);
+            if (i < 0 || j < 0 || i >= N || j >= N || flooded_[(size_t)j * N + i]) continue;
+            if (below(i, j) && dug(i, j)) take(i, j);
+        }
+    }
+    Rect& dr = wetDirty_;
+    while (!stack.empty()) {
+        int at = stack.back();
+        stack.pop_back();
+        int i = at % N, j = at / N;
+        // Its own sample and the ring round it, in the mirror.
+        int a0 = std::max(0, i - 1), a1 = std::min(N - 1, i + 1);
+        int b0 = std::max(0, j - 1), b1 = std::min(N - 1, j + 1);
+        for (int b = b0; b <= b1; b++)
+            for (int a = a0; a <= a1; a++) wet_[(size_t)b * N + a] = 255;
+        if (dr.empty()) { dr.i0 = a0; dr.j0 = b0; dr.i1 = a1; dr.j1 = b1; }
+        else {
+            dr.i0 = std::min(dr.i0, a0); dr.j0 = std::min(dr.j0, b0);
+            dr.i1 = std::max(dr.i1, a1); dr.j1 = std::max(dr.j1, b1);
+        }
+        const int di[4] = {-1, 1, 0, 0}, dj[4] = {0, 0, -1, 1};
+        for (int k = 0; k < 4; k++) {
+            int qi = i + di[k], qj = j + dj[k];
+            if (qi < 0 || qj < 0 || qi >= N || qj >= N) continue;
+            if (flooded_[(size_t)qj * N + qi] || raw_[(size_t)qj * N + qi] >= 0.0f) continue;
+            if (below(qi, qj) && dug(qi, qj)) take(qi, qj);
+        }
+    }
+}
+
+bool CarveMap::wetAt(Vec2 local) const {
+    if (wet_.empty()) return false;
+    int i = (int)floorf((local.x - ox_) / CELL + 0.5f), j = (int)floorf((local.y - oy_) / CELL + 0.5f);
+    if (i < 0 || j < 0 || i >= N || j >= N) return false;
+    return wet_[(size_t)j * N + i] != 0;
+}
+
+void CarveMap::markWetOps(std::vector<Op>& ops) const {
+    if (flooded_.empty()) return;
+    for (Op& op : ops) {
+        if (op.wet) continue;
+        int i = (int)floorf((op.local.x - ox_) / CELL + 0.5f), j = (int)floorf((op.local.y - oy_) / CELL + 0.5f);
+        if (i < 0 || j < 0 || i >= N || j >= N) continue;
+        if (flooded_[(size_t)j * N + i]) op.wet = true;
+    }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "../math/vecmath.h"
 #include "../math/noise.h"
@@ -50,6 +51,10 @@ struct PlanetLook {
     float mineral[3] = {0.55f, 0.85f, 0.92f};
     float floraDensity = 1.0f;
     float mineralDensity = 0.35f;
+    // Open water (Planet::sea): the tone of the shallows and of deep water,
+    // before the hour's light. Flat fields, like the ground's.
+    float water[3] = {0.27f, 0.52f, 0.60f};
+    float waterDeep[3] = {0.13f, 0.31f, 0.44f};
 };
 
 // Shape knobs for the procedural silhouette (see Planet::generate).
@@ -66,6 +71,11 @@ struct TerrainStyle {
     // stretch): the home world's drop-in point, where the ship and the herd
     // start.
     float keepClearAngle = 0.0f, keepClearHalf = 0.0f;
+    // Water. A world of this kind has open water with probability seaChance,
+    // and then this share of its ground lies under it (drawn from seaMin ..
+    // seaMax): the sea level is set where that much of the surface is below
+    // it, so the low ground fills into ponds, lakes and seas. 0 = always dry.
+    float seaChance = 0.0f, seaMin = 0.0f, seaMax = 0.0f;
 };
 
 // A procedurally generated planet body, ported from cow-abductor's planet.js.
@@ -137,6 +147,23 @@ public:
     // rebuilt and its whole texture needs re-uploading.
     bool focusCarve(Vec2 world);
     bool hasDigs() const { return !digOps_.empty(); }
+
+    // ---- Water ---------------------------------------------------------------
+    // One level round the whole world (seaLevel, above baseRadius): wherever
+    // the ground dips below it there is a pond, a lake or a sea. Water also
+    // stands in whatever has been dug that connects to one, up to the same
+    // level (CarveMap works out what has flooded); a hole that touches no
+    // water stays dry however deep it goes.
+    bool  sea = false;       // this world has open water
+    float seaLevel = 0.0f;   // its surface, above baseRadius
+    float seaRadius() const { return sea ? baseRadius + seaLevel + gDebug.waterLevel : 0.0f; }
+    // The ground as you see it from above: the terrain, or the water over it.
+    // What the ship comes down on, and what shadows fall on.
+    float visibleRadius(float angleDeg) const;
+    bool overWater(float angleDeg) const { return sea && seaRadius() > surfaceRadius(angleDeg); }
+    // How far under the surface a world point is, if it is in water (in the
+    // sea, or in flooded dug space); 0 if it is not.
+    float waterDepth(Vec2 world) const;
 
     // ---- Lazy destructible field ------------------------------------------
     // Build the density grid (seeded from the silhouette, past digs replayed).
@@ -275,6 +302,74 @@ public:
     struct CaveMouth { float angle, half; };
     std::vector<CaveMouth> caveMouths;
 
+    // A clump of ore buried in the rock (deposits.cpp). Clumps are seeded on a
+    // grid from the planet's seed and worked out when needed, so nothing is
+    // stored for one until it is found: digging up to it (or a cave wall
+    // running past it) reveals it, and the mining laser takes it out a piece
+    // at a time — or the terrain cutter, held on it, burns it away.
+    struct Ore {
+        enum Kind : unsigned char { Ferrite = 0, Crystal = 1, Gold = 2 };
+        Vec2  local;       // center, planet-local (where it physically is)
+        float size;        // radius, world units
+        float phase;       // shape variation / glint timing
+        Kind  kind;
+        bool  mined;       // gone (for good): mined out, or burnt away
+        float hp;          // 1 = untouched .. 0 = mined out; what is taken stays taken
+        float heat;        // the cutter's: 0 = cold .. 1 = burnt away; cools when left alone
+        float found;       // seconds since it was revealed (the reveal glint)
+    };
+    std::vector<Ore> ores;                             // the clumps found so far
+    // Every grid clump looked at so far, by id: its index in `ores`, or -1
+    // when a cave had already hollowed it out (there is no clump).
+    std::unordered_map<unsigned long long, int> oreSeen;
+
+    // ---- The locals ---------------------------------------------------------
+    // Every world has people of its own — one kind per world, its look drawn
+    // from the world's seed — who keep a few trading posts on dry, level
+    // ground: a hut, a stall with the trader behind its counter, a lantern
+    // mast, and a couple of locals wandering about. Placed at generate();
+    // simulated, drawn and picked through Outposts (outposts.cpp). What they
+    // pay and what they sell is in trade.cpp.
+    struct Folk {
+        float body[3] = {0.45f, 0.62f, 0.55f};    // skin, the lit tone
+        float accent[3] = {0.93f, 0.88f, 0.74f};  // what they wear: their world's crystal color
+        float height = 26.0f;    // an average one, world units (the astronaut is 36)
+        float girth = 0.7f;      // width / height
+        int   eyes = 2;          // 1..3
+        int   head = 0;          // 0 one-piece blob, 1 a head on a neck, 2 eyes on stalks
+        int   antennae = 0;      // 0..2
+        bool  helmet = false;    // airless world: a glass bubble over the head
+    };
+    struct Alien {
+        float along = 0;         // where it stands: ground units from the stall (+ = the way angles grow)
+        float lo = 0, hi = 0;    // the stretch it wanders (lo == hi: it stays put)
+        float goal = 0;          // where it is walking to
+        float pause = 0;         // seconds it stands before picking somewhere new
+        float size = 1;          // height multiplier (they are not all the same)
+        float phase = 0;         // animation offset
+        float step = 0;          // walk cycle
+        float moving = 0;        // 0..1 eased: walking
+        float wave = 0;          // 0..1 eased: an arm up, waving
+        float noticed = 0;       // 0..1 eased: looking at the visitor
+        int   facing = 1;        // +1 = the way angles grow (screen right)
+        bool  trader = false;
+    };
+    struct Outpost {
+        float angle = 0;         // where the stall stands, degrees
+        unsigned int seed = 0;   // its prices, its trader's name
+        unsigned int rng = 1;    // the wanderers' dice
+        std::string keeper;      // the trader's name
+        std::vector<Alien> folk; // [0] is the trader
+        // What is left of the goods it sells, per slot (see Trade); -1 = not
+        // looked at yet.
+        int   stock[2] = {-1, -1};
+        float hail = 0;          // seconds of waving left (the trader has just seen you)
+        bool  near = false;      // the visitor is close by (edge detector for the wave)
+        bool  met = false;       // the player has traded here
+    };
+    Folk folk;
+    std::vector<Outpost> outposts;
+
 private:
     // The original star-shaped silhouette, interpolated from `landscape`, plus
     // the mesas. Used to seed the field and as the LUT source while no field
@@ -286,6 +381,11 @@ private:
     // Scatter the plants and minerals (`harvest`) the way they would grow:
     // in patches, where the ground suits them. See harvest_gen.cpp.
     void growHarvest();
+    // Decide what this world's people look like (`folk`) and where their
+    // trading posts stand (`outposts`): dry, level ground clear of the mesas,
+    // one of them a short walk from the home world's drop-in point. Clears
+    // the plants and stones off the ground they stand on. See outposts.cpp.
+    void foundOutposts(const TerrainStyle& style);
     // Cut the natural caves into and under the mesas (as bites at the front of
     // digOps_, so they live in the same fine layer as anything the player
     // digs) and furnish them (caveProps). Needs the field: cave floors are

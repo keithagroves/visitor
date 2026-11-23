@@ -1,0 +1,23 @@
+{
+  "title": "VISITOR",
+  "subtitle": "Game update · 11/17/2026",
+  "output": "Visitor - Game update 11-17-2026.mp4",
+  "fps": 60,
+  "music": { "drop": 7.2, "b": 33.6, "break": 50.4, "lift": 55.2, "end": 62.4 },
+  "segments": [
+    { "shot": "title",     "in": 0.0,  "dur": 7.2, "card": "title", "cardAt": 0.9, "cardDur": 5.7 },
+    { "shot": "system",    "in": 0.2,  "dur": 4.8, "push": 1.25, "caption": "Explore a generated universe", "kicker": "system" },
+    { "shot": "abduct",    "in": 0.3,  "dur": 3.6, "caption": "Beam up the locals" },
+    { "shot": "cruise",    "in": 1.8,  "dur": 3.6, "caption": "Fly between worlds", "kicker": "Thaum · Volcanic world" },
+    { "shot": "land",      "in": -6.0, "dur": 6.0, "caption": "Land on alien planets", "kicker": "Bredath · Exotic world" },
+    { "shot": "stepout",   "in": 0.0,  "dur": 3.6, "caption": "Step outside" },
+    { "shot": "laser",     "in": 0.0,  "dur": 3.6, "caption": "Harvest with your mining laser" },
+    { "shot": "dig",       "in": 0.5,  "dur": 4.8, "caption": "Cut tunnels through solid rock" },
+    { "shot": "cave",      "in": 0.0,  "dur": 4.8, "caption": "Discover crystal caves" },
+    { "shot": "ore",       "in": 0.2,  "dur": 4.8, "caption": "Strike buried gold" },
+    { "shot": "inventory", "in": 0.0,  "dur": 3.6, "caption": "Fill your exosuit cargo" },
+    { "shot": "dusk",      "in": 0.6,  "dur": 4.8, "caption": "Stay out past sunset" },
+    { "shot": "liftoff",   "in": 0.0,  "dur": 14.4, "caption": "Lift off for the next world", "captionDur": 6.3,
+      "card": "end", "cardAt": 7.2, "cardDur": 7.2 }
+  ]
+}

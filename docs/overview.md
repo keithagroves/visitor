@@ -10,8 +10,9 @@ A 2D arcade game compiled from C++ to WebAssembly and rendered with WebGL 2
 (OpenGL ES 3.0) through Emscripten. You pilot a lander around a **generated
 solar system** — one seed builds the star, the planets, their moons, looks and
 names — of huge, **destructible** worlds: tractor-beam cows into your hold on
-the home planet, step out as a jetpack astronaut to dig the crust, then fly to
-the next world and chart it. The look —
+the home planet, step out as a jetpack astronaut to dig the crust and mine it,
+sell what you find to the locals at their trading posts and buy upgrades from
+them, then fly to the next world and chart it. The look —
 Rayleigh/Mie atmosphere, drifting clouds, a day/night terminator — comes from
 fullscreen shader passes layered over an immediate-mode 2D renderer.
 
@@ -62,15 +63,17 @@ own flow:
 ## Architecture docs
 
 - [Core / game loop](architecture/core.md) — the `App` singleton, the
-  `PLAYING/LANDED/CRASHED` state machine, the `View` camera, and the fullscreen
+  `PLAYING/LANDED/CRASHED` state machine, the `View` camera, the fullscreen
   shader passes (planet body, atmosphere, clouds) defined inline in
-  `main.cpp`.
+  `main.cpp`, and trading ([trade.h](../src/core/trade.h): prices, goods,
+  upgrades).
 - [Entities](architecture/entities.md) — the player [Lander](../src/entities/lander.h),
   the abductable [Cow](../src/entities/cow.h), and the spacewalking
   [Astronaut](../src/entities/astronaut.h).
 - [World](architecture/world.md) — the [system generator](../src/world/system_gen.h),
   the procedural [Planet](../src/world/planet.h) and its destructible
-  [TerrainField](../src/world/terrain_field.h) crust.
+  [TerrainField](../src/world/terrain_field.h) crust, and each world's locals
+  and their [trading posts](../src/world/outposts.h).
 - [Graphics](architecture/graphics.md) — the immediate-mode
   [Renderer2D](../src/graphics/renderer2d.h) batcher and the
   [Shader](../src/graphics/shader.h) compile helper.
@@ -82,6 +85,11 @@ own flow:
 
 ## Conventions & host page
 
+- **Gameplay** — [gameplay.md](gameplay.md): what the player is trying to do
+  (build the star drive and leave the system), the loop, the three walls
+  (range, suit time, tool hardness), the equipment ladder, what every
+  resource is for, what failing costs, and the order to build it in. Most of
+  it is not built yet; every gameplay feature is checked against it.
 - **Art style** — [art-style.md](art-style.md): limited palette, five flat
   terrain tones, three cel light steps, soft computed skies, flat ridge
   layers, and the 10-16% ground-ellipse rule. Every new visual feature follows
@@ -101,7 +109,7 @@ own flow:
   banners, the map's name labels, and the debug panel (sliders, "New random
   system", per-world "Warp to" buttons).
 - **Controls** — W/Up thrust, A/D rotate, Space tractor beam, E exit/enter the
-  ship, M system map, wheel or +/- zoom, R restart after a crash. On foot:
+  ship (and, on foot beside a trader's stall, trade), M system map, wheel or +/- zoom, R restart after a crash. On foot:
   A/D walk (and steer in the air), W jump, Space jetpack, hold the mouse
   button to fire the hand tool at the cursor, Q to switch it between mining
   laser and terrain cutter, Tab (or I) for the inventory.

@@ -48,6 +48,11 @@ flowchart TD
   landing dips a little past rest), runs off any sideways speed as a short
   slide and eases the hull upright. `liftOff()` rises from where the ship
   sits; contact isn't judged again until it climbs clear or sinks back. The core loop reads `gravityAt()` for the camera roll.
+  **It floats.** Water is somewhere to come down, like ground (always
+  level): it rests on the surface, `FLOAT_DRAFT` lower than it would stand
+  on land, so the water in front laps a third of the way up the hull, and
+  rides the swell (`bob`, a drawn-only offset the core loop sets). The
+  beam and the predicted path stop at the water too.
 - **Cow** — runs a small state machine: `OnGround` (wobbles back toward its
   origin) → `Carried` (reeled up the beam, capped speed because it's heavy) →
   `Falling` (released, under gravity) → `Stowed` (reached the hatch; the frame
@@ -80,6 +85,16 @@ flowchart TD
   pack), `aim` (both arms swing onto the line to `aimWorld` and a stubby tool
   appears in the near hand; `draw()` publishes the emitter's world position
   as `muzzleWorld` for the beam).
+  **In water** (`Planet::waterDepth`, measured at the feet: `wet` 0–1)
+  the suit is heavy, so it sinks, slowly: the water carries most of its
+  weight (`SWIM_BUOYANCY`) and slows everything (`SWIM_DRAG`). It walks
+  the bottom as it walks the ground, a little slower, with long floating
+  jumps; holding jump swims up (`swim(+1)`: a lift that fades out as the
+  chest reaches the surface, so held there it treads water with the head
+  out), S dives, A/D swim along at about 60% of walking speed, and the
+  jetpack works as in air. Flooded tunnels are the same water. The `swim`
+  pose blend takes over off the bottom: treading upright (legs pedalling,
+  arms sculling) or, travelling, stretched forward in a crawl.
   Mirrored by `facing`. Palette: off-white suit, one
   shade tone, dark boots/gloves/visor, one orange accent, the ship's teal in
   the visor.
@@ -99,4 +114,9 @@ flowchart TD
 
 - Gravity, surface radius, and the destructible crust they act on:
   [world](world.md).
+- The other people in the game — each world's locals, their traders and
+  the posts they keep — are scenery rooted to the ground rather than
+  physics bodies, so they live with the world: [world](world.md)
+  (`Outposts`). The astronaut's jetpack tank (`jetpackMax`) is one of the
+  things their traders upgrade.
 - How they are updated and drawn each tick: [frame loop](../flows/frame-loop.md).

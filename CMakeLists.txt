@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Source files (build.sh is the primary build; this mirrors its source list)
 set(SOURCES
     src/core/main.cpp
+    src/core/trade.cpp
     src/graphics/shader.cpp
     src/graphics/renderer2d.cpp
     src/world/planet.cpp
@@ -17,6 +18,8 @@ set(SOURCES
     src/world/cave_gen.cpp
     src/world/harvest_gen.cpp
     src/world/cavefield.cpp
+    src/world/deposits.cpp
+    src/world/outposts.cpp
     src/entities/lander.cpp
     src/entities/cow.cpp
     src/entities/astronaut.cpp

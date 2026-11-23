@@ -90,6 +90,7 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
     case Arch::Temperate:
         p.kind = "Temperate world";
         derive = false;   // hand-tuned defaults
+        style.seaChance = 1.0f; style.seaMin = 0.17f; style.seaMax = 0.23f;   // lakes and a sea or two
         break;
 
     case Arch::Desert:
@@ -106,6 +107,9 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
         set3(L.flora, 0.62f, 0.58f, 0.30f); set3(L.mineral, 0.98f, 0.62f, 0.30f);   // dry scrub, amber
         L.floraDensity = 0.35f; L.mineralDensity = 0.60f;
         style.rangesMin = 0; style.rangesMax = 1; style.rangeBoost = 0.8f; style.rolling = 0.8f;
+        // Mostly bone dry; now and then a few turquoise waterholes.
+        style.seaChance = 0.4f; style.seaMin = 0.03f; style.seaMax = 0.07f;
+        set3(L.water, 0.30f, 0.60f, 0.56f); set3(L.waterDeep, 0.12f, 0.36f, 0.40f);
         break;
 
     case Arch::Ice:
@@ -122,6 +126,9 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
         set3(L.flora, 0.55f, 0.75f, 0.80f); set3(L.mineral, 0.78f, 0.93f, 1.0f);    // frost lichen, ice
         L.floraDensity = 0.20f; L.mineralDensity = 0.90f;
         style.rangesMin = 1; style.rangesMax = 2; style.rangeBoost = 0.9f; style.rolling = 1.3f;
+        // Cold meltwater in the hollows.
+        style.seaChance = 0.85f; style.seaMin = 0.08f; style.seaMax = 0.18f;
+        set3(L.water, 0.50f, 0.69f, 0.77f); set3(L.waterDeep, 0.21f, 0.38f, 0.53f);
         break;
 
     case Arch::Volcanic:
@@ -154,6 +161,9 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
         set3(L.flora, 0.25f, 0.62f, 0.40f); set3(L.mineral, 0.85f, 0.95f, 0.50f);   // lush green, lime
         L.floraDensity = 1.8f; L.mineralDensity = 0.30f;
         style.rangesMin = 1; style.rangesMax = 2; style.rangeBoost = 1.0f; style.rolling = 1.5f;
+        // The wettest kind of world: green water, and a lot of it.
+        style.seaChance = 1.0f; style.seaMin = 0.24f; style.seaMax = 0.36f;
+        set3(L.water, 0.24f, 0.52f, 0.47f); set3(L.waterDeep, 0.09f, 0.30f, 0.33f);
         break;
 
     case Arch::Exotic: {
@@ -183,6 +193,10 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
         L.floraDensity = rng.range(0.2f, 1.5f); L.mineralDensity = rng.range(0.3f, 0.9f);
         style.rangesMin = 0; style.rangesMax = 3;
         style.rangeBoost = rng.range(0.8f, 1.3f); style.rolling = rng.range(0.8f, 1.6f);
+        // Some liquid or other, in a hue off the rock's — as likely as not.
+        style.seaChance = 0.65f; style.seaMin = 0.08f; style.seaMax = 0.30f;
+        hsv3(L.water, h + 150.0f, 0.46f, 0.66f);
+        hsv3(L.waterDeep, h + 165.0f, 0.60f, 0.40f);
         dHue = 0.0f; vMul = 1.0f;   // already seeded by hue
         break;
     }

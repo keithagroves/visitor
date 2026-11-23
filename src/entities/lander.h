@@ -21,6 +21,9 @@ public:
     // Landing thresholds, from sketch.js.
     static constexpr float LANDING_MAX_SPEED = 100.0f;
     static constexpr float LANDING_MAX_TILT = 45.0f;   // ship-vs-radial, degrees
+    // Afloat (the ship comes down on water as it does on ground, and stays on
+    // top): how much lower it sits in the water than it would on land.
+    static constexpr float FLOAT_DRAFT = 3.0f;
 
     void reset();
     void spawnOnPlanet(const Planet& planet);
@@ -122,6 +125,9 @@ public:
     float settleSpeed = 0.0f;
     float settleSlide = 0.0f;
     bool  liftingOff = false;
+    // Drawn this far from where it is (the caller sets it every frame): the
+    // slow rise and fall of a ship riding on water. Zero on land.
+    Vec2  bob;
 
     float radius = 20.0f;
 };

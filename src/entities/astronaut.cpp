@@ -77,13 +77,19 @@ void Astronaut::spawn(Vec2 position) {
     walking       = false;
     jetting       = false;
     walkRequested = false;
-    jetpackFuel   = JETPACK_MAX_FUEL;
+    jetpackFuel   = jetpackMax;
     active        = true;
     aiming        = false;
     stride        = 0.0f;
     air           = 0.0f;
     aim           = 0.0f;
     jumpGrace     = 0.0f;
+    wet           = 0.0f;
+    chestDepth    = 0.0f;
+    swimPose      = 0.0f;
+    swimAnim      = 0.0f;
+    swimGo        = 0.0f;
+    stroking      = false;
     muzzleWorld   = position;
 }
 
@@ -107,6 +113,21 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     if (distSq < 1.0f) distSq = 1.0f;
     float gravD = sqrtf(distSq);
     float force = planet.gravity / distSq;
+
+    // Water. How far in we are is measured from the feet up; the water takes
+    // most of our weight and slows whatever we do.
+    {
+        Vec2 upNow(-dx / gravD, -dy / gravD);
+        float feet = planet.waterDepth(pos + upNow * 2.0f);
+        wet = feet <= 0.0f ? 0.0f : (feet >= WET_FULL ? 1.0f : feet / WET_FULL);
+        chestDepth = feet - (BODY_UP - 2.0f);
+        if (wet > 0.0f) {
+            force *= 1.0f - SWIM_BUOYANCY * wet;
+            float keep = powf(1.0f - (1.0f - SWIM_DRAG) * wet, timeScale);
+            vel.x *= keep;
+            vel.y *= keep;
+        }
+    }
     vel.x += (dx / gravD) * force * timeScale;
     vel.y += (dy / gravD) * force * timeScale;
 
@@ -176,7 +197,7 @@ void Astronaut::update(const Planet& planet, float timeScale) {
 
         // Recharge jetpack fuel on the ground.
         float charged = jetpackFuel + JETPACK_CHARGE * timeScale;
-        jetpackFuel = charged < JETPACK_MAX_FUEL ? charged : JETPACK_MAX_FUEL;
+        jetpackFuel = charged < jetpackMax ? charged : jetpackMax;
     }
 
     walking = grounded && walkRequested;
@@ -200,6 +221,38 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     ease(stride, walking ? 1.0f : 0.0f, 0.30f);
     ease(air, grounded ? 0.0f : 1.0f, 0.28f);
     ease(aim, aiming ? 1.0f : 0.0f, 0.40f);
+    // Swimming: off the bottom and in over the waist. The stroke runs faster
+    // the harder we are going, and the body lies forward only while it is
+    // actually travelling along.
+    bool swimming = !grounded && wet > 0.55f && !jetting;
+    float along = fabsf(-vel.x * outY + vel.y * outX);
+    float go = along / (gDebug.walkSpeed * 0.45f);
+    ease(swimPose, swimming ? 1.0f : 0.0f, 0.16f);
+    ease(swimGo, go > 1.0f ? 1.0f : go, 0.10f);
+    swimAnim += timeScale * (0.045f + 0.075f * swimGo + (stroking ? 0.03f : 0.0f));
+    stroking = false;
+}
+
+// Swim up (dir > 0) or dive (dir < 0). Up is a lift that fades out as the
+// chest reaches the surface: held, it brings you up and then keeps you there
+// with your head out of the water.
+void Astronaut::swim(const Planet& planet, float timeScale, int dir) {
+    if (wet <= 0.0f || grounded) return;
+    float dx = pos.x - planet.center.x;
+    float dy = pos.y - planet.center.y;
+    float d  = sqrtf(dx * dx + dy * dy);
+    if (d < 1.0f) return;
+    float g = planet.gravity / (d * d);
+    float push;
+    if (dir > 0) {
+        float under = (chestDepth + 4.0f) / 8.0f;
+        push = g * SWIM_LIFT * (under < 0.0f ? 0.0f : (under > 1.0f ? 1.0f : under));
+    } else {
+        push = -g * SWIM_DIVE * wet;
+    }
+    vel.x += (dx / d) * push * timeScale;
+    vel.y += (dy / d) * push * timeScale;
+    stroking = true;
 }
 
 // Move along the surface: dir = -1 left, +1 right (as seen with the camera
@@ -293,6 +346,19 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     float airW = air;
     Pose pose = mix(idle, run, stride);
     pose = mix(pose, jetting ? jet : jump, airW);
+    // In the water: treading it upright (legs pedalling, arms sculling out
+    // to the sides), or — travelling along — stretched out forward in a
+    // crawl, legs trailing in a flutter kick, arms reaching past the head in
+    // turn. (Arm angles are in the tilted upper body's frame: 180 = straight
+    // past the head.)
+    if (swimPose > 0.001f) {
+        float k = sinf(swimAnim * 6.2831853f), k2 = sinf(swimAnim * 6.2831853f + 1.1f);
+        Pose tread{16.0f + 20.0f * k, -22.0f + 14.0f * k2, 10.0f - 20.0f * k, -22.0f - 14.0f * k2,
+                   58.0f + 16.0f * k2, 84.0f + 18.0f * k2, 44.0f - 16.0f * k2, 72.0f - 18.0f * k2, 5.0f};
+        Pose crawl{-50.0f + 15.0f * k, -58.0f + 20.0f * k2, -50.0f - 15.0f * k, -58.0f - 20.0f * k2,
+                   95.0f + 72.0f * k, 108.0f + 66.0f * k, 95.0f - 72.0f * k, 108.0f - 66.0f * k, 56.0f};
+        pose = mix(pose, mix(tread, crawl, swimGo), swimPose);
+    }
 
     // Legs hang from the hips; on the ground the body drops just enough that
     // the lower foot rests on it (a long stride lowers the hips, as it should).

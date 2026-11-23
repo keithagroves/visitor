@@ -1,6 +1,6 @@
 ---
 name: frame-loop
-description: What mainLoop() does every tick — sync tunables, edge-trigger E/R/M/thrust keys, advance the orbits, run the state machine (input → physics → contact → beam → cows), move the astronaut, update camera, then the layered render (stars → sky band → sky bodies → ridges → body pass → shadows/cows → face fill → nav overlay → ship → foreground → clouds → vignette) and the HUD push.
+description: What mainLoop() does every tick — sync tunables, edge-trigger E/R/M/thrust keys, advance the orbits, run the state machine (input → physics → contact → beam → cows), move the astronaut, update camera, then the layered render (stars → sky band → sky bodies → ridges → water → body pass → shadows/cows → face fill → nav overlay → ship → water in front → foreground → clouds → vignette) and the HUD push.
 tags: [flow, game-loop, render-order, update]
 ---
 
@@ -45,13 +45,14 @@ sequenceDiagram
     opt spacewalking
         Loop->>A: carry by the body's orbitStep
         Loop->>P: focusCarve() — keep the fine dig layer around the player
-        Loop->>In: pollInputAstronaut() (walk/jump/jetpack), Q switches tool
+        Loop->>In: pollInputAstronaut() (walk/jump/jetpack, swim up / dive in water), Q switches tool
         Loop->>A: update(planet, timeScale)
     end
+    Loop->>P: Outposts::update() — the locals wander, look, wave; which trader is in reach (E trades)
     Loop->>P: updateDiscovery() — chart worlds on approach
     Loop->>V: updateZoom() + updateView() — framing, follow, auto-roll, map
     Loop->>A: updateLaser() — aim at the cursor: harvest, or cut terrain (after the camera)
-    Loop->>P: NearField::update() — regrowth; updateParticles()
+    Loop->>P: NearField::update() — regrowth; updateWaterFx() — splashes, spray, bubbles, the floating ship; updateParticles()
 ```
 
 ## Render phase
@@ -66,14 +67,17 @@ flowchart LR
     Sky --> Ridges["1d. Ridge layers<br/>nearest first, stamp stencil"]
     Ridges --> Dome["1d1. Behind the ranges (stencil-clipped)<br/>sky dome · far clouds · shooting star"]
     Dome --> Shafts["1e. Light shafts"]
-    Shafts --> Terrain["2. Planet body pass<br/>SDF fill · material · slope light · terminator"]
+    Shafts --> Water["1f. Water, behind the crust<br/>(water pass, mode 0)"]
+    Water --> Terrain["2. Planet body pass<br/>SDF fill · material · slope light · terminator"]
     Terrain --> Mask["2'. Cave mask<br/>body pass, mask mode: stencil bit over open cave space"]
-    Mask --> Cows["2b. Cast + blob shadows, cows,<br/>harvestables behind the walking line"]
+    Mask --> Cows["2b. Cast + blob shadows, cows,<br/>harvestables behind the walking line,<br/>trading posts and the locals,<br/>uncovered ore, cave props"]
     Cows --> Atmo["3. Face fill<br/>atmosphere mode 1 (from space)"]
     Atmo --> Nav["3b. Nav overlay<br/>orbit rings · markers · labels"]
     Nav --> Ship["3c. Ship + astronaut<br/>+ trajectory/beacon aids"]
-    Ship --> Veil["3c0. Front-ground veil<br/>over dug holes (body pass, veil mode)"]
-    Veil --> Near["3c1. Harvestables in front<br/>+ mining laser, sparks, chips"]
+    Ship --> WaterF["3c-. Water in front of the walker<br/>+ in flooded holes (water pass, mode 1)"]
+    WaterF --> Veil["3c0. Front-ground veil<br/>over dug holes (body pass, veil mode)"]
+    Veil --> WaterB["3c0'. Water over the bed in front<br/>(water pass, mode 2)"]
+    WaterB --> Near["3c1. Harvestables in front<br/>+ mining laser, sparks, chips, spray"]
     Near --> Fg["3d. Foreground band<br/>(screen-anchored)"]
     Fg --> Clouds["4. Clouds<br/>FBM band"]
     Clouds --> Top["5. Motes + vignette"]
@@ -114,14 +118,28 @@ Key ordering reasons (from the comments in `mainLoop`):
   ridge counts). The calcite formations (`CaveField::Part::Walled`) are drawn
   inside `beginInCave`/`endInCave`, clipped to it, so the wall they grow out of
   hides their flat bases. The frame's stencil clear wipes the bit.
+- **Water** goes down *before* the body pass, as a disc at each wet world's
+  sea radius: the crust is painted over it, so it shows only where the
+  ground is lower than the sea, and the body pass's own anti-aliased ground
+  line is its bed. Two more runs put it in front of things: after the ship
+  and the astronaut (tinting whatever is in the water, and filling flooded
+  holes) — *before* the front-ground veil, which is ground in front of a
+  hole's water and must cover it from the surface — and after the veil,
+  over the strip of lake bed in front of the walking line.
 - **Ground blob shadows** draw between the body and the entities, grounding the
-  ship/astronaut/cows on the surface.
+  ship/astronaut/cows on the surface (or on the water, over water).
 - The **atmosphere** is one disk drawn after the planet body; the shader splits
   it by radius (horizon sky above the mountains, altitude-gated sky sphere over
   the planet face), so the ground stays clear up close.
 - **Harvestables** are split around the walker: the ones behind the walking
   line draw before the ship and astronaut, the ones in front draw after — you
   walk behind the grass. The **mining laser** and its particles go over both.
+  Ore the cutter has uncovered sits in the rock: it draws with the things
+  behind the walker, before the cave props.
+- **Trading posts** (hut, stall, trader, the locals out walking) draw with
+  the things behind the walking line, so the ship and the astronaut pass in
+  front of them; the lantern's and the window's halos are one additive
+  group at the end of each post.
 - The **foreground band** draws after the ship because it is the nearest depth
   plane; it is anchored to the bottom of the screen, so it frames the scene
   without ever covering the player.

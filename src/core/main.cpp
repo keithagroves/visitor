@@ -1,6 +1,7 @@
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #include <GLES3/gl3.h>
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 #include <string>
@@ -13,6 +14,9 @@
 #include "../world/system_gen.h"
 #include "../world/nearfield.h"
 #include "../world/cavefield.h"
+#include "../world/deposits.h"
+#include "../world/outposts.h"
+#include "trade.h"
 #include "../entities/lander.h"
 #include "../entities/cow.h"
 #include "../entities/astronaut.h"
@@ -858,6 +862,231 @@ void main() {
 )";
 
 // ============================================================================
+// Water (see docs/art-style.md). A world's water stands at one level, a circle
+// round its center (Planet::seaRadius): wherever the ground dips below it there
+// is a pond, a lake or a sea, and whatever has been dug that connects to one is
+// flooded up to the same level. Drawn in two runs of this shader:
+//
+//   mode 0  the water itself, BEHIND the crust — a disc at the sea's radius,
+//           laid down before the body pass, which then paints the rock over
+//           it. So it shows exactly where the ground is lower than the water,
+//           with the body pass's own anti-aliased ground line as its bed.
+//           (The original game's "water disk behind the planet".)
+//   mode 1  the water IN FRONT of whoever is in it — run after the ship and
+//           the astronaut are drawn. The ground is seen from above at an
+//           angle, with the walking line u_walkDrop below the terrain line
+//           (see the body shader), and the water is drawn the same way: its
+//           surface runs from its far edge (the level itself) down to where it
+//           meets the walking line, u_walkDrop lower. That strip is the far
+//           part of the surface, behind the walker; from there down the water
+//           is in front of them, and tints whatever is in it. This run also
+//           puts the water into flooded holes and tunnels.
+//   mode 2  the water over the bed in front of the walking line — run after
+//           the front-ground veil. The strip of ground just below the terrain
+//           line is ground in front of the walker (where the nearest plants
+//           stand on land); under a lake that strip is lake bed, seen through
+//           the water standing on it. So it is tinted too, the more the deeper
+//           the water there — nothing at the shore — and so is the front
+//           ground the veil lays back over a hole dug in the bed.
+//
+// The style is the ground's: flat fields (far surface, shallows, deep water),
+// lit by the hour's light, no grain. The only motion is a slow swell on the
+// surface line and a few short glints drifting along the far strip.
+// ============================================================================
+static const char* kWaterFrag = R"(#version 300 es
+precision highp float;
+#define MAX_PLANETS 10
+uniform vec2 u_resolution;
+uniform vec2 u_viewFocus;
+uniform vec2 u_screenCenter;
+uniform float u_viewScale;
+uniform float u_viewRotation;
+uniform int u_planetCount;
+uniform vec2 u_planetPos[MAX_PLANETS];
+uniform float u_seaR[MAX_PLANETS];      // radius of the water's surface (0 = a dry world)
+uniform vec3 u_water[MAX_PLANETS];      // the shallows
+uniform vec3 u_waterDeep[MAX_PLANETS];  // deep water
+uniform vec3 u_waterTop[MAX_PLANETS];   // the far surface: paler, toward the sky's haze
+uniform vec2 u_sunPos;
+uniform float u_time;
+uniform int u_mode;             // 0 = the water, behind the crust; 1 = in front of the walking line; 2 = over the bed in front
+uniform float u_stripBottom;    // how far below the terrain line the front strip of ground reaches
+uniform int u_activeField;      // planet whose density grid / carve window are bound (-1 = none)
+uniform sampler2D u_terrainTex; // terrain radius per angle (one row per planet)
+uniform sampler2D u_fieldTex;   // R16F corner density grid
+uniform sampler2D u_carveTex;   // R16F: signed distance to dug space
+uniform sampler2D u_wetTex;     // R8: 1 where the water has got into dug space
+uniform vec2 u_carveOrigin;
+uniform float u_carveCell;
+uniform float u_carveSize;      // samples per side; 0 = no carve window
+uniform vec2 u_fieldOrigin;
+uniform float u_fieldCell;
+uniform vec2 u_fieldSize;
+uniform float u_walkDrop;       // the walking line is drawn this far below the terrain line
+uniform float u_tint;           // how strongly what is under water takes its color
+out vec4 fragColor;
+)" LIGHT_GLSL R"(
+
+float terrainRadius(vec2 outward, int row) {
+  float ang = degrees(atan(outward.y, outward.x));
+  if (ang < 0.0) ang += 360.0;
+  int n = textureSize(u_terrainTex, 0).x;
+  float fidx = ang / 360.0 * float(n);
+  int i0 = int(fidx) % n;
+  int i1 = (i0 + 1) % n;
+  float frac = fract(fidx);
+  return mix(texelFetch(u_terrainTex, ivec2(i0, row), 0).r,
+             texelFetch(u_terrainTex, ivec2(i1, row), 0).r, frac);
+}
+
+float fieldDensity(vec2 world) {
+  vec2 uv = ((world - u_fieldOrigin) / u_fieldCell + 0.5) / u_fieldSize;
+  return texture(u_fieldTex, uv).r;
+}
+
+// Signed distance to dug space, and whether the water has got into it there.
+// Nothing dug (and nothing flooded) outside the carve window.
+float carveDist(vec2 world) {
+  if (u_carveSize < 1.0) return 1.0e4;
+  vec2 g = (world - u_carveOrigin) / u_carveCell;
+  if (g.x < 0.0 || g.y < 0.0 || g.x > u_carveSize - 1.0 || g.y > u_carveSize - 1.0) return 1.0e4;
+  return texture(u_carveTex, (g + 0.5) / u_carveSize).r;
+}
+float wetMask(vec2 world) {
+  if (u_carveSize < 1.0) return 0.0;
+  vec2 g = (world - u_carveOrigin) / u_carveCell;
+  if (g.x < 0.0 || g.y < 0.0 || g.x > u_carveSize - 1.0 || g.y > u_carveSize - 1.0) return 0.0;
+  return texture(u_wetTex, (g + 0.5) / u_carveSize).r;
+}
+
+float hash1(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+
+// The water's own color a given depth below its surface: three flat fields —
+// the shallows, a middle tone from a couple of body heights down, and deep
+// water well below that — the lines between them wandering a little. A pond
+// is all shallows; only a sea shows all three.
+vec3 waterTone(int i, float depth, float along, float aaw) {
+  float wander = 9.0 * sin(along * 0.0110) + 6.0 * sin(along * 0.0270 + 1.7);
+  float mid = smoothstep(-aaw, aaw, depth - (90.0 + wander));
+  float deep = smoothstep(-aaw, aaw, depth - (215.0 - wander * 1.4));
+  return mix(u_water[i], u_waterDeep[i], 0.5 * mid + 0.5 * deep);
+}
+
+// Short pale strokes lying on the far strip of the surface, drifting slowly and
+// coming and going: the light catching the swell. Two rows of them.
+float glints(float along, float depth, float t, float aaw) {
+  float g = 0.0;
+  for (int k = 0; k < 2; k++) {
+    float row = k == 0 ? 4.0 : 8.6;
+    float cell = k == 0 ? 61.0 : 89.0;
+    float x = along + t * (k == 0 ? 2.1 : -1.5);
+    float id = floor(x / cell);
+    float h = hash1(id + float(k) * 17.0);
+    float len = 6.0 + 11.0 * hash1(id * 1.7 + 3.1);
+    float c = (id + 0.25 + 0.5 * h) * cell;
+    float inX = 1.0 - smoothstep(len * 0.5 - aaw, len * 0.5 + aaw, abs(x - c));
+    float inY = 1.0 - smoothstep(0.55, 0.55 + aaw, abs(depth - row));
+    float on = step(0.42, h) * smoothstep(-0.2, 0.6, sin(t * 0.33 + h * 40.0));
+    g = max(g, inX * inY * on);
+  }
+  return g;
+}
+
+void main() {
+  vec2 pixel = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+  vec2 centered = pixel - u_screenCenter;
+  float c = cos(-u_viewRotation), s = sin(-u_viewRotation);
+  vec2 unrot = vec2(c * centered.x - s * centered.y, s * centered.x + c * centered.y);
+  vec2 world = unrot / u_viewScale + u_viewFocus;
+  float aaw = max(1.5 / u_viewScale, 0.0001);
+  // The fine things (swell, glints, the line where the surface meets the
+  // walking line) only exist up close; they melt away as the camera pulls out.
+  float detail = 1.0 - smoothstep(1.2, 3.5, aaw);
+
+  vec3 accumCol = vec3(0.0);
+  float accumA = 0.0;
+  for (int i = 0; i < MAX_PLANETS; i++) {
+    if (i >= u_planetCount) break;
+    float seaR = u_seaR[i];
+    if (seaR <= 0.0) continue;
+    if (u_mode != 0 && i != u_activeField) continue;
+    vec2 d = world - u_planetPos[i];
+    float dist = length(d);
+    if (dist > seaR + 4.0 + aaw) continue;
+    vec2 outward = d / max(dist, 0.0001);
+    float along = atan(outward.y, outward.x) * seaR;
+    // A slow swell on the surface: a unit or two, long and lazy.
+    float swell = (1.1 * sin(along * 0.041 + u_time * 0.30) + 0.6 * sin(along * 0.097 - u_time * 0.47)) * detail;
+    float top = seaR + swell;
+    vec2 toSun = normalize(u_sunPos - u_planetPos[i]);
+    vec3 light = groundLight(i, dot(outward, toSun));
+
+    if (u_mode == 0) {
+      float depth = top - dist;
+      if (depth < -aaw) continue;
+      // Well inside the rock the crust covers it anyway.
+      if (dist < terrainRadius(outward, i) - 40.0 - 4.0 * aaw) continue;
+      float cov = clamp(depth / aaw + 0.5, 0.0, 1.0);
+      vec3 col = waterTone(i, depth, along, aaw);
+      // The far strip of the surface, from its far edge to the walking line.
+      float strip = 1.0 - smoothstep(u_walkDrop - aaw, u_walkDrop + aaw, depth);
+      col = mix(col, u_waterTop[i], strip);
+      col = mix(col, min(u_waterTop[i] * 1.22 + 0.05, vec3(1.0)), glints(along, depth, u_time, aaw) * detail * 0.85);
+      col *= light;
+      accumCol += col * cov * (1.0 - accumA);
+      accumA += cov * (1.0 - accumA);
+    } else if (u_mode == 2) {
+      float surfaceR = terrainRadius(outward, i);
+      float over = top - surfaceR;                // the water standing on the bed in this column
+      float under = surfaceR - dist;              // how far below the terrain line this pixel is
+      if (over <= 0.0 || under < u_walkDrop - 2.0 * aaw || under > u_stripBottom + 8.0) continue;
+      // Only where the walking plane is ground (rock, or a hole in it): the
+      // open water above the bed was laid over by mode 1.
+      vec2 P = world + outward * u_walkDrop;
+      float ground = clamp(fieldDensity(P) / aaw + 0.5, 0.0, 1.0);
+      float strip = 1.0 - smoothstep(u_stripBottom - 7.0, u_stripBottom + 7.0, under);
+      float a = u_tint * ground * strip * smoothstep(0.0, 28.0, over);
+      if (a <= 0.0) continue;
+      vec3 col = waterTone(i, over, along, aaw) * light;
+      accumCol += col * a * (1.0 - accumA);
+      accumA += a * (1.0 - accumA);
+    } else {
+      // The point of the walking plane shown at this pixel.
+      vec2 P = world + outward * u_walkDrop;
+      float depthP = top - (dist + u_walkDrop);
+      if (depthP < -aaw) continue;
+      float tP = fieldDensity(P);
+      float cP = carveDist(P);
+      // Open above the ground: the sea itself. Dug out of the rock: water only
+      // where it has got in.
+      float open = clamp(-tP / aaw + 0.5, 0.0, 1.0);
+      float dug = clamp(tP / aaw + 0.5, 0.0, 1.0) * (1.0 - clamp(cP / aaw + 0.5, 0.0, 1.0));
+      float flooded = dug * smoothstep(0.30, 0.60, wetMask(P));
+      float inWater = clamp(open + flooded, 0.0, 1.0) * clamp(depthP / aaw + 0.5, 0.0, 1.0);
+      if (inWater <= 0.0) continue;
+      // In a flooded hole there is no water behind what you see, only the
+      // hole's back wall: lay it on thicker there so it still reads as water,
+      // and in ONE tone whatever the depth — a tone line across a narrow
+      // shaft reads as a second water surface part-way down it.
+      float inHole = flooded / max(open + flooded, 0.0001);
+      vec3 col = mix(waterTone(i, depthP + u_walkDrop, along, aaw),
+                     mix(u_water[i], u_waterDeep[i], 0.35), inHole);
+      float a = u_tint * mix(1.0, 1.45, inHole);
+      // Where the surface meets the walking line: a thin pale line, across
+      // whatever stands in the water.
+      float line = (1.0 - smoothstep(1.3, 1.3 + aaw, depthP)) * detail;
+      col = mix(col, u_waterTop[i] * 1.10, line);
+      a = mix(min(a, 0.92), 0.80, line) * inWater;
+      col *= light;
+      accumCol += col * a * (1.0 - accumA);
+      accumA += a * (1.0 - accumA);
+    }
+  }
+  fragColor = vec4(accumCol, accumA);   // premultiplied "over"
+}
+)";
+
+// ============================================================================
 // Camera / view — ports updateView() from sketch.js: altitude-based framing,
 // velocity-predictive follow, and an auto-roll that keeps gravity pointing
 // screen-down so you stay upright wherever you are on the planet.
@@ -944,7 +1173,8 @@ struct App {
         Vec2 local, vel;
         float life, maxLife, size;
         float r, g, b;
-        int mode;                   // 0 spark, 1 harvested bit flying to the player, 2 ember (falls), 3 smoke (rises, spreads)
+        int mode;                   // 0 spark, 1 harvested bit flying to the player, 2 ember (falls), 3 smoke (rises, spreads),
+                                    // 4 water droplet (falls), 5 bubble (rises to the surface), 6 ripple ring on the water
     };
     std::vector<Particle> particles;
     // The hand tool has two modes (Q switches): the mining laser, which cuts
@@ -956,7 +1186,7 @@ struct App {
     bool prevToolKey = false;
     bool laserCutting = false;      // this frame's beam is the cutter (for its color)
     float cutTimer = 0.0f;          // time banked toward the next bite
-    int cutBites = 0;               // bites taken (every few yield a ferrite)
+    int cutBites = 0;               // bites taken (paces the smoke)
     // The last few bites, still hot (planet-local, cooling) — the body shader
     // makes the rock around them glow.
     static constexpr int MAX_BURNS = 12;
@@ -964,11 +1194,20 @@ struct App {
     Burn burns[MAX_BURNS];
     int burnNext = 0;
     float inHole = 0.0f;            // eased 0..1: the player is down a dug hole
+    // Water effects: was the astronaut in the water last frame (for the
+    // splash going in), and clocks for their bubbles and ripples and the
+    // floating ship's.
+    bool wasWet = false;
+    float bubbleIn = 0.0f, rippleIn = 0.0f, shipRippleIn = 0.0f;
+    int floodedNow = 0;             // samples of dug space the water has just got into (since last looked at)
     bool laserOn = false;
     int laserTarget = -1;           // index into the dominant planet's harvest list (-1 = none)
     int hoverTarget = -1;           // harvestable under the cursor and in range
     int laserProp = -1;             // the same two, for what grows in caves
     int hoverProp = -1;             //   (indices into the dominant planet's caveProps)
+    int laserOre = -1;              // ...and for ore the cutter has uncovered
+    int hoverOre = -1;              //   (indices into the dominant planet's ores)
+    int burnOre = -1;               // the clump the cutter is held on, burning it away
     Vec2 laserEnd;
     float laserDepth = 0.0f;        // near-field depth of whatever the beam ends on
     bool laserHit = false;          // beam ends on something (item or ground), not open sky
@@ -979,6 +1218,17 @@ struct App {
     static constexpr int ITEM_CAVE = 9;         // first of the cave items: calcite, glowcap, gold
     int inventory[ITEM_COUNT] = {0};
     bool inventoryDirty = true;
+    // Trading with the locals (Outposts, Trade): what you have been paid, the
+    // upgrades bought with it (levels, by Trade::Upgrade), the post whose
+    // trade panel is open and the one whose trader is in reach right now
+    // (both index the dominant world's outposts; -1 = none).
+    int credits = 0;
+    bool creditsDirty = true;
+    int upgrades[Trade::UPGRADES] = {0};
+    int tradePost = -1;
+    int nearPost = -1;
+    std::string promptShown;        // the "E - ..." hint on the page, as last sent
+    int traderHudKey = -2;          // change detector for the HUD's nearest-trader readout
     unsigned int fxSeed = 2463534242u;
 
     float camAlt = 0.0f;            // eased altitude above the local ground (camera + foreground)
@@ -1017,6 +1267,8 @@ struct App {
     int terrainN = 2048;            // its width (entries around the planet)
     GLuint fieldTex = 0;            // R16F mirror of the TerrainField corner grid
     GLuint carveTex = 0;            // R16F mirror of the active planet's CarveMap window
+    GLuint waterProgram = 0;        // water: behind the crust, and in front of the walker
+    GLuint wetTex = 0;              // R8 mirror of that window's flooded samples
 
     // Previous-frame key states for edge-triggered actions (lift off / restart).
     bool prevThrustKey = false;
@@ -1032,6 +1284,8 @@ static App app;
 
 static Planet& homePlanet() { return app.planets[app.homeIdx]; }
 static Planet& dominantPlanet() { return app.planets[app.dominantIdx]; }
+
+static_assert(App::ITEM_COUNT == Trade::ITEMS, "Trade prices cover every inventory item");
 
 // Body with the strongest pull at a point (the one you're "at"). The sun is
 // excluded: nothing lands there, and the camera should never frame against it.
@@ -1072,6 +1326,16 @@ static constexpr int KEY_M = 77;
 static constexpr float LANDING_MAX_SLOPE = 40.0f; // degrees off the local tangent
 static constexpr int MAX_CARGO = 3;
 static constexpr int NUM_COWS = 5;
+
+// What the ship holds once the upgrades bought from the traders are counted:
+// fuel (the debug knob is the base tank) and cows.
+static float maxFuel() { return gDebug.maxFuel * Trade::fuelScale(app.upgrades[Trade::FuelTank]); }
+static int maxCargo() { return MAX_CARGO + Trade::cargoBonus(app.upgrades[Trade::CargoBay]); }
+// The upgrades that live in other objects' fields.
+static void applyUpgrades() {
+    app.astronaut.jetpackMax = Astronaut::JETPACK_MAX_FUEL * Trade::jetpackScale(app.upgrades[Trade::Jetpack]);
+}
+static void closeTrade();   // defined with the trading code
 
 // Barycentric point-in-triangle test (ported from lander.js).
 static bool pointInTriangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
@@ -1124,8 +1388,22 @@ static void resetGame() {
     app.laserOn = false;
     app.laserTarget = app.hoverTarget = -1;
     app.laserProp = app.hoverProp = -1;
+    app.laserOre = app.hoverOre = -1;
+    app.burnOre = -1;
     for (int i = 0; i < App::ITEM_COUNT; i++) app.inventory[i] = 0;
     app.inventoryDirty = true;
+    // A new run starts with empty pockets and a stock ship.
+    closeTrade();
+    app.credits = 0;
+    app.creditsDirty = true;
+    for (int i = 0; i < Trade::UPGRADES; i++) app.upgrades[i] = 0;
+    applyUpgrades();
+    for (Planet& p : app.planets) {
+        for (Planet::Outpost& o : p.outposts) {
+            o.stock[0] = o.stock[1] = -1;       // the stalls are restocked
+            o.met = false;
+        }
+    }
     spawnCows();
     app.spacewalking      = false;
     app.astronaut.active  = false;
@@ -1154,6 +1432,8 @@ static bool terrainFlat(const Planet& p, float angle) {
     return acosd(alignment) < LANDING_MAX_SLOPE;
 }
 
+static void splashDown(const Planet& p, Vec2 at, Vec2 vel, float size);   // defined with the particles
+
 // Track altitude every frame; while PLAYING, judge ground contact as a safe
 // landing (slow, upright, flat) or a crash.
 static void updateContact() {
@@ -1163,7 +1443,10 @@ static void updateContact() {
     float dy = l.pos.y - p.center.y;
     float d = sqrtf(dx * dx + dy * dy);
     float angle = atan2d(dy, dx);
-    float alt = d - p.surfaceRadius(angle);
+    // What is under the ship: the ground, or water standing over it — it
+    // comes down on either, and floats on the second.
+    bool water = p.overWater(angle);
+    float alt = d - p.visibleRadius(angle);
     l.altitude = alt > 0 ? alt : 0;
 
     if (!l.active) return;
@@ -1173,8 +1456,9 @@ static void updateContact() {
         // means matching its velocity, not the world frame's.
         bool speedSafe = (l.vel - p.orbitVel).length() < Lander::LANDING_MAX_SPEED;
         bool upright = l.isUpright(p);
-        bool flat = terrainFlat(p, angle);
+        bool flat = water || terrainFlat(p, angle);   // water is always level
         app.stuckIdx = app.dominantIdx;
+        if (water) splashDown(p, l.pos, l.vel - p.orbitVel, l.radius);
         if (speedSafe && upright && flat) {
             l.land(p);
             app.state = LANDED;
@@ -1199,6 +1483,7 @@ static void initShaderPasses() {
     app.atmoProgram = Shader::createProgram(kFsVert, kAtmoFrag);
     app.cloudProgram = Shader::createProgram(kFsVert, kCloudFrag);
     app.bodyProgram = Shader::createProgram(kFsVert, kBodyFrag);
+    app.waterProgram = Shader::createProgram(kFsVert, kWaterFrag);
 
     float quad[] = { -1, -1,  1, -1,  -1, 1,  -1, 1,  1, -1,  1, 1 };
     glGenVertexArrays(1, &app.fsVao);
@@ -1239,6 +1524,20 @@ static void initShaderPasses() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // ...and which of its dug samples the water has got into (CarveMap::wet).
+    glGenTextures(1, &app.wetTex);
+    glBindTexture(GL_TEXTURE_2D, app.wetTex);
+    {
+        std::vector<unsigned char> dry((size_t)CarveMap::N * CarveMap::N, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, CarveMap::N, CarveMap::N, 0, GL_RED, GL_UNSIGNED_BYTE, dry.data());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
 // Mirror the active planet's TerrainField corner grid into the R16F field
@@ -1260,10 +1559,38 @@ static void uploadFieldTexture() {
 // the window was rebuilt around the player)...
 static void uploadCarveTexture() {
     if (app.activeFieldIdx < 0) return;
-    const CarveMap& c = app.planets[app.activeFieldIdx].carve;
+    CarveMap& c = app.planets[app.activeFieldIdx].carve;
     if (!c.ready()) return;
     glBindTexture(GL_TEXTURE_2D, app.carveTex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CarveMap::N, CarveMap::N, GL_RED, GL_FLOAT, c.data().data());
+    // The flooded samples go with it.
+    c.takeWetDirty();
+    glBindTexture(GL_TEXTURE_2D, app.wetTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CarveMap::N, CarveMap::N, GL_RED, GL_UNSIGNED_BYTE, c.wet().data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+}
+
+// The part of the flooded-samples mirror that changed since it was last sent
+// (a bite let the water into more dug space).
+static void uploadWetChanges() {
+    if (app.activeFieldIdx < 0) return;
+    CarveMap& c = app.planets[app.activeFieldIdx].carve;
+    if (!c.ready()) return;
+    CarveMap::Rect rc = c.takeWetDirty();
+    if (rc.empty()) return;
+    app.floodedNow += (rc.i1 - rc.i0 + 1) * (rc.j1 - rc.j0 + 1);
+    glBindTexture(GL_TEXTURE_2D, app.wetTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, CarveMap::N);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, rc.i0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, rc.j0);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, rc.i0, rc.j0, rc.i1 - rc.i0 + 1, rc.j1 - rc.j0 + 1,
+                    GL_RED, GL_UNSIGNED_BYTE, c.wet().data());
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
 
 // ...or just the samples one bite touched (UNPACK_ROW_LENGTH copies the
@@ -1282,6 +1609,7 @@ static void uploadCarveRegion(CarveMap::Rect rc) {
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
     glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    uploadWetChanges();
 }
 
 // Upload one planet's outline table to that planet's row of the terrain
@@ -1447,7 +1775,6 @@ static constexpr float CUT_REACH = 120.0f;          // how far the cutter reache
 static constexpr float CUT_RADIUS = 20.0f;          // a bite is a circle this big (a tunnel 40 high: the figure needs 36.5)
 static constexpr float CUT_BITE = 3.0f;             // how deep each bite goes into the face
 static constexpr float CUT_INTERVAL = 0.06f;        // seconds between bites while held (~50 units/s)
-static constexpr int CUT_BITES_PER_FERRITE = 10;
 
 static float fxRand() {
     app.fxSeed ^= app.fxSeed << 13;
@@ -1509,12 +1836,347 @@ static void spawnParticle(Vec2 world, Vec2 vel, float life, float size, const fl
     app.particles.push_back(q);
 }
 
+// ---- Water effects ----------------------------------------------------------
+// Things are drawn on the walking line, NearField::WALK_DROP below where they
+// physically are, and so is the water round them (see kWaterFrag): on screen
+// its surface meets a wader, a swimmer or a floating hull at this radius.
+static float drawnWaterline(const Planet& p) { return p.seaRadius() - NearField::WALK_DROP; }
+
+// The color of spray and ripples: the water's own, most of the way to white,
+// in the light of the hour at that spot.
+static void sprayColor(const Planet& p, Vec2 world, float out[3]) {
+    Vec2 up = (world - p.center).normalize();
+    Vec2 toSun = (app.planets[app.sunIdx].center - p.center).normalize();
+    float light[3];
+    groundLight(lightParams(p), up.dot(toSun), light);
+    for (int k = 0; k < 3; k++) {
+        float v = (p.look.water[k] * 0.35f + 0.65f) * light[k];
+        out[k] = v > 1.0f ? 1.0f : v;
+    }
+}
+
+// A bubble let go at a (drawn) point under water: it wobbles up and is gone at
+// the surface.
+static void spawnBubble(const Planet& p, Vec2 drawn, float size) {
+    float col[3];
+    sprayColor(p, drawn, col);
+    Vec2 up = (drawn - p.center).normalize();
+    Vec2 side(-up.y, up.x);
+    spawnParticle(drawn, up * (0.25f + fxRand() * 0.35f) + side * ((fxRand() - 0.5f) * 0.5f),
+                  1.6f + fxRand() * 1.6f, size, col, 5);
+}
+
+// A ring spreading on the water over a (drawn or physical) point.
+static void spawnRipple(const Planet& p, Vec2 over, float size) {
+    float col[3];
+    sprayColor(p, over, col);
+    Vec2 up = (over - p.center).normalize();
+    spawnParticle(p.center + up * drawnWaterline(p), Vec2(0, 0), 0.9f + fxRand() * 0.4f, size, col, 6);
+}
+
+// Something has hit the water at `at`, moving at `vel` (relative to the
+// world): spray thrown up and out from where it went in, and rings.
+static void splashDown(const Planet& p, Vec2 at, Vec2 vel, float size) {
+    float col[3];
+    sprayColor(p, at, col);
+    Vec2 up = (at - p.center).normalize();
+    Vec2 side(-up.y, up.x);
+    Vec2 where = p.center + up * (drawnWaterline(p) + 1.0f);
+    float speed = vel.length();
+    int count = (int)(6.0f + speed * 5.0f + size * 0.4f);
+    if (count > 46) count = 46;
+    float kick = 1.4f + (speed < 8.0f ? speed : 8.0f) * 0.45f;
+    for (int i = 0; i < count; i++) {
+        // Mostly fine drops thrown wide; a few heavier ones that go less far.
+        bool heavy = fxRand() < 0.25f;
+        float lift = 0.5f + fxRand() * 0.8f, fan = (fxRand() - 0.5f) * 2.2f;
+        float sp = kick * (0.5f + fxRand() * 0.9f) * (heavy ? 0.7f : 1.0f);
+        spawnParticle(where + side * ((fxRand() - 0.5f) * size * 2.0f),
+                      (up * lift + side * fan) * sp + side * (vel.dot(side) * 0.25f),
+                      0.55f + fxRand() * 0.6f, heavy ? 1.5f + fxRand() * 0.9f : 0.7f + fxRand() * 0.7f, col, 4);
+    }
+    spawnRipple(p, at, size * 0.45f);
+    spawnRipple(p, at + side * (size * 0.3f), size * 0.2f);
+}
+
 // Add to the inventory and tell the page (pickup feed + panel refresh).
 static void addItem(int id, int amount) {
     if (id < 0 || id >= App::ITEM_COUNT || amount <= 0) return;
     app.inventory[id] += amount;
     app.inventoryDirty = true;
     EM_ASM({ if (window.notifyPickup) window.notifyPickup($0, $1); }, id, amount);
+}
+
+// The inventory item a resource (NearField::Yield::resource) goes to: 0
+// carbon, 1 ferrite, 2 the crystal of this kind of world, and from 3 the
+// caves' own (calcite, glowcap, gold).
+static int resourceItem(const Planet& p, int resource) {
+    if (resource == 2) return 2 + p.archetype;
+    if (resource >= 3) return App::ITEM_CAVE + (resource - 3);
+    return resource;
+}
+
+// ============================================================================
+// Trading with the locals. The posts and their people are Outposts' (where
+// they are, how they look); the prices and the upgrade catalog are Trade's;
+// this is the till: the open panel, the money, and what the page's Sell / Buy
+// buttons call. The panel itself is shell.html's.
+// ============================================================================
+static void addCredits(int amount) {
+    if (amount == 0) return;
+    app.credits += amount;
+    app.creditsDirty = true;
+    EM_ASM({ if (window.notifyCredits) window.notifyCredits($0); }, amount);
+}
+
+// On foot, would E trade rather than board the ship? Whichever is nearer,
+// when both are in reach.
+static bool wouldTrade() {
+    if (!app.spacewalking || app.nearPost < 0) return false;
+    const Planet& p = dominantPlanet();
+    if (app.nearPost >= (int)p.outposts.size()) return false;
+    Vec2 g = Outposts::ground(p, p.outposts[app.nearPost]);
+    Vec2 a = app.astronaut.pos;
+    float postDist = dist(a.x, a.y, g.x, g.y);
+    float shipDist = dist(a.x, a.y, app.lander.pos.x, app.lander.pos.y);
+    return shipDist >= app.lander.radius * 4.0f || postDist <= shipDist;
+}
+
+// Send the open panel its contents: who you are dealing with, what they pay
+// for each thing you carry, what they sell and what is left of it.
+static void pushTrade() {
+    if (app.tradePost < 0) return;
+    Planet& p = dominantPlanet();
+    if (app.tradePost >= (int)p.outposts.size()) { app.tradePost = -1; return; }
+    Planet::Outpost& o = p.outposts[app.tradePost];
+    auto num = [](int v) { return std::to_string(v); };
+    std::string j = "{\"keeper\":\"" + o.keeper + "\",\"world\":\"" + p.name + "\",\"say\":\"" +
+                    Outposts::phrase(o) + "\",\"line\":" + num((int)(o.seed % 9973u)) +
+                    ",\"want\":" + num(Trade::wanted(p, o)) + ",\"credits\":" + num(app.credits) + ",\"sell\":[";
+    bool first = true;
+    auto sellRow = [&](int id, int n) {
+        if (n <= 0) return;
+        j += std::string(first ? "" : ",") + "{\"id\":" + num(id) + ",\"n\":" + num(n) + ",\"p\":" +
+             num(Trade::sellPrice(p, o, id)) + ",\"t\":" + num(Trade::trend(p, o, id)) + "}";
+        first = false;
+    };
+    for (int i = 0; i < App::ITEM_COUNT; i++) sellRow(i, app.inventory[i]);
+    sellRow(Trade::COW, app.cargo);
+    j += "],\"up\":[";
+    for (int u = 0; u < Trade::UPGRADES; u++) {
+        j += std::string(u ? "," : "") + "{\"id\":" + num(u) + ",\"lvl\":" + num(app.upgrades[u]) + ",\"max\":" +
+             num(Trade::maxLevel(u)) + ",\"p\":" + num(Trade::upgradePrice(u, app.upgrades[u])) +
+             ",\"now\":" + num(Trade::effect(u, app.upgrades[u])) + ",\"next\":" +
+             num(Trade::effect(u, app.upgrades[u] + 1)) + "}";
+    }
+    j += "],\"goods\":[";
+    for (int s = 0; s < Trade::GOODS; s++) {
+        j += std::string(s ? "," : "") + "{\"slot\":" + num(s) + ",\"id\":" + num(Trade::goodsItem(p, o, s)) +
+             ",\"stock\":" + num(Trade::goodsStock(o, s)) + ",\"p\":" + num(Trade::goodsPrice(p, o, s)) + "}";
+    }
+    j += "]}";
+    EM_ASM({ if (window.showTrade) window.showTrade(UTF8ToString($0)); }, j.c_str());
+}
+
+static void openTrade(int post) {
+    Planet& p = dominantPlanet();
+    if (post < 0 || post >= (int)p.outposts.size()) return;
+    app.tradePost = post;
+    p.outposts[post].met = true;
+    pushTrade();
+}
+
+static void closeTrade() {
+    if (app.tradePost < 0) return;
+    app.tradePost = -1;
+    EM_ASM({ if (window.hideTrade) window.hideTrade(); });
+}
+
+// A deal done: a few motes in the credits' teal pass between the trader and
+// the player.
+static void tradeSparkle(const Planet& p, const Planet::Outpost& o, int count) {
+    static const float teal[3] = {0.30f, 0.86f, 0.80f};
+    Vec2 from = Outposts::traderHead(p, o);
+    for (int i = 0; i < count; i++) {
+        float ang = fxRand() * 360.0f, sp = 1.0f + fxRand() * 2.4f;
+        spawnParticle(from + Vec2(cosd(ang), sind(ang)) * (4.0f * fxRand()), Vec2(cosd(ang) * sp, sind(ang) * sp),
+                      0.8f + fxRand() * 0.5f, 1.8f + fxRand() * 1.4f, teal, 1);
+    }
+}
+
+// The panel's buttons. Each returns what it did (credits earned / 1 or 0 /
+// how many bought) and refreshes the panel.
+//
+// Sell to the post whose panel is open: `count` of `item` (an inventory id,
+// or Trade::COW for a cow out of the ship's hold); count <= 0 = all of it;
+// item < 0 = everything being carried (the cows stay).
+extern "C" EMSCRIPTEN_KEEPALIVE int tradeSell(int item, int count) {
+    if (app.tradePost < 0) return 0;
+    Planet& p = dominantPlanet();
+    if (app.tradePost >= (int)p.outposts.size()) return 0;
+    Planet::Outpost& o = p.outposts[app.tradePost];
+    int earned = 0;
+    auto sell = [&](int id, int n) {
+        int& have = id == Trade::COW ? app.cargo : app.inventory[id];
+        if (n <= 0 || n > have) n = have;
+        if (n <= 0) return;
+        have -= n;
+        earned += n * Trade::sellPrice(p, o, id);
+    };
+    if (item < 0) {
+        for (int i = 0; i < App::ITEM_COUNT; i++) sell(i, 0);
+    } else if (item == Trade::COW || item < App::ITEM_COUNT) {
+        sell(item, count);
+    }
+    if (earned <= 0) return 0;
+    app.inventoryDirty = true;
+    addCredits(earned);
+    tradeSparkle(p, o, earned > 200 ? 10 : 6);
+    pushTrade();
+    return earned;
+}
+
+// Buy the next level of an upgrade (Trade::Upgrade).
+extern "C" EMSCRIPTEN_KEEPALIVE int tradeBuyUpgrade(int id) {
+    if (app.tradePost < 0 || id < 0 || id >= Trade::UPGRADES) return 0;
+    int level = app.upgrades[id];
+    if (level >= Trade::maxLevel(id)) return 0;
+    int price = Trade::upgradePrice(id, level);
+    if (app.credits < price) return 0;
+    addCredits(-price);
+    app.upgrades[id] = level + 1;
+    applyUpgrades();
+    EM_ASM({ if (window.notifyUpgrade) window.notifyUpgrade($0, $1, $2); }, id, level + 1,
+           Trade::effect(id, level + 1));
+    pushTrade();
+    return 1;
+}
+
+// Buy `count` from a goods slot (as many as the stock and the money allow).
+extern "C" EMSCRIPTEN_KEEPALIVE int tradeBuyGoods(int slot, int count) {
+    if (app.tradePost < 0 || slot < 0 || slot >= Trade::GOODS) return 0;
+    Planet& p = dominantPlanet();
+    if (app.tradePost >= (int)p.outposts.size()) return 0;
+    Planet::Outpost& o = p.outposts[app.tradePost];
+    int stock = Trade::goodsStock(o, slot), price = Trade::goodsPrice(p, o, slot);
+    if (count > stock) count = stock;
+    if (price > 0 && count > app.credits / price) count = app.credits / price;
+    if (count <= 0) return 0;
+    o.stock[slot] -= count;
+    addCredits(-count * price);
+    addItem(Trade::goodsItem(p, o, slot), count);
+    pushTrade();
+    return count;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void tradeClose() { closeTrade(); }
+
+// Ore just uncovered (p.ores from `before` on): a glint of sparks in its
+// color, and a line in the pickup feed.
+static void oreFound(const Planet& p, size_t before) {
+    for (size_t i = before; i < p.ores.size(); i++) {
+        const Planet::Ore& o = p.ores[i];
+        float col[3];
+        Deposits::color(p, o.kind, col);
+        Vec2 c = Deposits::center(p, o);
+        for (int k = 0; k < 8; k++) {
+            float ang = fxRand() * 360.0f, sp = 0.8f + fxRand() * 1.8f;
+            spawnParticle(c + Vec2(cosd(ang), sind(ang)) * (o.size * 0.5f), Vec2(cosd(ang) * sp, sind(ang) * sp),
+                          0.45f + fxRand() * 0.35f, 1.6f + fxRand() * 1.2f, col, 0);
+        }
+        int item = resourceItem(p, Deposits::yield(o).resource);
+        EM_ASM({ if (window.notifyFind) window.notifyFind($0); }, item);
+    }
+}
+
+// The fine dig layer's window was just rebuilt around the player: mirror it
+// to the GPU, and show the ore already lying in the walls it now covers.
+static void carveRefocused(Planet& p) {
+    uploadCarveTexture();
+    Deposits::scanWindow(p);
+}
+
+// The terrain cutter held on a clump of ore: it heats — the beam ends on it,
+// throwing sparks, then embers and smoke as it reddens — and after
+// Deposits::burnSeconds it burns away, pocket and all. Nothing is collected.
+static void burnOre(Planet& p, int idx, float dt, Vec2 tool) {
+    Planet::Ore& o = p.ores[idx];
+    app.burnOre = idx;
+    Vec2 mid = Deposits::center(p, o);
+    Vec2 toTool = (tool - mid).normalize();
+    Vec2 face = mid + toTool * (o.size * 0.95f);
+    app.laserEnd = face;
+    app.laserHit = true;
+    o.heat += dt / Deposits::burnSeconds(o.kind);
+    float heat = o.heat < 1.0f ? o.heat : 1.0f;
+
+    float col[3];
+    Deposits::color(p, o.kind, col);
+    static const float ember[3] = {1.0f, 0.48f, 0.14f};
+    static const float red[3] = {1.0f, 0.22f, 0.08f};
+    static const float smoke[3] = {0.16f, 0.15f, 0.15f};
+    Vec2 up = (mid - p.center).normalize();
+    float back = atan2d(toTool.y, toTool.x);
+    float rate = dt * 60.0f;                 // per-frame chances, at 60 Hz
+    // Sparks in the ore's own color while it is cold, giving way to embers
+    // that fall, redder and more of them the hotter it gets.
+    if (fxRand() < (0.35f - 0.25f * heat) * rate) {
+        float ang = back + (fxRand() - 0.5f) * 130.0f, sp = 2.0f + fxRand() * 3.0f;
+        spawnParticle(face, Vec2(cosd(ang) * sp, sind(ang) * sp), 0.22f + fxRand() * 0.25f,
+                      1.5f + fxRand() * 1.2f, col, 0);
+    }
+    if (fxRand() < (0.06f + 0.34f * heat) * rate) {
+        float ang = fxRand() * 360.0f, sp = 0.8f + fxRand() * (1.6f + 1.8f * heat);
+        Vec2 off(cosd(ang) * o.size * 0.7f, sind(ang) * o.size * 0.7f);
+        spawnParticle(mid + off, Vec2(cosd(ang) * sp, sind(ang) * sp) + up * 0.6f, 0.5f + fxRand() * 0.6f,
+                      1.3f + fxRand() * 1.4f, fxRand() < heat ? red : ember, 2);
+    }
+    if (heat > 0.25f && fxRand() < 0.07f * heat * rate) {
+        Vec2 drift = up * (0.5f + fxRand() * 0.5f) + Vec2((fxRand() - 0.5f) * 0.5f, (fxRand() - 0.5f) * 0.5f);
+        spawnParticle(mid + up * (o.size * 0.6f), drift, 0.9f + fxRand() * 0.6f, 3.0f + fxRand() * 2.5f, smoke, 3);
+    }
+    if (o.heat < 1.0f) return;
+
+    // Gone: a burst of embers, cinders of what it was, smoke, and scorched
+    // rock where it sat.
+    const float cinder[3] = {col[0] * 0.22f, col[1] * 0.20f, col[2] * 0.20f};
+    static const float flash[3] = {1.0f, 0.86f, 0.55f};
+    float rad = o.size;
+    for (int i = 0; i < 16; i++) {
+        float ang = fxRand() * 360.0f, sp = 1.5f + fxRand() * 4.0f;
+        Vec2 off(cosd(ang) * o.size * 0.5f * fxRand(), sind(ang) * o.size * 0.5f * fxRand());
+        spawnParticle(mid + off, Vec2(cosd(ang) * sp, sind(ang) * sp) + up * 1.0f, 0.6f + fxRand() * 0.7f,
+                      1.5f + fxRand() * 1.8f, i % 3 == 0 ? red : ember, 2);
+    }
+    for (int i = 0; i < 8; i++) {
+        float ang = fxRand() * 360.0f, sp = 0.8f + fxRand() * 2.0f;
+        Vec2 off(cosd(ang) * rad * 0.6f * fxRand(), sind(ang) * rad * 0.6f * fxRand());
+        spawnParticle(mid + off, Vec2(cosd(ang) * sp, sind(ang) * sp), 0.5f + fxRand() * 0.5f,
+                      1.8f + fxRand() * 1.8f, cinder, 2);
+    }
+    for (int i = 0; i < 10; i++) {
+        float ang = fxRand() * 360.0f, sp = 4.0f + fxRand() * 5.0f;
+        spawnParticle(mid + Vec2(cosd(ang), sind(ang)) * (rad * 0.5f), Vec2(cosd(ang) * sp, sind(ang) * sp),
+                      0.16f + fxRand() * 0.18f, 1.6f + fxRand() * 1.4f, flash, 0);
+    }
+    for (int i = 0; i < 3; i++) {
+        float ang = fxRand() * 360.0f;
+        Vec2 drift = up * (0.5f + fxRand() * 0.6f) + Vec2((fxRand() - 0.5f) * 0.8f, (fxRand() - 0.5f) * 0.8f);
+        spawnParticle(mid + Vec2(cosd(ang), sind(ang)) * (rad * 0.7f), drift, 1.0f + fxRand() * 0.7f,
+                      3.0f + fxRand() * 2.5f, smoke, 3);
+    }
+    App::Burn& b = app.burns[app.burnNext];
+    app.burnNext = (app.burnNext + 1) % App::MAX_BURNS;
+    b.local = o.local;
+    b.heat = 1.0f;
+    b.radius = (o.size + Deposits::POCKET) * 1.3f;
+    EM_ASM({ if (window.notifyLost) window.notifyLost($0); }, resourceItem(p, Deposits::yield(o).resource));
+    // Its pocket is burnt out of the rock, which can show the next clump of
+    // the vein. (That can add to p.ores: `o` is not used past here.)
+    size_t known = p.ores.size();
+    uploadCarveRegion(Deposits::extract(p, idx));
+    oreFound(p, known);
+    app.burnOre = -1;
 }
 
 // Aim, cut, harvest. Runs after the astronaut has moved this frame.
@@ -1526,9 +2188,13 @@ static void updateLaser(float dt, float time) {
     app.hoverTarget = -1;
     app.laserProp = -1;
     app.hoverProp = -1;
+    app.laserOre = -1;
+    app.hoverOre = -1;
+    app.burnOre = -1;
     a.aiming = false;
     float mx = Input::getMouseX(), my = Input::getMouseY();
-    if (!app.spacewalking || mx < 0.0f || app.mapMode) return;
+    // (Not while the trade panel is up: the mouse is busy with that.)
+    if (!app.spacewalking || mx < 0.0f || app.mapMode || app.tradePost >= 0) return;
 
     NearField::Frame f = nearFrame(time);
     Vec2 cursor = screenToWorld(mx, my);
@@ -1537,12 +2203,16 @@ static void updateLaser(float dt, float time) {
     app.laserCutting = cutter;
     if (!cutter) {
         app.hoverTarget = NearField::pick(p, f, cursor, a.pos, LASER_RANGE, slack);
-        // What grows in the caves. Underground that is what you are aiming
-        // at; out on the surface a plant under the cursor comes first.
+        // What grows in the caves, and ore the cutter has uncovered.
+        // Underground that is what you are aiming at; out on the surface a
+        // plant under the cursor comes first.
         Vec2 eye = a.pos + (a.pos - p.center).normalize() * 16.0f;
-        app.hoverProp = CaveField::pick(p, caveFrame(time), cursor, a.pos, eye, LASER_RANGE, slack);
-        if (app.hoverProp >= 0 && app.hoverTarget >= 0) {
-            if (app.inHole < 0.5f) app.hoverProp = -1;
+        CaveField::Frame cf = caveFrame(time);
+        app.hoverProp = CaveField::pick(p, cf, cursor, a.pos, eye, LASER_RANGE, slack);
+        app.hoverOre = Deposits::pick(p, cf, cursor, a.pos, eye, LASER_RANGE, slack);
+        if (app.hoverOre >= 0) app.hoverProp = -1;     // (ore is in the wall, behind anything growing there)
+        if ((app.hoverProp >= 0 || app.hoverOre >= 0) && app.hoverTarget >= 0) {
+            if (app.inHole < 0.5f) app.hoverProp = app.hoverOre = -1;
             else app.hoverTarget = -1;
         }
     }
@@ -1551,6 +2221,10 @@ static void updateLaser(float dt, float time) {
     app.laserOn = true;
     a.aiming = true;
     static const float sparkCol[3] = {1.0f, 0.78f, 0.50f};
+    // The tool upgrades the traders sell: the laser mines faster, the cutter
+    // bites more often.
+    const float mineDt = dt * Trade::laserScale(app.upgrades[Trade::Laser]);
+    const float cutInterval = CUT_INTERVAL / Trade::cutterScale(app.upgrades[Trade::Cutter]);
     if (cutter) {
         // ---- Terrain cutter ---------------------------------------------------
         // Things on the walking line are drawn WALK_DROP below where they
@@ -1586,23 +2260,57 @@ static void updateLaser(float dt, float time) {
             app.laserEnd = hitDrawn;
             app.laserHit = true;
             // Not under the ship: it stands on the terrain's outline, and
-            // would be left hanging over the hole.
-            bool nearShip = dist(hit.x, hit.y, app.lander.pos.x, app.lander.pos.y) < 90.0f;
-            app.cutTimer += dt;
-            if (app.cutTimer >= CUT_INTERVAL && !nearShip) {
+            // would be left hanging over the hole. Nor under a trading post,
+            // for the same reason (and it would be rude).
+            bool nearShip = dist(hit.x, hit.y, app.lander.pos.x, app.lander.pos.y) < 90.0f ||
+                            Outposts::blocksDig(p, hit, CUT_RADIUS);
+            Vec2 c = hit - dir * (CUT_RADIUS - CUT_BITE);
+            // Ore stops the cutter: a bite that would cut into a clump is
+            // refused, and leaves it showing in the wall for the mining
+            // laser. Keep the cutter on it and it heats instead — red, then
+            // orange — until it burns away, taking far longer than rock does.
+            size_t known = p.ores.size();
+            int ore = nearShip ? -1 : Deposits::blocking(p, c, CUT_RADIUS);
+            oreFound(p, known);
+            if (ore >= 0) {
                 app.cutTimer = 0.0f;
-                Vec2 c = hit - dir * (CUT_RADIUS - CUT_BITE);
+                burnOre(p, ore, dt, a.pos);
+            }
+            app.cutTimer += dt;
+            if (ore < 0 && app.cutTimer >= cutInterval && !nearShip) {
+                app.cutTimer = 0.0f;
+                bool wasDry = p.waterDepth(a.pos + up * 4.0f) <= 0.0f;
+                app.floodedNow = 0;
                 CarveMap::Rect rc = p.dig(c, CUT_RADIUS);
                 if (!rc.empty()) {
                     uploadCarveRegion(rc);
+                    // Cut through into water from a dry tunnel, and it comes
+                    // in: far more space floods than the one bite opened. A
+                    // rush of bubbles from the breach back along the tunnel.
+                    if (wasDry && app.floodedNow > 500) {
+                        for (int i = 0; i < 26; i++) {
+                            float back = fxRand();
+                            Vec2 at = hitDrawn + (a.pos - drop - hitDrawn) * back +
+                                      Vec2((fxRand() - 0.5f) * 30.0f, (fxRand() - 0.5f) * 30.0f);
+                            spawnBubble(p, at, 1.4f + fxRand() * 2.6f);
+                        }
+                    }
                     // A roof only a few units thick over the cut is not a roof:
                     // open it to the sky, rather than leave a sliver of ground
                     // that looks like air but holds you up.
                     Vec2 cUp = (c - p.center).normalize();
                     float cr = dist(c.x, c.y, p.center.x, p.center.y);
                     float roof = p.surfaceRadius(atan2d(cUp.y, cUp.x)) - (cr + CUT_RADIUS);
-                    if (roof > 0.0f && roof < 12.0f)
-                        uploadCarveRegion(p.dig(c + cUp * (roof + 6.0f), CUT_RADIUS));
+                    if (roof > 0.0f && roof < 12.0f) {
+                        Vec2 lid = c + cUp * (roof + 6.0f);
+                        if (Deposits::blocking(p, lid, CUT_RADIUS) < 0) {
+                            uploadCarveRegion(p.dig(lid, CUT_RADIUS));
+                            Deposits::revealNear(p, lid, CUT_RADIUS);
+                        }
+                    }
+                    // Ore the bite has brought into view.
+                    Deposits::revealNear(p, c, CUT_RADIUS);
+                    oreFound(p, known);
                     // Anything growing on the ground that just went goes with it.
                     NearField::uproot(p, f, c, CUT_RADIUS + 4.0f);
                     // The rock around the bite stays hot for a moment.
@@ -1611,29 +2319,94 @@ static void updateLaser(float dt, float time) {
                     b.local = hit - p.center;
                     b.heat = 1.0f;
                     b.radius = CUT_RADIUS * 1.3f;
-                    // Rock chips, embers that fall, a little smoke — and a
-                    // ferrite for every few bites.
+                    // Rock chips, embers that fall, a little smoke. Near ore
+                    // that is still hidden some of the chips glitter in its
+                    // color — the closer, the more: you are on to something.
                     static const float ember[3] = {1.0f, 0.55f, 0.18f};
                     static const float smoke[3] = {0.16f, 0.15f, 0.15f};
+                    Planet::Ore::Kind nearKind = Planet::Ore::Ferrite;
+                    float near = Deposits::glitter(p, c, CUT_RADIUS, &nearKind);
+                    float glint[3];
+                    Deposits::color(p, nearKind, glint);
                     for (int i = 0; i < 2; i++) {
                         float ang = atan2d(-dir.y, -dir.x) + (fxRand() - 0.5f) * 110.0f;
                         float sp = 1.5f + fxRand() * 3.0f;
+                        bool glitters = near > 0.0f && fxRand() < 0.08f + 0.6f * near;
                         spawnParticle(hitDrawn, Vec2(cosd(ang) * sp, sind(ang) * sp),
-                                      0.35f + fxRand() * 0.35f, 2.0f + fxRand() * 1.6f, p.look.tones[2], 0);
+                                      0.35f + fxRand() * 0.35f, 2.0f + fxRand() * 1.6f,
+                                      glitters ? glint : p.look.tones[2], 0);
                     }
-                    for (int i = 0; i < 2; i++) {
-                        float ang = atan2d(-dir.y, -dir.x) + (fxRand() - 0.5f) * 150.0f;
-                        float sp = 1.0f + fxRand() * 2.6f;
-                        spawnParticle(hitDrawn, Vec2(cosd(ang) * sp, sind(ang) * sp),
-                                      0.55f + fxRand() * 0.55f, 1.4f + fxRand() * 1.3f, ember, 2);
+                    if (p.waterDepth(hit - dir * 6.0f) > 0.0f) {
+                        // Under water nothing burns or smokes: the cut boils,
+                        // and a string of bubbles goes up from it.
+                        for (int i = 0; i < 2; i++)
+                            spawnBubble(p, hitDrawn + Vec2((fxRand() - 0.5f) * 14.0f, (fxRand() - 0.5f) * 14.0f),
+                                        1.2f + fxRand() * 1.8f);
+                    } else {
+                        for (int i = 0; i < 2; i++) {
+                            float ang = atan2d(-dir.y, -dir.x) + (fxRand() - 0.5f) * 150.0f;
+                            float sp = 1.0f + fxRand() * 2.6f;
+                            spawnParticle(hitDrawn, Vec2(cosd(ang) * sp, sind(ang) * sp),
+                                          0.55f + fxRand() * 0.55f, 1.4f + fxRand() * 1.3f, ember, 2);
+                        }
+                        if (app.cutBites % 3 == 0) {
+                            Vec2 drift = up * (0.5f + fxRand() * 0.5f) + Vec2((fxRand() - 0.5f) * 0.5f, (fxRand() - 0.5f) * 0.5f);
+                            spawnParticle(hitDrawn, drift, 0.9f + fxRand() * 0.6f, 3.5f + fxRand() * 2.5f, smoke, 3);
+                        }
                     }
-                    if (app.cutBites % 3 == 0) {
-                        Vec2 drift = up * (0.5f + fxRand() * 0.5f) + Vec2((fxRand() - 0.5f) * 0.5f, (fxRand() - 0.5f) * 0.5f);
-                        spawnParticle(hitDrawn, drift, 0.9f + fxRand() * 0.6f, 3.5f + fxRand() * 2.5f, smoke, 3);
-                    }
-                    if (++app.cutBites % CUT_BITES_PER_FERRITE == 0) addItem(1, 1);
+                    ++app.cutBites;
                 }
             }
+        }
+    } else if (app.hoverOre >= 0) {
+        // Mining out a clump of ore the cutter uncovered, a piece at a time:
+        // the beam works the next piece until it comes loose and flies to
+        // the player, then moves on to the one after.
+        Planet::Ore& o = p.ores[app.hoverOre];
+        app.laserOre = app.hoverOre;
+        int had = Deposits::taken(o);
+        app.laserEnd = Deposits::pieceCenter(p, o, had);
+        app.laserDepth = -6.0f;
+        app.laserHit = true;
+        o.hp -= mineDt / Deposits::toughness(o.kind);
+        int got = Deposits::taken(o);
+        float col[3];
+        Deposits::color(p, o.kind, col);
+        const float pale[3] = {0.5f + 0.5f * col[0], 0.5f + 0.5f * col[1], 0.5f + 0.5f * col[2]};
+        int item = resourceItem(p, Deposits::yield(o).resource);
+        for (int k = had; k < got; k++) {
+            addItem(item, 1);
+            Vec2 at = Deposits::pieceCenter(p, o, k);
+            // The piece itself, a few chips of it, and a flash where it was.
+            for (int i = 0; i < 4; i++) {
+                float ang = fxRand() * 360.0f, sp = i == 0 ? 1.0f + fxRand() : 1.5f + fxRand() * 3.0f;
+                spawnParticle(at, Vec2(cosd(ang) * sp, sind(ang) * sp), 0.9f + fxRand() * 0.5f,
+                              i == 0 ? o.size * 0.38f : 1.6f + fxRand() * 1.4f, col, 1);
+            }
+            for (int i = 0; i < 6; i++) {
+                float ang = fxRand() * 360.0f, sp = 2.5f + fxRand() * 4.0f;
+                spawnParticle(at, Vec2(cosd(ang) * sp, sind(ang) * sp), 0.16f + fxRand() * 0.2f,
+                              1.6f + fxRand() * 1.6f, pale, 0);
+            }
+        }
+        if (o.hp <= 0.0f) {
+            // The last piece is out: what is left of the lump crumbles...
+            float g[3];
+            p.groundTone(Deposits::center(p, o), g);
+            const float chip[3] = {g[0] * 0.8f, g[1] * 0.8f, g[2] * 0.8f};
+            float rad = Deposits::radius(o);
+            for (int i = 0; i < 9; i++) {
+                float ang = fxRand() * 360.0f, sp = 0.8f + fxRand() * 2.2f;
+                Vec2 off(cosd(ang) * rad * 0.7f * fxRand(), sind(ang) * rad * 0.7f * fxRand());
+                spawnParticle(Deposits::center(p, o) + off, Vec2(cosd(ang) * sp, sind(ang) * sp),
+                              0.45f + fxRand() * 0.45f, 1.8f + fxRand() * 2.0f, chip, 2);
+            }
+            // ...and its pocket is dug out of the rock, which shows the next
+            // clump of the vein. (That can add to p.ores: `o` is not used past here.)
+            size_t known = p.ores.size();
+            uploadCarveRegion(Deposits::extract(p, app.laserOre));
+            oreFound(p, known);
+            app.laserOre = -1;
         }
     } else if (app.hoverProp >= 0) {
         // Mining something in a cave.
@@ -1642,12 +2415,10 @@ static void updateLaser(float dt, float time) {
         app.laserEnd = CaveField::center(p, q);
         app.laserDepth = q.front ? 10.0f : -6.0f;
         app.laserHit = true;
-        q.hp -= dt / CaveField::toughness(q.kind);
+        q.hp -= mineDt / CaveField::toughness(q.kind);
         if (q.hp <= 0.0f) {
             NearField::Yield y = CaveField::yield(q);
-            // 2 is "the crystal of this kind of world"; 3.. are the cave's own.
-            addItem(y.resource == 2 ? 2 + p.archetype : (y.resource >= 3 ? App::ITEM_CAVE + (y.resource - 3) : y.resource),
-                    y.amount);
+            addItem(resourceItem(p, y.resource), y.amount);
             float col[3];
             CaveField::color(p, q.kind, col);
             int bits = 5 + y.amount * 2;
@@ -1668,11 +2439,10 @@ static void updateLaser(float dt, float time) {
         app.laserEnd = NearField::center(p, h);
         app.laserDepth = h.depth;
         app.laserHit = true;
-        h.hp -= dt / NearField::toughness(h.kind);
+        h.hp -= mineDt / NearField::toughness(h.kind);
         if (h.hp <= 0.0f) {
             NearField::Yield y = NearField::yield(h);
-            // Resource 2 is "the crystal of this kind of world".
-            addItem(y.resource == 2 ? 2 + p.archetype : y.resource, y.amount);
+            addItem(resourceItem(p, y.resource), y.amount);
             const float* col = NearField::color(p, h.kind);
             int bits = 5 + y.amount * 2;
             for (int i = 0; i < bits; i++) {
@@ -1687,17 +2457,42 @@ static void updateLaser(float dt, float time) {
         }
     } else {
         // Nothing under the cursor: the beam goes where you point, up to its
-        // range. Below the terrain line it is hitting the ground (in front of
-        // or behind the walking line — that's what the depth is for).
-        Vec2 d = cursor - a.pos;
-        float len = d.length();
-        if (len > LASER_RANGE) d = d * (LASER_RANGE / len);
-        app.laserEnd = a.pos + d;
-        float ang = atan2d(app.laserEnd.y - p.center.y, app.laserEnd.x - p.center.x);
-        float drop = p.surfaceRadius(ang) - dist(app.laserEnd.x, app.laserEnd.y, p.center.x, p.center.y);
-        app.laserHit = drop > 0.0f;
-        float depth = NearField::depthAtDrop(drop);
-        app.laserDepth = !app.laserHit ? 0.0f : (depth < -20.0f ? -20.0f : (depth > 80.0f ? 80.0f : depth));
+        // range.
+        if (app.inHole >= 0.5f) {
+            // Underground it stops at the first rock on the way there — the
+            // wall of the tunnel or cave you are in. (As for the cutter: what
+            // the cursor points at is WALK_DROP above where it is drawn.)
+            Vec2 upv = (a.pos - p.center).normalize();
+            Vec2 drop = upv * NearField::WALK_DROP;
+            Vec2 eye = a.pos + upv * 16.0f;
+            Vec2 d = (cursor + drop) - eye;
+            float len = d.length();
+            float reach = len < LASER_RANGE ? len : LASER_RANGE;
+            app.laserEnd = (len > 1e-3f ? eye + d * (reach / len) : eye) - drop;
+            app.laserHit = false;
+            app.laserDepth = 0.0f;
+            for (float t = 6.0f; t <= reach; t += 3.0f) {
+                Vec2 q = eye + d * (t / len);
+                if (p.rockAt(q) > 0.5f) {
+                    app.laserEnd = q - drop;
+                    app.laserHit = true;
+                    break;
+                }
+            }
+        } else {
+            // On the surface, below the terrain line it is hitting the ground
+            // (in front of or behind the walking line — that's what the depth
+            // is for).
+            Vec2 d = cursor - a.pos;
+            float len = d.length();
+            if (len > LASER_RANGE) d = d * (LASER_RANGE / len);
+            app.laserEnd = a.pos + d;
+            float ang = atan2d(app.laserEnd.y - p.center.y, app.laserEnd.x - p.center.x);
+            float drop = p.surfaceRadius(ang) - dist(app.laserEnd.x, app.laserEnd.y, p.center.x, p.center.y);
+            app.laserHit = drop > 0.0f;
+            float depth = NearField::depthAtDrop(drop);
+            app.laserDepth = !app.laserHit ? 0.0f : (depth < -20.0f ? -20.0f : (depth > 80.0f ? 80.0f : depth));
+        }
     }
     a.aimWorld = app.laserEnd;
     // Face whatever you're shooting at.
@@ -1746,12 +2541,118 @@ static void updateParticles(float dt, float timeScale) {
             Vec2 upw = q.local.normalize();
             q.vel = q.vel * (1.0f - 0.05f * timeScale) + upw * (0.012f * timeScale);
             q.size += 0.06f * timeScale;
+        } else if (q.mode == 4) {
+            // Water droplet: thrown up, falls back under the world's own
+            // gravity, and is gone when it meets the water again.
+            const Planet& wp = dominantPlanet();
+            float r = q.local.length();
+            Vec2 down = q.local * (-1.0f / (r > 1.0f ? r : 1.0f));
+            float g = wp.gravity / (r > 1.0f ? r * r : 1.0f);
+            q.vel = q.vel * (1.0f - 0.012f * timeScale) + down * (g * timeScale);
+            if (q.maxLife - q.life > 0.12f && wp.sea && r < drawnWaterline(wp) - 1.0f) done = true;
+        } else if (q.mode == 5) {
+            // Bubble: wobbles upward, gone at the surface.
+            const Planet& wp = dominantPlanet();
+            float r = q.local.length();
+            Vec2 upw = q.local * (1.0f / (r > 1.0f ? r : 1.0f));
+            Vec2 side(-upw.y, upw.x);
+            float wob = sinf(q.life * 9.0f + q.size * 7.0f) * 0.035f;
+            q.vel = q.vel * (1.0f - 0.07f * timeScale) + upw * (0.05f * timeScale) + side * (wob * timeScale);
+            if (!wp.sea || r > drawnWaterline(wp) - 1.5f) done = true;
+        } else if (q.mode == 6) {
+            // Ripple: a ring that spreads and fades where it started.
+            q.size += 0.20f * timeScale;
+            q.vel = Vec2(0, 0);
         } else {
             q.vel = q.vel * (1.0f - 0.10f * timeScale);
         }
         q.local = q.local + q.vel * timeScale;
         if (done) { q = app.particles.back(); app.particles.pop_back(); }
         else i++;
+    }
+}
+
+// What the water does around the ship and the astronaut each frame: a
+// floating ship rides the swell and sheds rings; exhaust blown at the water
+// kicks up spray; someone going into it makes a splash, wading or treading
+// water leaves rings, and under it their helmet (and a running jetpack)
+// lets bubbles go.
+static void updateWaterFx(float dt, float time) {
+    Lander& l = app.lander;
+    const Planet& p = dominantPlanet();
+    l.bob = Vec2(0, 0);
+    if (!p.sea) { app.wasWet = false; return; }
+
+    Vec2 shipUp = (l.pos - p.center).normalize();
+    float shipAng = atan2d(shipUp.y, shipUp.x);
+    bool shipOverWater = p.overWater(shipAng);
+    if (app.state == LANDED && shipOverWater && app.stuckIdx == app.dominantIdx) {
+        // Afloat: a slow rise and fall (drawn only — where the ship IS does
+        // not move), and now and then a ring off the hull.
+        l.bob = shipUp * (1.0f * sinf(time * 0.52f) + 0.45f * sinf(time * 0.31f + 1.3f));
+        app.shipRippleIn -= dt;
+        if (app.shipRippleIn <= 0.0f) {
+            app.shipRippleIn = 1.5f + fxRand() * 1.4f;
+            spawnRipple(p, l.pos + Vec2(-shipUp.y, shipUp.x) * ((fxRand() - 0.5f) * 16.0f), 9.0f + fxRand() * 5.0f);
+        }
+    }
+    if (app.state == PLAYING && l.active && l.thrusting > 0.0f && l.fuel > 0.0f && shipOverWater) {
+        // Exhaust on the water: spray fanned up and out from under the
+        // nozzle, harder the closer the ship is.
+        const float REACH = 150.0f;
+        Vec2 jet = l.noseDir() * -1.0f;                 // the way the exhaust goes
+        float downward = -jet.dot(shipUp);              // 1 = straight at the water
+        float height = dist(l.pos.x, l.pos.y, p.center.x, p.center.y) - p.seaRadius();
+        if (downward > 0.3f && height > 0.0f && height < REACH) {
+            float near = (1.0f - height / REACH) * l.thrusting;
+            Vec2 side(-shipUp.y, shipUp.x);
+            Vec2 hit = l.pos + jet * (height / downward);
+            Vec2 where = p.center + (hit - p.center).normalize() * (drawnWaterline(p) + 1.0f);
+            float col[3];
+            sprayColor(p, where, col);
+            float n = near * 3.2f * dt * 60.0f;
+            int count = (int)n + (fxRand() < n - floorf(n) ? 1 : 0);
+            for (int i = 0; i < count; i++) {
+                float fan = (fxRand() - 0.5f) * 2.4f, lift = 0.5f + fxRand() * 0.8f;
+                float sp = (1.6f + fxRand() * 3.2f) * (0.5f + near);
+                spawnParticle(where + side * ((fxRand() - 0.5f) * 22.0f), (shipUp * lift + side * fan) * sp,
+                              0.45f + fxRand() * 0.5f, 1.2f + fxRand() * 1.8f, col, 4);
+            }
+            if (fxRand() < near * 0.10f * dt * 60.0f) spawnRipple(p, hit, 8.0f + fxRand() * 8.0f);
+        }
+    }
+
+    if (!app.spacewalking) { app.wasWet = false; return; }
+    const Astronaut& a = app.astronaut;
+    Vec2 up = (a.pos - p.center).normalize();
+    Vec2 side(-up.y, up.x);
+    bool wetNow = a.wet > 0.0f;
+    float falling = -a.vel.dot(up);
+    if (wetNow && !app.wasWet && falling > 0.9f && p.overWater(atan2d(up.y, up.x)))
+        splashDown(p, a.pos, a.vel, 9.0f);
+    app.wasWet = wetNow;
+    if (!wetNow) return;
+    float speed = a.vel.length();
+    // At the surface (in to the shins, head still out) and moving: rings.
+    bool atSurface = a.chestDepth < 9.0f && p.overWater(atan2d(up.y, up.x));
+    app.rippleIn -= dt * (0.35f + speed);
+    if (atSurface && app.rippleIn <= 0.0f) {
+        app.rippleIn = 0.55f + fxRand() * 0.3f;
+        spawnRipple(p, a.pos + side * ((fxRand() - 0.5f) * 8.0f), 5.0f + fxRand() * 4.0f);
+    }
+    // Helmet under: bubbles, from where the helmet is drawn.
+    app.bubbleIn -= dt;
+    if (a.chestDepth > 15.0f && app.bubbleIn <= 0.0f) {
+        app.bubbleIn = 0.45f + fxRand() * 0.9f;
+        Vec2 helmet = a.pos + up * (Astronaut::HEAD_UP - NearField::WALK_DROP) + side * (5.0f * a.facing);
+        int n = 1 + (int)(fxRand() * 2.4f);
+        for (int i = 0; i < n; i++)
+            spawnBubble(p, helmet + side * ((fxRand() - 0.5f) * 5.0f) + up * (fxRand() * 4.0f), 1.0f + fxRand() * 1.5f);
+    }
+    // A jetpack run under water churns out a stream of them.
+    if (a.jetting && a.chestDepth > 2.0f && fxRand() < 0.55f * dt * 60.0f) {
+        Vec2 nozzle = a.pos + up * (2.0f - NearField::WALK_DROP) - side * (6.0f * a.facing);
+        spawnBubble(p, nozzle + side * ((fxRand() - 0.5f) * 4.0f), 1.3f + fxRand() * 2.0f);
     }
 }
 
@@ -1765,10 +2666,14 @@ static void drawLaserFx(float time) {
     // Brackets around the harvestable under the cursor.
     bool overPlant = app.hoverTarget >= 0 && app.hoverTarget < (int)p.harvest.size();
     bool overProp = app.hoverProp >= 0 && app.hoverProp < (int)p.caveProps.size();
-    if (app.spacewalking && (overPlant || overProp)) {
+    bool overOre = app.hoverOre >= 0 && app.hoverOre < (int)p.ores.size();
+    if (app.spacewalking && (overPlant || overProp || overOre)) {
         Vec2 c;
         float rad;
-        if (overProp) {
+        if (overOre) {
+            c = Deposits::center(p, p.ores[app.hoverOre]);
+            rad = Deposits::radius(p.ores[app.hoverOre]) + 3.0f * px;
+        } else if (overProp) {
             c = CaveField::center(p, p.caveProps[app.hoverProp]);
             rad = CaveField::radius(p.caveProps[app.hoverProp]) + 3.0f * px;
         } else {
@@ -1820,7 +2725,8 @@ static void drawLaserFx(float time) {
             r.fill(g1[0], g1[1], g1[2], 0.45f * flick);
             r.circle(a.x, a.y, 4.5f, 14);
             if (app.laserHit) {
-                float ir = (cut ? 5.0f : 7.0f) * NearField::scale(app.laserDepth) * flick;
+                // (Kept small on ore: the piece under the beam is the show.)
+                float ir = (cut ? 5.0f : (app.laserOre >= 0 ? 4.0f : 7.0f)) * NearField::scale(app.laserDepth) * flick;
                 r.fill(g0[0], g0[1], g0[2], cut ? 0.22f : 0.30f);
                 r.circle(b.x, b.y, ir * 1.9f, 18);
                 r.fill(core[0], core[1], core[2], 0.75f);
@@ -1845,15 +2751,51 @@ static void drawLaserFx(float time) {
         r.fill(q.r, q.g, q.b, 0.17f * t);
         r.circle(w.x, w.y, q.size, 12);
     }
+    // ...water thrown up in drops, bubbles going up through it, and rings
+    // spreading on it: flat and pale. A ring is an ellipse lying on the
+    // surface — the ground-ellipse rule, flatter, as water is seen at a lower
+    // angle across it than the ground at your feet — only the outline.
+    for (const App::Particle& q : app.particles) {
+        if (q.mode < 4 || q.mode > 6) continue;
+        float t = q.life / q.maxLife;
+        Vec2 w = p.center + q.local;
+        if (q.mode == 4) {
+            r.fill(q.r, q.g, q.b, t < 0.5f ? 0.3f + 1.2f * t : 0.9f);
+            r.circle(w.x, w.y, q.size * (0.55f + 0.45f * t), 8);
+        } else if (q.mode == 5) {
+            float grow = 0.7f + 0.3f * (1.0f - t);
+            r.fill(q.r, q.g, q.b, 0.30f);
+            r.circle(w.x, w.y, q.size * grow, 10);
+            r.fill(1.0f, 1.0f, 1.0f, 0.55f);
+            r.circle(w.x - q.size * 0.3f * grow, w.y - q.size * 0.3f * grow, q.size * 0.32f * grow, 6);
+        } else {
+            Vec2 up = q.local.normalize(), right(-up.y, up.x);
+            float rx = q.size, ry = q.size * 0.40f;
+            const int SEG = 22;
+            r.fill(q.r, q.g, q.b, 0.55f * t);
+            Vec2 prev = w + right * rx;
+            for (int i = 1; i <= SEG; i++) {
+                float a = (float)i / SEG * 6.2831853f;
+                Vec2 next = w + right * (cosf(a) * rx) + up * (sinf(a) * ry);
+                r.line(prev.x, prev.y, next.x, next.y, 1.1f * px + 0.3f);
+                prev = next;
+            }
+        }
+    }
     // ...harvested bits are solid chips of what was cut, in its own color, so
-    // you can see WHAT you just picked up as it flies to you.
+    // you can see WHAT you just picked up as it flies to you: a facet lit
+    // from above and a shaded one under it, like everything else cut from
+    // the ground.
     for (const App::Particle& q : app.particles) {
         if (q.mode != 1) continue;
         Vec2 w = p.center + q.local;
-        r.fill(q.r * 0.55f, q.g * 0.55f, q.b * 0.55f, 0.9f);
-        r.circle(w.x, w.y, q.size * 1.25f, 8);
+        Vec2 up = q.local.normalize(), right(-up.y, up.x);
+        float s = q.size * 1.2f;
+        Vec2 l = w - right * s, rt = w + right * s, top = w + up * (s * 0.85f), bot = w - up * (s * 0.85f);
+        r.fill(q.r * 0.58f, q.g * 0.58f, q.b * 0.58f, 1.0f);
+        r.triangle(l.x, l.y, bot.x, bot.y, rt.x, rt.y);
         r.fill(q.r, q.g, q.b, 1.0f);
-        r.circle(w.x, w.y, q.size * 0.85f, 8);
+        r.triangle(l.x, l.y, top.x, top.y, rt.x, rt.y);
     }
 }
 
@@ -2063,6 +3005,91 @@ static bool drawBodyPass(BodyPass pass) {
     return true;
 }
 
+// Water pass (see kWaterFrag). mode 0: the water itself, laid down before the
+// body pass so the crust is painted over it. mode 1: the water in front of the
+// walking line, over the ship and the astronaut, and the water standing in
+// flooded holes. mode 2: the water over the lake bed in front of the walking
+// line. The last two only for the world you are at, and only up close.
+static void drawWaterPass(int mode, float t) {
+    const int N = SHADER_MAX_PLANETS;
+    int count = (int)app.planets.size();
+    if (count > N) count = N;
+    bool any = false;
+    for (int i = 0; i < count; i++) any = any || app.planets[i].sea;
+    if (!any) return;
+    const Planet* ap = app.activeFieldIdx >= 0 ? &app.planets[app.activeFieldIdx] : nullptr;
+    if (mode != 0 && (!ap || !ap->sea || app.view.scale < 0.08f)) return;
+
+    float pos[N * 2] = {0}, seaR[N] = {0};
+    float water[N * 3] = {0}, deep[N * 3] = {0}, top[N * 3] = {0};
+    for (int i = 0; i < count; i++) {
+        const Planet& p = app.planets[i];
+        pos[i * 2] = p.center.x; pos[i * 2 + 1] = p.center.y;
+        if (!p.sea) continue;
+        seaR[i] = p.seaRadius();
+        for (int k = 0; k < 3; k++) {
+            water[i * 3 + k] = p.look.water[k];
+            deep[i * 3 + k] = p.look.waterDeep[k];
+            // The far surface is seen at a glancing angle: it takes on the
+            // pale of the sky down at the horizon.
+            float v = (p.look.water[k] * 0.56f + p.look.haze[k] * 0.44f) * 1.05f;
+            top[i * 3 + k] = v > 1.0f ? 1.0f : v;
+        }
+    }
+
+    GLuint pr = app.waterProgram;
+    glUseProgram(pr);
+    setPassViewUniforms(pr);
+    glUniform1i(glGetUniformLocation(pr, "u_planetCount"), count);
+    glUniform2fv(glGetUniformLocation(pr, "u_planetPos"), N, pos);
+    glUniform1fv(glGetUniformLocation(pr, "u_seaR"), N, seaR);
+    glUniform3fv(glGetUniformLocation(pr, "u_water"), N, water);
+    glUniform3fv(glGetUniformLocation(pr, "u_waterDeep"), N, deep);
+    glUniform3fv(glGetUniformLocation(pr, "u_waterTop"), N, top);
+    setLightUniforms(pr);
+    Vec2 sunW = sunWorldPos();
+    glUniform2f(glGetUniformLocation(pr, "u_sunPos"), sunW.x, sunW.y);
+    glUniform1f(glGetUniformLocation(pr, "u_time"), t);
+    glUniform1i(glGetUniformLocation(pr, "u_mode"), mode);
+    glUniform1i(glGetUniformLocation(pr, "u_activeField"), app.activeFieldIdx);
+    glUniform1f(glGetUniformLocation(pr, "u_walkDrop"), NearField::WALK_DROP);
+    glUniform1f(glGetUniformLocation(pr, "u_stripBottom"), NearField::groundDrop(NearField::FRONT_DEPTH));
+    glUniform1f(glGetUniformLocation(pr, "u_tint"), gDebug.waterTint);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, app.terrainTex);
+    glUniform1i(glGetUniformLocation(pr, "u_terrainTex"), 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, app.fieldTex);
+    glUniform1i(glGetUniformLocation(pr, "u_fieldTex"), 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, app.carveTex);
+    glUniform1i(glGetUniformLocation(pr, "u_carveTex"), 2);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, app.wetTex);
+    glUniform1i(glGetUniformLocation(pr, "u_wetTex"), 3);
+    glActiveTexture(GL_TEXTURE0);
+    bool carved = ap && ap->carve.ready();
+    glUniform1f(glGetUniformLocation(pr, "u_carveSize"), carved ? (float)CarveMap::N : 0.0f);
+    glUniform1f(glGetUniformLocation(pr, "u_carveCell"), CarveMap::CELL);
+    glUniform2f(glGetUniformLocation(pr, "u_carveOrigin"),
+                carved ? ap->center.x + ap->carve.originX() : 0.0f,
+                carved ? ap->center.y + ap->carve.originY() : 0.0f);
+    if (ap) {
+        const TerrainField& f = ap->field;
+        glUniform2f(glGetUniformLocation(pr, "u_fieldOrigin"), f.originX(), f.originY());
+        glUniform1f(glGetUniformLocation(pr, "u_fieldCell"), f.cellSize());
+        glUniform2f(glGetUniformLocation(pr, "u_fieldSize"), (float)f.cornersX(), (float)f.cornersY());
+    } else {
+        glUniform1f(glGetUniformLocation(pr, "u_fieldCell"), 250.0f);
+        glUniform2f(glGetUniformLocation(pr, "u_fieldSize"), 1.0f, 1.0f);
+    }
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   // premultiplied "over"
+    glBindVertexArray(app.fsVao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
 // Cave formations grow out of the wall: they are clipped to the cave's open
 // space so the rock hides their roots (the flat bases of the spikes). One
 // stencil bit, above the ones the ridge layers count in (drawRidges), marks
@@ -2259,6 +3286,9 @@ static void pollInputAstronaut(float timeScale) {
 
     bool jumpKey = Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP);
     if (jumpKey && a.grounded) a.jump(p);
+    // In water the same key swims up (and holds you at the surface); S dives.
+    else if (jumpKey) a.swim(p, timeScale, +1);
+    if (Input::isKeyDown(Input::KEY_S) || Input::isKeyDown(Input::KEY_DOWN)) a.swim(p, timeScale, -1);
 
     a.jetting = false;
     if (Input::isKeyDown(Input::KEY_SPACE)) a.jetpack(p, timeScale);
@@ -2268,7 +3298,7 @@ static void pollInputAstronaut(float timeScale) {
 // One step for the herd; a cow that reaches the hatch is cargo.
 static void updateCows(float timeScale) {
     for (Cow& cow : app.cows) {
-        if (cow.update(homePlanet(), app.lander, app.cargo, MAX_CARGO, timeScale)) {
+        if (cow.update(homePlanet(), app.lander, app.cargo, maxCargo(), timeScale)) {
             app.cargo += 1;
             app.score += 50;
         }
@@ -2280,7 +3310,7 @@ static void updateCows(float timeScale) {
 // their own state and report stowing back through update().
 static void runBeamGrab() {
     Lander& l = app.lander;
-    bool canGrab = l.beamOn && app.cargo < MAX_CARGO;
+    bool canGrab = l.beamOn && app.cargo < maxCargo();
     for (Cow& cow : app.cows) {
         if (cow.state == Cow::State::Stowed) continue;
         bool inBeam = false;
@@ -2311,7 +3341,8 @@ static void updateView(float timeScale) {
     float ang = atan2d(focusPos.y - body.center.y, focusPos.x - body.center.x);
     float stepDeg = (700.0f / 3.0f) / (body.baseRadius > 1.0f ? body.baseRadius : 1.0f) * RAD2DEG;
     float ground = 0.0f;
-    for (int k = -3; k <= 3; k++) ground += body.surfaceRadius(ang + k * stepDeg);
+    // (Over water the surface is the ground: afloat is not "high up".)
+    for (int k = -3; k <= 3; k++) ground += body.visibleRadius(ang + k * stepDeg);
     ground /= 7.0f;
     float alt = d - ground;
     if (alt < 0) alt = 0;
@@ -2586,7 +3617,7 @@ static void drawBlobShadow(const Planet& p, Vec2 pos, float size, float maxAlt, 
     float distC = sqrtf(dx * dx + dy * dy);
     if (distC < 1.0f) return;
     float ang = atan2d(dy, dx);
-    float surfR = p.surfaceRadius(ang);
+    float surfR = p.visibleRadius(ang);      // shadows fall on water as on ground
     float alt = distC - surfR;
     if (alt < 0.0f) alt = 0.0f;
     if (alt > maxAlt) return;
@@ -2673,7 +3704,9 @@ static void drawEntityShadows() {
         const Vec2 ap = app.astronaut.pos;
         float below = dom.surfaceRadius(atan2d(ap.y - dom.center.y, ap.x - dom.center.x)) -
                       dist(ap.x, ap.y, dom.center.x, dom.center.y);
-        if (below < 12.0f)
+        // Nor when they are in over the knees: no shadow on the water from
+        // someone standing in it.
+        if (below < 12.0f && app.astronaut.wet < 0.4f)
             drawBlobShadow(dom, ap, Astronaut::RADIUS * 1.7f, 320.0f, toSunDom);
     }
 }
@@ -3631,8 +4664,12 @@ static void syncDebugFromJS() {
     gDebug.vignette         = EM_ASM_DOUBLE({ return window.DBG.vignette !== undefined ? window.DBG.vignette : $0; }, gDebug.vignette);
     gDebug.motes            = EM_ASM_DOUBLE({ return window.DBG.motes !== undefined ? window.DBG.motes : $0; }, gDebug.motes);
     gDebug.frontVeil        = EM_ASM_DOUBLE({ return window.DBG.frontVeil !== undefined ? window.DBG.frontVeil : $0; }, gDebug.frontVeil);
+    gDebug.waterLevel       = EM_ASM_DOUBLE({ return window.DBG.waterLevel !== undefined ? window.DBG.waterLevel : $0; }, gDebug.waterLevel);
+    gDebug.waterTint        = EM_ASM_DOUBLE({ return window.DBG.waterTint !== undefined ? window.DBG.waterTint : $0; }, gDebug.waterTint);
     gDebug.holeFloor        = EM_ASM_DOUBLE({ return window.DBG.holeFloor !== undefined ? window.DBG.holeFloor : $0; }, gDebug.holeFloor);
     gDebug.holeDepth        = EM_ASM_DOUBLE({ return window.DBG.holeDepth !== undefined ? window.DBG.holeDepth : $0; }, gDebug.holeDepth);
+    gDebug.oreRichness      = EM_ASM_DOUBLE({ return window.DBG.oreRichness !== undefined ? window.DBG.oreRichness : $0; }, gDebug.oreRichness);
+    gDebug.oreBurn          = EM_ASM_DOUBLE({ return window.DBG.oreBurn !== undefined ? window.DBG.oreBurn : $0; }, gDebug.oreBurn);
     gDebug.cameraSpeedLook  = EM_ASM_DOUBLE({ return window.DBG.cameraSpeedLook !== undefined ? window.DBG.cameraSpeedLook : $0; }, gDebug.cameraSpeedLook);
     gDebug.walkSpeed        = EM_ASM_DOUBLE({ return window.DBG.walkSpeed !== undefined ? window.DBG.walkSpeed : $0; }, gDebug.walkSpeed);
     gDebug.jumpSpeed        = EM_ASM_DOUBLE({ return window.DBG.jumpSpeed !== undefined ? window.DBG.jumpSpeed : $0; }, gDebug.jumpSpeed);
@@ -3646,7 +4683,7 @@ static void syncDebugFromJS() {
         for (Planet& p : app.planets) p.applyGlobalDensity(dens);
         updateKeplerSpeeds(app.planets);
     }
-    if (app.lander.fuel > gDebug.maxFuel) app.lander.fuel = gDebug.maxFuel;
+    if (app.lander.fuel > maxFuel()) app.lander.fuel = maxFuel();
 }
 
 // Put the ship above a point of a world's surface (angle around the body,
@@ -3654,7 +4691,7 @@ static void syncDebugFromJS() {
 static void warpAbove(int idx, float angle, float altitude) {
     if (idx < 0 || idx >= (int)app.planets.size() || app.planets[idx].isSun) return;
     Planet& p = app.planets[idx];
-    float r = p.surfaceRadius(angle) + altitude;
+    float r = p.visibleRadius(angle) + altitude;     // above the ground, or the water over it
     Lander& l = app.lander;
     l.reset();
     l.pos = p.center + Vec2(cosd(angle), sind(angle)) * r;
@@ -3712,6 +4749,47 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugTeleportAngle(float angle) {
     app.astronaut.spawn(Vec2(p.center.x + cosd(angle) * r, p.center.y + sind(angle) * r));
     app.spacewalking = true;
 }
+// Dev hook: the nearest shore to the player on the world they are at — the
+// angle (degrees) where the ground meets the water, looking one way round
+// (dir > 0), the other (dir < 0) or both (0). `into` moves the answer that
+// many world units on into the water (negative: back onto the land). Returns
+// -1000 on a dry world. Module._debugFindWater(dir, into).
+extern "C" EMSCRIPTEN_KEEPALIVE float debugFindWater(int dir, float into) {
+    const Planet& p = dominantPlanet();
+    if (!p.sea) return -1000.0f;
+    Vec2 pp = playerPos();
+    float a0 = atan2d(pp.y - p.center.y, pp.x - p.center.x);
+    float degPerUnit = 360.0f / (6.2831853f * p.baseRadius);
+    float step = 10.0f * degPerUnit;
+    bool startWet = p.overWater(a0);
+    for (float off = step; off < 360.0f; off += step) {
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            if (dir != 0 && sgn != (dir > 0 ? 1 : -1)) continue;
+            float a = a0 + sgn * off;
+            if (p.overWater(a) != startWet) {
+                // `into` always heads into the water, whichever side we came from.
+                float toWater = startWet ? -sgn : sgn;
+                return a + toWater * into * degPerUnit;
+            }
+        }
+    }
+    return -1000.0f;
+}
+// Dev hook: put the ship down, parked, at an angle (degrees) on the dominant
+// world — on the ground, or afloat if that is water. Module._debugParkAt(angle).
+extern "C" EMSCRIPTEN_KEEPALIVE void debugParkAt(float angle) {
+    Planet& p = dominantPlanet();
+    float r = p.visibleRadius(angle) + 6.0f;
+    app.lander.reset();
+    app.lander.pos = Vec2(p.center.x + cosd(angle) * r, p.center.y + sind(angle) * r);
+    app.lander.rotation = app.lander.targetRotation = angle + 90.0f;
+    app.lander.vel = p.orbitVel;
+    app.lander.land(p);
+    app.stuckIdx = app.dominantIdx;
+    app.state = LANDED;
+    app.spacewalking = false;
+    app.astronaut.active = false;
+}
 // Dev hook: cut a straight shaft `depth` deep and `radius` wide (bite
 // radius) into the dominant world, from the surface at an angle (degrees) —
 // the same bites the cutter makes, without driving it. A depth under the
@@ -3733,8 +4811,38 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugDigShaft(float angle, float depth, flo
     }
     if (app.dominantIdx == app.activeFieldIdx) {
         p.focusCarve(p.center + out * surf);
-        uploadCarveTexture();
+        carveRefocused(p);
     }
+}
+// Dev hook: reveal every buried ore clump within `range` of the astronaut —
+// for looking at how ore is spread through the ground. Returns how many.
+// Module._debugRevealOre(range).
+extern "C" EMSCRIPTEN_KEEPALIVE int debugRevealOre(float range) {
+    Planet& p = dominantPlanet();
+    if (app.dominantIdx != app.activeFieldIdx || !p.carve.ready()) return 0;
+    return Deposits::revealAll(p, app.astronaut.pos, range);
+}
+// Dev hook: go and stand at trading post `idx` of the dominant world — the
+// ship parked a little way off, the astronaut on foot `offset` world units
+// along the ground from the stall. Returns how many posts the world has
+// (idx < 0 just asks). Module._debugVisitOutpost(idx, offset).
+extern "C" EMSCRIPTEN_KEEPALIVE int debugVisitOutpost(int idx, float offset) {
+    Planet& p = dominantPlanet();
+    int n = (int)p.outposts.size();
+    if (idx < 0 || idx >= n) return n;
+    float perDeg = p.baseRadius * DEG2RAD;
+    float a = p.outposts[idx].angle;
+    debugParkAt(a - 330.0f / perDeg);
+    debugTeleportAngle(a + offset / perDeg);
+    return n;
+}
+// Dev hook: hand the player things to trade with. `what` is an inventory
+// item id, 100 for cows in the hold, 200 for credits. Module._debugGive(what, n).
+extern "C" EMSCRIPTEN_KEEPALIVE void debugGive(int what, int amount) {
+    if (what == 200) addCredits(amount);
+    else if (what == Trade::COW) app.cargo = std::min(maxCargo(), app.cargo + amount);
+    else addItem(what, amount);
+    if (app.tradePost >= 0) pushTrade();
 }
 // Kind and depth below the ground line of prop `idx` (kind * 10000 + depth),
 // or -1: lets a test pick out, say, the deepest crystal.
@@ -3837,8 +4945,66 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugDump() {
             first = false;
         }
     }
-    items += "],\"hoverProp\":" + std::to_string(app.hoverProp) + ",\"inv\":[";
+    // ...and the ore uncovered near the player.
+    items += "],\"ores\":[";
+    if (app.spacewalking) {
+        const Planet& p = dominantPlanet();
+        Mat3 vm = app.view.matrix(app.width, app.height);
+        bool first = true;
+        for (int i = 0; i < (int)p.ores.size(); i++) {
+            const Planet::Ore& o = p.ores[i];
+            Vec2 c = Deposits::center(p, o);
+            if (dist(c.x, c.y, app.astronaut.pos.x, app.astronaut.pos.y) > LASER_RANGE * 2.0f) continue;
+            Vec2 clip = vm.transform(c);
+            char buf[160];
+            snprintf(buf, sizeof(buf), "%s{\"i\":%d,\"x\":%.0f,\"y\":%.0f,\"kind\":%d,\"mined\":%d,\"hp\":%.2f,\"heat\":%.2f}",
+                     first ? "" : ",", i, (clip.x * 0.5f + 0.5f) * app.width,
+                     (1.0f - (clip.y * 0.5f + 0.5f)) * app.height, (int)o.kind, o.mined ? 1 : 0, o.hp, o.heat);
+            items += buf;
+            first = false;
+        }
+    }
+    {
+        // Water: is this a wet world, how far the player is above (+) or
+        // below (-) its level, and how deep in it they actually are.
+        const Planet& p = dominantPlanet();
+        Vec2 pp = playerPos();
+        char buf[160];
+        snprintf(buf, sizeof(buf), "],\"sea\":%d,\"seaAlt\":%.1f,\"wet\":%.1f,\"overWater\":%d",
+                 p.sea ? 1 : 0, dist(pp.x, pp.y, p.center.x, p.center.y) - p.seaRadius(),
+                 p.waterDepth(pp), p.overWater(atan2d(pp.y - p.center.y, pp.x - p.center.x)) ? 1 : 0);
+        items += buf;
+    }
+    items += ",\"hoverProp\":" + std::to_string(app.hoverProp) + ",\"hoverOre\":" + std::to_string(app.hoverOre) +
+             ",\"burnOre\":" + std::to_string(app.burnOre) +
+             ",\"tool\":" + std::to_string(app.toolMode) + ",\"inv\":[";
     for (int i = 0; i < App::ITEM_COUNT; i++) items += (i ? "," : "") + std::to_string(app.inventory[i]);
+    items += "]";
+    // Trading: the money, the upgrade levels, which post is in reach / open,
+    // and every post of the world you are at — how far along the ground it
+    // is (+ = right) and where its stall is on screen.
+    items += ",\"credits\":" + std::to_string(app.credits) + ",\"cargo\":" + std::to_string(app.cargo) +
+             ",\"nearPost\":" + std::to_string(app.nearPost) + ",\"tradePost\":" + std::to_string(app.tradePost) +
+             ",\"upgrades\":[";
+    for (int i = 0; i < Trade::UPGRADES; i++) items += (i ? "," : "") + std::to_string(app.upgrades[i]);
+    items += "],\"posts\":[";
+    {
+        const Planet& p = dominantPlanet();
+        Mat3 vm = app.view.matrix(app.width, app.height);
+        Vec2 pp = playerPos();
+        float pa = atan2d(pp.y - p.center.y, pp.x - p.center.x);
+        for (int i = 0; i < (int)p.outposts.size(); i++) {
+            const Planet::Outpost& o = p.outposts[i];
+            Vec2 clip = vm.transform(Outposts::ground(p, o));
+            char buf[200];
+            snprintf(buf, sizeof(buf), "%s{\"i\":%d,\"angle\":%.3f,\"along\":%.0f,\"x\":%.0f,\"y\":%.0f,\"keeper\":\"%s\",\"folk\":%d}",
+                     i ? "," : "", i, o.angle,
+                     (std::fmod(o.angle - pa + 540.0f, 360.0f) - 180.0f) * p.baseRadius * DEG2RAD,
+                     (clip.x * 0.5f + 0.5f) * app.width, (1.0f - (clip.y * 0.5f + 0.5f)) * app.height,
+                     o.keeper.c_str(), (int)o.folk.size());
+            items += buf;
+        }
+    }
     items += "]";
     std::string json = std::string(head) + bodies + items + "}";
     EM_ASM({ window.GAME_DUMP = JSON.parse(UTF8ToString($0)); }, json.c_str());
@@ -3876,6 +5042,27 @@ static void updateNavHud() {
        app.system.starName.c_str(), found, total, (int)app.system.seed);
 }
 
+// The HUD's pointer to the nearest trading post on the world you are at: how
+// far along the ground, and which way (right = the way angles grow, with the
+// camera rolled upright). Only near the ground, and only when it changes.
+static void updateTraderHud() {
+    const Planet& p = dominantPlanet();
+    bool show = !p.isSun && !p.outposts.empty() && !app.mapMode &&
+                (app.spacewalking || app.state != PLAYING || app.lander.altitude < 6000.0f);
+    float along = 0.0f;
+    int key = -1;
+    if (show) {
+        int i = Outposts::nearest(p, playerPos(), &along);
+        float d = fabsf(along);
+        // Steps of ten units close by, a hundred further off.
+        int bucket = d < 1000.0f ? (int)(d / 10.0f) : 100 + (int)(d / 100.0f);
+        key = ((app.dominantIdx * 8 + i) * 4096 + bucket) * 2 + (along > 0.0f ? 1 : 0);
+    }
+    if (key == app.traderHudKey) return;
+    app.traderHudKey = key;
+    EM_ASM({ if (window.setTraderHint) window.setTraderHint($0, $1); }, along, show ? 1 : 0);
+}
+
 static void mainLoop() {
     // Resize handling.
     int w, h;
@@ -3893,6 +5080,15 @@ static void mainLoop() {
     float timeScale = dt * 60.0f;       // 1 == one 60fps frame (original tuning)
 
     syncDebugFromJS();
+    // The water-level knob moved: what has flooded was worked out for the old
+    // level. Drop the dig window so it is rebuilt (and re-flooded) at the new.
+    {
+        static float lastWaterLevel = 0.0f;
+        if (gDebug.waterLevel != lastWaterLevel) {
+            lastWaterLevel = gDebug.waterLevel;
+            for (Planet& p : app.planets) p.carve.release();
+        }
+    }
 
     // Edge-triggered keys: thrust (lift off from a landing) and R (restart).
     bool thrustKey = Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP);
@@ -3913,7 +5109,13 @@ static void mainLoop() {
     app.prevExitKey  = exitKey;
 
     if (exitPressed) {
-        if (app.spacewalking) {
+        if (app.tradePost >= 0) {
+            // Done trading.
+            closeTrade();
+        } else if (app.spacewalking && wouldTrade()) {
+            // At a trader's stall: E is "talk to them".
+            openTrade(app.nearPost);
+        } else if (app.spacewalking) {
             float enterDist = dist(app.astronaut.pos.x, app.astronaut.pos.y,
                                    app.lander.pos.x,   app.lander.pos.y);
             if (enterDist < app.lander.radius * 4.0f) {
@@ -3924,7 +5126,7 @@ static void mainLoop() {
             const Planet& p = dominantPlanet();
             float ang   = atan2d(app.lander.pos.y - p.center.y,
                                  app.lander.pos.x - p.center.x);
-            float surfR = p.surfaceRadius(ang);
+            float surfR = p.visibleRadius(ang);     // out onto the ground, or into the water it floats on
             Vec2 spawnPos(p.center.x + cosd(ang) * (surfR + Astronaut::RADIUS + 2.0f),
                           p.center.y + sind(ang) * (surfR + Astronaut::RADIUS + 2.0f));
             app.astronaut.spawn(spawnPos);
@@ -4017,9 +5219,9 @@ static void mainLoop() {
             app.lander.vel = body.orbitVel;
             updateContact();                 // keep altitude readout fresh
             // A safe landing is a pit stop: the tank tops itself back up.
-            if (gDebug.refuelRate > 0.0f && app.lander.fuel < gDebug.maxFuel) {
+            if (gDebug.refuelRate > 0.0f && app.lander.fuel < maxFuel()) {
                 app.lander.fuel += gDebug.refuelRate * timeScale;
-                if (app.lander.fuel > gDebug.maxFuel) app.lander.fuel = gDebug.maxFuel;
+                if (app.lander.fuel > maxFuel()) app.lander.fuel = maxFuel();
             }
             if (!app.spacewalking && thrustPressed) {
                 app.lander.liftOff(body);
@@ -4051,7 +5253,7 @@ static void mainLoop() {
         // Keep the fine dig layer around the player BEFORE moving them: their
         // collision reads it.
         if (app.dominantIdx == app.activeFieldIdx && dominantPlanet().focusCarve(app.astronaut.pos))
-            uploadCarveTexture();
+            carveRefocused(dominantPlanet());
         pollInputAstronaut(timeScale);
         app.astronaut.update(dominantPlanet(), timeScale);
 
@@ -4066,7 +5268,23 @@ static void mainLoop() {
                app.dominantIdx == app.activeFieldIdx && dominantPlanet().hasDigs()) {
         // Parked, or flying low: show the caves and whatever has been dug
         // around the ship (the fine layer only covers ~3000 units around it).
-        if (dominantPlanet().focusCarve(app.lander.pos)) uploadCarveTexture();
+        if (dominantPlanet().focusCarve(app.lander.pos)) carveRefocused(dominantPlanet());
+    }
+
+    // The locals go about their day, and look up when you come by. Is a
+    // trader in reach? (Walking off, or boarding the ship, ends a trade.)
+    {
+        Planet& dp = dominantPlanet();
+        Outposts::update(dp, dt, playerPos(), app.spacewalking);
+        app.nearPost = app.spacewalking ? Outposts::inReach(dp, app.astronaut.pos) : -1;
+        if (app.tradePost >= 0 && app.nearPost != app.tradePost) closeTrade();
+        // The page's hint for what E does here.
+        std::string prompt;
+        if (app.tradePost < 0 && wouldTrade()) prompt = "Trade with " + dp.outposts[app.nearPost].keeper;
+        if (prompt != app.promptShown) {
+            app.promptShown = prompt;
+            EM_ASM({ if (window.setPrompt) window.setPrompt(UTF8ToString($0)); }, prompt.c_str());
+        }
     }
 
     updateDiscovery();
@@ -4081,6 +5299,8 @@ static void mainLoop() {
     updateLaser(dt, (float)(now - app.startTime) * 3.0f);
     NearField::update(dominantPlanet(), dt, app.laserTarget);
     CaveField::update(dominantPlanet(), dt, app.laserProp);
+    Deposits::update(dominantPlanet(), dt, app.burnOre);
+    updateWaterFx(dt, (float)(now - app.startTime) * 3.0f);
     updateParticles(dt, timeScale);
     for (App::Burn& b : app.burns) {
         if (b.heat > 0.0f) b.heat -= dt / 1.7f;       // cools in under two seconds
@@ -4159,6 +5379,9 @@ static void mainLoop() {
     // 2) Planet bodies: SDF fill + material + slope lighting + crosshatch +
     //    day/night terminator, one fullscreen pass over every body (near
     //    planet from the live density field, far ones from silhouette rows).
+    //    The water goes down first, behind the crust: it shows wherever the
+    //    ground is lower than the sea.
+    drawWaterPass(0, shaderTime);
     drawBodyPass();
     // ...and mark the cave's open space in the stencil, for the formations
     // that grow out of its walls (beginInCave).
@@ -4179,11 +5402,18 @@ static void mainLoop() {
         NearField::Frame nf = nearFrame(shaderTime);
         app.renderer.begin(viewMat, app.width, app.height);
         NearField::draw(app.renderer, dominantPlanet(), nf, false, app.laserTarget);
-        // ...and what grows in the caves, behind the walker. (Inside a cave
-        // these only show to someone who is down there; the front-ground veil
-        // and their own fade see to that.) The formations are clipped to the
-        // cave's open space, so the wall hides their roots.
+        // The locals' trading posts stand on that strip too: hut, stall,
+        // trader, the others out walking. The ship and the astronaut are
+        // drawn later, so they pass in front.
+        Outposts::draw(app.renderer, dominantPlanet(), nf, app.view.scale,
+                       app.tradePost >= 0 ? app.tradePost : (wouldTrade() ? app.nearPost : -1));
+        // ...the ore uncovered in the rock, and what grows in the caves,
+        // behind the walker. (Underground, these only show to someone who is
+        // down there; the front-ground veil and their own fade see to that.)
+        // The formations are clipped to the cave's open space, so the wall
+        // hides their roots.
         CaveField::Frame cf = caveFrame(shaderTime);
+        Deposits::draw(app.renderer, dominantPlanet(), cf, app.laserOre, app.burnOre);
         CaveField::draw(app.renderer, dominantPlanet(), cf, false, app.laserProp, CaveField::Part::Loose);
         app.renderer.end();
         beginInCave();
@@ -4206,6 +5436,9 @@ static void mainLoop() {
     app.renderer.begin(viewMat, app.width, app.height);
     if (spaceAids) drawTrajectory();
     app.lander.drawBeam(app.renderer);
+    app.lander.draw(app.renderer);   // always draw the actual ship
+    // The astronaut after the ship: stepping out (and walking past it) they
+    // are in front of it, never hidden behind the hull.
     if (app.spacewalking) app.astronaut.draw(app.renderer, dominantPlanet());
     // Cave formations standing in front of the walking plane (the walled ones
     // clipped to the cave's open space, as behind).
@@ -4220,7 +5453,6 @@ static void mainLoop() {
         endInCave();
         app.renderer.begin(viewMat, app.width, app.height);
     }
-    app.lander.draw(app.renderer);   // always draw the actual ship
     if (spaceAids || app.navAlpha > 0.5f) {
         // In space the ship is sub-pixel, so overlay a locator beacon on top of
         // it (also on the map while parked: it's the "you are here").
@@ -4229,11 +5461,18 @@ static void mainLoop() {
     }
     app.renderer.end();
 
+    // 3c-) The water in front of the walking line: over the ship and the
+    //      astronaut where they are in it, and standing in flooded holes.
+    //      Before the veil, which is ground in front of that water.
+    drawWaterPass(1, shaderTime);
+
     // 3c0) Front-ground veil: the strip of ground in front of the walking line,
     //      drawn back over any hole that passes behind it — and over the
     //      astronaut while they are down there — see-through. After the
     //      player, before the plants that stand on that strip.
     drawBodyPass(BodyPass::Veil);
+    //      ...and the water standing over that strip, where it is lake bed.
+    drawWaterPass(2, shaderTime);
 
     // 3c1) Harvestables IN FRONT of the walking line, over the ship and the
     //      astronaut — you walk behind the grass — then the mining laser, its
@@ -4263,13 +5502,18 @@ static void mainLoop() {
     // Push HUD state to the DOM overlay (defined in shell.html).
     EM_ASM({
         if (window.updateHUD) window.updateHUD($0, $1, $2, $3, $4, $5, $6, $7, $8);
-    }, app.lander.fuel, gDebug.maxFuel, app.lander.altitude,
+    }, app.lander.fuel, maxFuel(), app.lander.altitude,
        // Speed relative to the world you're at — its own orbital motion is
        // tens of units a frame and would swamp the number you fly by.
        (app.lander.vel - dominantPlanet().orbitVel).length(),
-       (int)app.state, app.cargo, MAX_CARGO, app.score,
+       (int)app.state, app.cargo, maxCargo(), app.score,
        (int)app.spacewalking);
     updateNavHud();
+    updateTraderHud();
+    if (app.creditsDirty) {
+        app.creditsDirty = false;
+        EM_ASM({ if (window.setCredits) window.setCredits($0); }, app.credits);
+    }
     if (app.inventoryDirty) {
         app.inventoryDirty = false;
         std::string counts;

@@ -307,5 +307,13 @@ void Planet::growHarvest() {
             commit(a);
         }
     }
+    // Nothing of this grows under water (nor right at its edge, where it
+    // would stand half in it).
+    if (sea) {
+        float shore = baseRadius + seaLevel + 8.0f;
+        harvest.erase(std::remove_if(harvest.begin(), harvest.end(),
+                                     [&](const Harvestable& h) { return at(idx(h.angle)) < shore; }),
+                      harvest.end());
+    }
     std::sort(harvest.begin(), harvest.end(), byAngle);
 }
