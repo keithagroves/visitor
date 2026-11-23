@@ -1,4 +1,5 @@
 #include "input.h"
+#include <emscripten.h>
 #include <cstdio>
 #include <cstring>
 
@@ -36,7 +37,17 @@ static EM_BOOL wheelCallback(int eventType, const EmscriptenWheelEvent* e, void*
     return EM_TRUE;  // swallow so the page doesn't scroll
 }
 
+// A text field on the page has the keyboard (the title screen's name box):
+// the game leaves keys alone, so typing works and doesn't steer the ship.
+static bool typing() {
+    return EM_ASM_INT({
+        var a = document.activeElement;
+        return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') ? 1 : 0;
+    }) != 0;
+}
+
 static EM_BOOL keyDownCallback(int eventType, const EmscriptenKeyboardEvent* e, void* userData) {
+    if (typing()) return EM_FALSE;
     if (e->keyCode < 256) keys[e->keyCode] = true;
     // Swallow the event (returning true prevents arrow keys from scrolling the
     // page, etc.). We don't need the browser's default handling here.

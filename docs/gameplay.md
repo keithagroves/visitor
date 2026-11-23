@@ -6,9 +6,11 @@ tags: [design, gameplay, progression, economy, reference]
 
 # Gameplay — Visitor
 
-Status: decided 2026-11-22. Build against this; if a decision turns out wrong
-in play, change it here first, then in the code. Numbers are first passes to
-be tuned by playing. The **decisions** are the part that should not drift.
+Status: decided 2026-11-22; **all eight build steps built 2026-11-23**
+(see *Build order* for what each step became and *Tuning* for what has not
+been played through yet). If a decision turns out wrong in play, change it
+here first, then in the code. Numbers are first passes to be tuned by
+playing. The **decisions** are the part that should not drift.
 
 ## Where we are
 
@@ -161,14 +163,14 @@ Everything you can own, and nothing else:
 
 | | Upgrade | Levels | What a level does |
 |---|---|---|---|
-| **Ship** | Fuel tank | 3 | reaches further in one hop: the moon comfortably, then the near planets, then anywhere |
+| **Ship** | Fuel tank | 3 | stock 160; then 1.5x / 2.2x / 3x: the moon comfortably, then the near planets, then anywhere (see *Tuning*) |
 | | Cargo bay | 3 | +100 items in the hold and one more cow stall |
 | | **Star drive** | 1 | the jump |
 | **Suit** | Seals | 3 | suit time 2x / 3x / 4x |
 | | Pack | 3 | carries 40 items stock, then 70 / 100 / 140 |
 | | Jetpack cell | 3 | +40% jetpack fuel each |
-| **Tool** | Terrain cutter | unlock | dig; then two levels of cutting speed |
-| | Mining laser | 2 | II mines **gold** and works 40% faster; III faster again |
+| **Tool** | Terrain cutter | 3 | the cutter itself (dig, Q); then +35% / +75% cutting speed |
+| | Mining laser | 2 | you start with I; II mines **gold** and works 40% faster; III twice as fast |
 | | Scanner | unlock | a pulse that shows buried ore nearby for a few seconds |
 
 ## The ladder
@@ -257,16 +259,45 @@ Good ideas that wait until the loop above is fun. Parked, not dropped:
 - **Many systems that differ** — after the first jump every system is the
   same ladder with new worlds. Harder stars, rarer kinds of world, things
   only found three jumps out: once one system is worth finishing.
-- **Multiplayer.**
+- ~~**Multiplayer.**~~ Built 2026-11-23 (players share a system's world —
+  tunnels, mined ore, cut plants, trader stock — and see each other; no
+  collisions, no combat, own progress each). Whether players can attack
+  each other is undecided.
 - **Salvaging your wreck** — fly back to where you crashed and beam the
   cargo out of it.
 - **Fuel you have to find**, parachutes and heat shields for worlds with
   air, landing gear — more ship equipment, once the suit and tool are right.
 - **Things that live on other worlds** — to abduct, to avoid, to sell.
 
+## Keys
+
+Ship: W thrust, A/D turn, Space tractor beam, E step out, M map, **T time
+warp** (open space only), **J jump** (star drive, clear of every world), **R
+rescue** (after a crash, or adrift with an empty tank). On foot: A/D walk,
+W jump, Space jetpack, mouse fires the tool, Q laser / cutter, **F breathe
+carbon**, **C scan**, E trade / board, Tab pack and hold.
+
+## Tuning: what is measured and what is not
+
+- **The tank wall is soft.** Measured with the lander's own physics (a
+  native harness, straight-up burns from the home surface): ~83 fuel to
+  climb to the moon's distance, ~89 to escape the home world, ~40 more to
+  land in another planet's gravity well, 4-8 for a careful landing. The
+  stock tank is 160: the moon with room to spare, not another planet in one
+  hop. But the tank refills on any landing, and the moon sits high in the
+  home world's gravity well, so a good pilot can hop home -> moon -> planet
+  on the stock tank. That is a skill shortcut, not a bug; the suit and the
+  recipes still gate what you can do when you get there.
+- **Never played through end to end.** Every step is tested on its own in
+  the browser (title, recipes, pack and hold, suit and blackout, gold wall,
+  scanner, crash and rescue, warp, jump into a new system with everything
+  kept). The pacing targets above (first sale by minute 3, the jump at
+  ninety minutes to two hours) have not been checked against a real cold
+  start. That is the next job.
+
 ## Build order
 
-Each step leaves the game playable.
+Each step leaves the game playable. All built 2026-11-23.
 
 1. **Keep what you build.** Save and load; a crash costs cargo and puts you
    at the last post; score becomes credits for charting. Nothing else
@@ -288,10 +319,20 @@ Each step leaves the game playable.
 8. **A front door.** Title screen, then tune everything against the pacing
    targets by playing from a cold start.
 
+What each step became: the save is one JSON array in localStorage
+(`visitor:save`, `saveText` in main.cpp), written on landing, every trade,
+boarding, a crash and a blackout, and it names its own system, so the page
+picks the saved seed; the recipes and the ladder are `Trade::recipe` in
+trade.cpp, with materials named by role and resolved per system by
+`Trade::systemOf`; the generator guarantee is in system_gen.cpp (bare-rock
+planets nearest home turned into missing kinds); the jump saves the next
+seed and reloads the page into it. `?notitle` in the URL skips the title
+into a fresh game (the capture rig uses it).
+
 ## Open
 
-Decided above, but these are the ones most worth a second opinion before
-they are built, because each changes how the whole game feels:
+Decided above and now built; these are the ones most worth a second opinion
+after playing, because each changes how the whole game feels:
 
 - **The suit meter** (5). The biggest change: it adds pressure to walking
   around, which is calm today. The home world stays calm either way.

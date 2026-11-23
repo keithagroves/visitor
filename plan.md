@@ -22,9 +22,11 @@ Decisions already made:
 Each stage leaves the game playable.
 
 **What the game IS** — goal, loop, the equipment ladder, what failing costs —
-is decided in [docs/gameplay.md](docs/gameplay.md) (2026-11-22). It replaces
-Stage 5 below and has its own build order; this file remains the record of
-how the world got built.
+is decided in [docs/gameplay.md](docs/gameplay.md) (2026-11-22), and all of
+its build order was built on 2026-11-23: saving, the equipment ladder, pack
+and hold, the suit meter, the tool walls, the fuel wall and time warp, the
+star drive and the jump, and a title screen. It replaces Stage 5 below; this
+file remains the record of how the world got built.
 
 **Status (2026-11-15).** Stages 1–2 are done and Stage 3 mostly so; Stage 4's
 archetypes arrived early as part of system generation.

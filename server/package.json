@@ -1,0 +1,13 @@
+{
+  "name": "visitor-server",
+  "private": true,
+  "description": "Multiplayer relay for Visitor: one room per star system (seed), a shared clock and an ordered log of world changes.",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
+  }
+}

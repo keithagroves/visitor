@@ -19,43 +19,74 @@
 // Goods. A post sells what it has plenty of — its world's crystal and one
 // other local thing — at half as much again as it would pay for them, from a
 // stock that does not refill. Buy low, fly, sell high.
-// Upgrades. Sold at every post, same price everywhere; each has a few
-// levels, each level dearer than the last.
+// Equipment. Every trader builds every upgrade, from materials plus credits
+// (docs/gameplay.md): each tier's key material comes from the next place out,
+// so credits alone never buy past the first tier. Recipes name materials by
+// role — the home world's crystal, the moon's, the two "far" kinds from the
+// system's other planets — and System resolves the roles to item ids for the
+// system being played, so every system is winnable.
 namespace Trade {
 
-constexpr int ITEMS = 12;        // inventory item ids (App::inventory)
+constexpr int ITEMS = 12;        // inventory item ids (App::pack / App::hold)
 constexpr int COW = 100;         // a cow from the ship's hold, as a thing to sell
 constexpr int GOODS = 2;         // slots of goods a post sells (Outpost::stock)
 
-enum Upgrade { FuelTank = 0, Jetpack, Laser, Cutter, CargoBay, UPGRADES };
+// Item ids.
+constexpr int CARBON = 0, FERRITE = 1, CRYSTAL0 = 2, CALCITE = 9, GLOWCAP = 10, GOLD = 11;
+inline int crystalOf(int archetype) { return CRYSTAL0 + archetype; }
+inline bool isCrystal(int item) { return item >= CRYSTAL0 && item < CRYSTAL0 + 7; }
 
-// What one of an item is worth before a post's demand for it.
+enum Upgrade {
+    FuelTank = 0, CargoBay, StarDrive,     // ship
+    Seals, Pack, Jetpack,                  // suit
+    Cutter, Laser, Scanner,                // tool
+    UPGRADES
+};
+
+// The crystals of the system being played, by role.
+struct System {
+    int home = CRYSTAL0;             // the home world's (temperate)
+    int moon = CRYSTAL0 + 6;         // the moon's (barren)
+    int farA = -1, farB = -1;        // the two nearest other kinds, nearest first
+    int kinds[7] = {0};              // item ids of every kind in the system...
+    int kindCount = 0;               // ...and how many
+};
+// Work it out from the generated bodies (homeIdx = the home world).
+System systemOf(const std::vector<Planet>& planets, int homeIdx);
+
+// What one level of an upgrade costs.
+struct Cost { int item; int count; };
+struct Recipe {
+    int credits = 0;
+    Cost mats[8];
+    int matCount = 0;
+};
+
+// What a post pays and sells: see the top of this file.
 int baseValue(int item);
-// What this post pays for one of an item (an inventory id, or COW).
 int sellPrice(const Planet& p, const Planet::Outpost& o, int item);
-// +1 = they pay well for it, -1 = they pay poorly, 0 = about what it is worth.
 int trend(const Planet& p, const Planet::Outpost& o, int item);
-// The one thing this post is short of (an inventory id).
 int wanted(const Planet& p, const Planet::Outpost& o);
-
-// The item a goods slot holds, what one costs, and (rolling it the first
-// time) how many are left.
 int goodsItem(const Planet& p, const Planet::Outpost& o, int slot);
 int goodsPrice(const Planet& p, const Planet::Outpost& o, int slot);
 int goodsStock(Planet::Outpost& o, int slot);
 
-// Upgrades: how many levels there are, and what the next one costs when you
-// have `level` of them (0 once it is at its maximum).
+// Upgrades: how many levels there are, and the recipe for the next one when
+// you have `level` of them (credits 0 and no materials past the top).
 int maxLevel(int upgrade);
-int upgradePrice(int upgrade, int level);
+Recipe recipe(int upgrade, int level, const System& sys);
+
 // What a level does.
 float fuelScale(int level);      // x the ship's tank
+int   holdSize(int level);       // items the ship's hold takes
+int   cowStalls(int level);      // cows the hold takes
+float suitScale(int level);      // x how long the suit lasts where it drains
+int   packSize(int level);       // items the suit carries
 float jetpackScale(int level);   // x the jetpack's tank
+float cutterScale(int level);    // x how fast the terrain cutter bites (level 0 = no cutter)
 float laserScale(int level);     // x how fast the mining laser works
-float cutterScale(int level);    // x how fast the terrain cutter bites
-int   cargoBonus(int level);     // + cows the hold takes
-// The same as one number for the panel: percent more (tanks, tools), or cows
-// more (the cargo bay).
+bool  laserMinesGold(int level);
+// The same as one number for the panel (percent, items, cows, x).
 int   effect(int upgrade, int level);
 
 }  // namespace Trade

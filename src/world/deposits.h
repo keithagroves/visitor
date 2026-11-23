@@ -101,6 +101,12 @@ CarveMap::Rect extract(Planet& p, int idx);
 // cutter (-1 = none).
 void draw(Renderer2D& r, const Planet& p, const CaveField::Frame& f, int hot, int burning);
 
+// The scanner: every clump within `range` of a world point that is still in
+// the rock (hidden or uncovered, not yet mined or burnt), without revealing
+// anything. `out` gets where each is drawn (world space) and its kind.
+struct ScanHit { Vec2 drawn; Planet::Ore::Kind kind; float size; };
+int scan(const Planet& p, Vec2 world, float range, ScanHit* out, int maxCount);
+
 // Dev: reveal every clump within `range` of a world point. Returns how many.
 int revealAll(Planet& p, Vec2 world, float range);
 

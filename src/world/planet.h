@@ -142,6 +142,11 @@ public:
     // of the carve window that changed, for a partial texture upload; empty if
     // nothing was cut. Every bite is remembered, so holes persist.
     CarveMap::Rect dig(Vec2 world, float radius);
+    // Called with every bite dig() takes (planet-local), unless `quiet`: how
+    // the game hears about digs made deep inside other modules (a mined
+    // clump's pocket) and passes them on to other players.
+    static void (*digHook)(const Planet& p, Vec2 local, float radius);
+    static bool digQuiet;
     // Keep the fine carve window around a world point: (re)builds it when the
     // point is outside or near its edge. Returns true when the window was
     // rebuilt and its whole texture needs re-uploading.
@@ -179,6 +184,11 @@ public:
     // along; orbitVel is the per-frame-unit world motion (inherit on liftoff).
     void setOrbit(int parentIdx, float radius, float speedDegPerFrame, float startAngleDeg);
     void updateOrbit(const std::vector<Planet>& planets, float timeScale);
+    // Put the body where its orbit has it at a point in time (frame-units
+    // since the system's clock started), rather than one step on from where
+    // it was: every player of a shared system computes the same sky from the
+    // same clock. orbitStep is still the move since the last call.
+    void advanceTo(const std::vector<Planet>& planets, double frames);
     // Circular-orbit rate around a parent of the given GM (Kepler: w^2 r^3 = GM),
     // so a ship coasting alongside the planet shares its orbit instead of being
     // left behind.
@@ -218,6 +228,7 @@ public:
     float orbitRadius = 0;
     float orbitSpeed = 0;    // degrees per frame-unit
     float orbitAngle = 0;    // degrees
+    double orbitStart = 0;   // degrees at clock 0 (advanceTo)
     Vec2 orbitVel;           // world velocity, units per frame-unit (incl. the parent's)
     Vec2 orbitStep;          // exact displacement of the center in the last updateOrbit
     bool orbitPinned = false;// frozen on its orbit (debug sun-angle override)
@@ -317,6 +328,7 @@ public:
         float hp;          // 1 = untouched .. 0 = mined out; what is taken stays taken
         float heat;        // the cutter's: 0 = cold .. 1 = burnt away; cools when left alone
         float found;       // seconds since it was revealed (the reveal glint)
+        unsigned long long id;   // its grid id (Planet::oreSeen): the same clump on every client
     };
     std::vector<Ore> ores;                             // the clumps found so far
     // Every grid clump looked at so far, by id: its index in `ores`, or -1

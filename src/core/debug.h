@@ -9,7 +9,15 @@ struct Debug {
     // planet's surface (g = density * baseRadius / 8000 ≈ 0.1) — enough to
     // climb to orbit. Below ~0.1 the ship can never leave the ground.
     float thrust = 0.15f;
-    float maxFuel = 250.0f;
+    // The stock tank. Measured with the lander's own physics (a native
+    // harness, straight-up burns from the home surface): ~83 to climb to the
+    // moon's distance, ~89 to escape the home world, then ~40 more to land in
+    // another planet's gravity well. 160 is about 1.7x an ideal moon trip —
+    // the moon with room to spare, not another planet in one hop (though the
+    // moon, where the tank refills, is a stepping stone for a good pilot).
+    // The fuel-tank upgrades multiply it (Trade::fuelScale). It was 250,
+    // which reached anywhere.
+    float maxFuel = 160.0f;
     // Fuel per frame at full thrust. 0.05 gives ~83 s of burn on a full tank:
     // enough to climb out of the home atmosphere (which alone took more than a
     // whole tank at the old 0.2), cross to a neighboring world, and land.

@@ -1142,7 +1142,6 @@ struct App {
 
     std::vector<Cow> cows;
     int cargo = 0;
-    int score = 0;
 
     Astronaut astronaut;
     bool spacewalking  = false;
@@ -1180,9 +1179,7 @@ struct App {
     // The hand tool has two modes (Q switches): the mining laser, which cuts
     // plants / rocks / crystals, and the terrain cutter, which eats rock.
     int toolMode = 0;               // 0 = mining laser, 1 = terrain cutter
-    // The terrain cutter is meant to be an upgrade you earn (natural caves are
-    // the way underground until then). Unlocked from the start for now.
-    bool cutterUnlocked = true;
+    // (The terrain cutter is bought: upgrades[Trade::Cutter] >= 1.)
     bool prevToolKey = false;
     bool laserCutting = false;      // this frame's beam is the cutter (for its color)
     float cutTimer = 0.0f;          // time banked toward the next bite
@@ -1211,13 +1208,61 @@ struct App {
     Vec2 laserEnd;
     float laserDepth = 0.0f;        // near-field depth of whatever the beam ends on
     bool laserHit = false;          // beam ends on something (item or ground), not open sky
-    // What the player is carrying, by item id: 0 carbon, 1 ferrite, then one
-    // crystal per world archetype (2 + Planet::archetype) — each kind of world
-    // grows its own. The names, icons and the panel live in shell.html.
+    // What the player owns, by item id: 0 carbon, 1 ferrite, then one crystal
+    // per world archetype (2 + Planet::archetype) — each kind of world grows
+    // its own — then calcite, glowcap, gold. The suit's PACK is small; the
+    // ship's HOLD is the bank (docs/gameplay.md, decision 6): boarding empties
+    // the pack into it, all but the carbon (that is your air). Cows live in
+    // the hold's stalls (`cargo`). The names, icons and the panel live in
+    // shell.html.
     static constexpr int ITEM_COUNT = 12;
     static constexpr int ITEM_CAVE = 9;         // first of the cave items: calcite, glowcap, gold
-    int inventory[ITEM_COUNT] = {0};
+    int pack[ITEM_COUNT] = {0};
+    int hold[ITEM_COUNT] = {0};
     bool inventoryDirty = true;
+
+    // ---- Progress (docs/gameplay.md) ------------------------------------------
+    // What is kept: credits, the equipment (upgrades), the flags that mark the
+    // rungs of the ladder climbed, every item ever held (bit per id), the last
+    // post traded at (where a rescue sets you down) and how many systems you
+    // have jumped through. All of it goes in the save.
+    enum Flag : unsigned int {
+        F_LANDED = 1u, F_POST = 2u, F_SOLD = 4u, F_MOON = 8u, F_PLANET = 16u, F_JUMPED = 32u,
+    };
+    unsigned int flags = 0;
+    unsigned int everHeld = 0;
+    int lastPostPlanet = -1, lastPostIdx = -1;
+    int jumps = 0;
+    Trade::System sys;              // the system's crystals, by role (recipes)
+    // The suit meter (decision 5): 1 = full. Drains on hostile worlds,
+    // refills in the ship and at a trader's stall; at 0 you black out.
+    float suit = 1.0f;
+    int suitWarned = 0;             // 0 none, 1 = the 25% warning shown, 2 = the 10%
+    bool prevAirKey = false;
+    // Time warp in open space (T): 1, 4 or 16 simulation steps a frame.
+    int warp = 1;
+    bool prevWarpKey = false;
+    // The scanner (C): clumps of ore near you, shown through the rock for a
+    // few seconds. Positions are planet-local, so they ride the orbit.
+    struct ScanMark { Vec2 local; int kind; float size; };
+    std::vector<ScanMark> scanMarks;
+    float scanTime = 0.0f, scanCooldown = 0.0f;
+    Vec2 scanFrom;                  // planet-local: where the pulse went out from
+    bool prevScanKey = false;
+    float herdTimer = 0.0f;         // the home herd grows back, one cow at a time
+    // The front door: the simulation waits while the title screen is up.
+    bool titleOpen = true;
+    bool hasSave = false;           // a save for this system was found at start
+    // The jump: the drive spooling up (seconds; < 0 = not jumping).
+    float jumpTime = -1.0f;
+    bool prevJumpKey = false;
+    std::string objectiveShown;     // the HUD's objective line, as last sent
+    // Multiplayer (Net, below): in a shared system's room, my id there, and
+    // the system's clock in frame-units — the orbits are computed from it
+    // (Planet::advanceTo). Alone, it simply counts up.
+    bool online = false;
+    int netId = -1;
+    double worldFrames = 0.0;
     // Trading with the locals (Outposts, Trade): what you have been paid, the
     // upgrades bought with it (levels, by Trade::Upgrade), the post whose
     // trade panel is open and the one whose trader is in reach right now
@@ -1323,19 +1368,42 @@ static void showEvent(const std::string& title, const std::string& sub) {
 
 static constexpr int KEY_R = 82;
 static constexpr int KEY_M = 77;
+static constexpr int KEY_F = 70;   // on foot: breathe carbon into the suit
+static constexpr int KEY_T = 84;   // in open space: time warp
+static constexpr int KEY_C = 67;   // on foot: scanner pulse
+static constexpr int KEY_J = 74;   // with a star drive, clear of every world: jump
 static constexpr float LANDING_MAX_SLOPE = 40.0f; // degrees off the local tangent
-static constexpr int MAX_CARGO = 3;
 static constexpr int NUM_COWS = 5;
 
-// What the ship holds once the upgrades bought from the traders are counted:
-// fuel (the debug knob is the base tank) and cows.
+// What the equipment allows (Trade says what each level does): the ship's
+// tank (the debug knob is the stock tank), the hold and its cow stalls, the
+// suit's pack.
 static float maxFuel() { return gDebug.maxFuel * Trade::fuelScale(app.upgrades[Trade::FuelTank]); }
-static int maxCargo() { return MAX_CARGO + Trade::cargoBonus(app.upgrades[Trade::CargoBay]); }
+static int maxCargo() { return Trade::cowStalls(app.upgrades[Trade::CargoBay]); }
+static int packSize() { return Trade::packSize(app.upgrades[Trade::Pack]); }
+static int holdSize() { return Trade::holdSize(app.upgrades[Trade::CargoBay]); }
+static bool hasCutter() { return app.upgrades[Trade::Cutter] >= 1; }
+static int itemTotal(const int* a) {
+    int n = 0;
+    for (int i = 0; i < App::ITEM_COUNT; i++) n += a[i];
+    return n;
+}
+static int packRoom() { return std::max(0, packSize() - itemTotal(app.pack)); }
+static int holdRoom() { return std::max(0, holdSize() - itemTotal(app.hold)); }
 // The upgrades that live in other objects' fields.
 static void applyUpgrades() {
     app.astronaut.jetpackMax = Astronaut::JETPACK_MAX_FUEL * Trade::jetpackScale(app.upgrades[Trade::Jetpack]);
+    if (!hasCutter()) app.toolMode = 0;
 }
 static void closeTrade();   // defined with the trading code
+// Tell the other players about a change to the world (defined with the
+// multiplayer code; does nothing when playing alone).
+namespace Net { void op(int kind, double a, double b = 0, double c = 0, double d = 0, double e = 0); }
+static void saveGame();     // defined with the progress code
+// A short line at the bottom of the screen ("Pack full", "Needs Laser II").
+static void notice(const std::string& text) {
+    EM_ASM({ if (window.showNotice) window.showNotice(UTF8ToString($0)); }, text.c_str());
+}
 
 // Barycentric point-in-triangle test (ported from lander.js).
 static bool pointInTriangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
@@ -1371,18 +1439,20 @@ static void spawnCows() {
 
 static void updateActiveField();   // defined below (lazy destructible fields)
 
-static void resetGame() {
+// The ship drops in over the home world, as at the very start: a new game,
+// or arriving in a new system after a jump. Moves things; owns nothing.
+static void startRun() {
     app.lander.reset();
+    app.lander.fuel = maxFuel();
     app.lander.spawnOnPlanet(homePlanet());
-    // Restarting after a crash on another world: bring the home field back
-    // before anything (the cows) reads the home surface, so they stand on the
-    // dug/gridded ground rather than the analytic silhouette.
+    // Bring the home field back before anything (the cows) reads the home
+    // surface, so they stand on the gridded ground rather than the analytic
+    // silhouette.
+    app.dominantIdx = app.stuckIdx = app.homeIdx;
     updateActiveField();
     app.state = PLAYING;
-    app.cargo = 0;
-    app.score = 0;
-    app.dominantIdx = app.stuckIdx = app.homeIdx;
     app.mapMode = false;
+    app.warp = 1;
     app.camAlt = 2000.0f;
     app.particles.clear();
     app.laserOn = false;
@@ -1390,23 +1460,11 @@ static void resetGame() {
     app.laserProp = app.hoverProp = -1;
     app.laserOre = app.hoverOre = -1;
     app.burnOre = -1;
-    for (int i = 0; i < App::ITEM_COUNT; i++) app.inventory[i] = 0;
-    app.inventoryDirty = true;
-    // A new run starts with empty pockets and a stock ship.
     closeTrade();
-    app.credits = 0;
-    app.creditsDirty = true;
-    for (int i = 0; i < Trade::UPGRADES; i++) app.upgrades[i] = 0;
-    applyUpgrades();
-    for (Planet& p : app.planets) {
-        for (Planet::Outpost& o : p.outposts) {
-            o.stock[0] = o.stock[1] = -1;       // the stalls are restocked
-            o.met = false;
-        }
-    }
     spawnCows();
     app.spacewalking      = false;
     app.astronaut.active  = false;
+    app.suit = 1.0f;
 
     app.view.focusX = app.lander.pos.x;
     app.view.focusY = app.lander.pos.y;
@@ -1417,6 +1475,31 @@ static void resetGame() {
     // Align the initial roll so gravity points screen-down.
     Vec2 g = app.lander.gravityAt(homePlanet(), app.lander.pos);
     app.view.rotation = 90.0f - atan2d(g.y, g.x);
+}
+
+// A new game: nothing owned, nothing charted, the stalls restocked.
+static void newGame() {
+    for (int i = 0; i < App::ITEM_COUNT; i++) app.pack[i] = app.hold[i] = 0;
+    app.cargo = 0;
+    app.inventoryDirty = true;
+    app.credits = 0;
+    app.creditsDirty = true;
+    for (int i = 0; i < Trade::UPGRADES; i++) app.upgrades[i] = 0;
+    app.flags = 0;
+    app.everHeld = 0;
+    app.lastPostPlanet = app.lastPostIdx = -1;
+    app.jumps = 0;
+    for (int i = 0; i < (int)app.planets.size(); i++) {
+        Planet& p = app.planets[i];
+        p.discovered = p.isSun || i == app.homeIdx;
+        p.visited = i == app.homeIdx;
+        for (Planet::Outpost& o : p.outposts) {
+            o.stock[0] = o.stock[1] = -1;
+            o.met = false;
+        }
+    }
+    applyUpgrades();
+    startRun();
 }
 
 // Local terrain slope test (ports checkSafeLanding's flatness check): compare
@@ -1433,6 +1516,9 @@ static bool terrainFlat(const Planet& p, float angle) {
 }
 
 static void splashDown(const Planet& p, Vec2 at, Vec2 vel, float size);   // defined with the particles
+
+static void onLanded();    // progress: first landings, the save (defined below)
+static void onCrashed();   // progress: what a crash costs (defined below)
 
 // Track altitude every frame; while PLAYING, judge ground contact as a safe
 // landing (slow, upright, flat) or a crash.
@@ -1462,18 +1548,12 @@ static void updateContact() {
         if (speedSafe && upright && flat) {
             l.land(p);
             app.state = LANDED;
-            p.discovered = true;
-            if (!p.visited) {
-                p.visited = true;
-                if (app.dominantIdx != app.homeIdx) {
-                    app.score += 100;
-                    showEvent("First landing: " + p.name, p.kind + "  +100");
-                }
-            }
+            onLanded();
         } else {
             l.crash();
             l.landingOffset = l.pos - p.center;   // the wreck stays on the body
             app.state = CRASHED;
+            onCrashed();
         }
     }
 }
@@ -1899,12 +1979,24 @@ static void splashDown(const Planet& p, Vec2 at, Vec2 vel, float size) {
     spawnRipple(p, at + side * (size * 0.3f), size * 0.2f);
 }
 
-// Add to the inventory and tell the page (pickup feed + panel refresh).
-static void addItem(int id, int amount) {
-    if (id < 0 || id >= App::ITEM_COUNT || amount <= 0) return;
-    app.inventory[id] += amount;
+// ============================================================================
+// What you own (docs/gameplay.md): the suit's pack, the ship's hold, credits.
+// ============================================================================
+static void noteHeld(int id) {
+    if (id >= 0 && id < 32) app.everHeld |= 1u << id;
+}
+
+// Put up to `amount` of an item in the pack (or, with `toHold`, the hold);
+// returns how many went in. Tells the page (pickup feed + panel refresh).
+static int addItem(int id, int amount, bool toHold = false) {
+    if (id < 0 || id >= App::ITEM_COUNT || amount <= 0) return 0;
+    int n = std::min(amount, toHold ? holdRoom() : packRoom());
+    if (n <= 0) return 0;
+    (toHold ? app.hold : app.pack)[id] += n;
+    noteHeld(id);
     app.inventoryDirty = true;
-    EM_ASM({ if (window.notifyPickup) window.notifyPickup($0, $1); }, id, amount);
+    EM_ASM({ if (window.notifyPickup) window.notifyPickup($0, $1); }, id, n);
+    return n;
 }
 
 // The inventory item a resource (NearField::Yield::resource) goes to: 0
@@ -1916,18 +2008,88 @@ static int resourceItem(const Planet& p, int resource) {
     return resource;
 }
 
-// ============================================================================
-// Trading with the locals. The posts and their people are Outposts' (where
-// they are, how they look); the prices and the upgrade catalog are Trade's;
-// this is the till: the open panel, the money, and what the page's Sell / Buy
-// buttons call. The panel itself is shell.html's.
-// ============================================================================
 static void addCredits(int amount) {
     if (amount == 0) return;
     app.credits += amount;
     app.creditsDirty = true;
     EM_ASM({ if (window.notifyCredits) window.notifyCredits($0); }, amount);
 }
+
+// The ship is parked on the world you are on, within `reach` of a point.
+static bool shipParkedNear(Vec2 world, float reach) {
+    return app.state == LANDED && app.stuckIdx == app.dominantIdx &&
+           dist(world.x, world.y, app.lander.pos.x, app.lander.pos.y) < reach;
+}
+// A trader deals with the whole hold when the ship is parked this close to
+// the stall; otherwise only with what you carry (decision 6).
+static constexpr float HOLD_REACH = 600.0f;
+static bool holdAtPost(int post) {
+    const Planet& p = dominantPlanet();
+    if (post < 0 || post >= (int)p.outposts.size()) return false;
+    return shipParkedNear(Outposts::ground(p, p.outposts[post]), HOLD_REACH);
+}
+// At the ship: aboard it (parked), or on foot beside it.
+static bool atShip() {
+    if (app.state != LANDED) return false;
+    if (!app.spacewalking) return true;
+    return dist(app.astronaut.pos.x, app.astronaut.pos.y, app.lander.pos.x, app.lander.pos.y) <
+           app.lander.radius * 4.0f;
+}
+static int haveItem(int id, bool withHold) {
+    return app.pack[id] + (withHold ? app.hold[id] : 0);
+}
+// Take `n` of an item, the pack first, then the hold.
+static void takeItem(int id, int n, bool withHold) {
+    int a = std::min(n, app.pack[id]);
+    app.pack[id] -= a;
+    n -= a;
+    if (withHold && n > 0) app.hold[id] -= std::min(n, app.hold[id]);
+    app.inventoryDirty = true;
+}
+
+// Boarding the ship: everything but the carbon (your air) goes in the hold,
+// as much as it takes.
+static void storePack() {
+    int moved = 0;
+    for (int i = 0; i < App::ITEM_COUNT; i++) {
+        if (i == Trade::CARBON) continue;
+        int n = std::min(app.pack[i], holdRoom());
+        app.pack[i] -= n;
+        app.hold[i] += n;
+        moved += n;
+    }
+    if (moved > 0) {
+        app.inventoryDirty = true;
+        notice("Stored " + std::to_string(moved) + " in the hold");
+    }
+    if (itemTotal(app.pack) - app.pack[Trade::CARBON] > 0) notice("The hold is full");
+}
+
+// The home world's moon (the system generator always gives it one), or -1.
+static int homeMoon() {
+    for (int i = 0; i < (int)app.planets.size(); i++)
+        if (app.planets[i].orbitParent == app.homeIdx) return i;
+    return -1;
+}
+// A body whose crystal is `item`, for "where is it found": the home moon for
+// the moons' crystal, else the first planet of that kind. -1 = none here.
+static int bodyWith(int item) {
+    if (item == app.sys.moon && homeMoon() >= 0) return homeMoon();
+    for (int i = 0; i < (int)app.planets.size(); i++)
+        if (!app.planets[i].isSun && Trade::crystalOf(app.planets[i].archetype) == item) return i;
+    return -1;
+}
+static bool isMoon(int idx) {
+    const Planet& p = app.planets[idx];
+    return p.orbitParent >= 0 && !app.planets[p.orbitParent].isSun;
+}
+
+// ============================================================================
+// Trading with the locals. The posts and their people are Outposts' (where
+// they are, how they look); the prices and the equipment ladder are Trade's;
+// this is the till: the open panel, the money, and what the page's Sell / Buy
+// / Build buttons call. The panel itself is shell.html's.
+// ============================================================================
 
 // On foot, would E trade rather than board the ship? Whichever is nearer,
 // when both are in reach.
@@ -1942,39 +2104,61 @@ static bool wouldTrade() {
     return shipDist >= app.lander.radius * 4.0f || postDist <= shipDist;
 }
 
-// Send the open panel its contents: who you are dealing with, what they pay
-// for each thing you carry, what they sell and what is left of it.
+// Send the open panel its contents: who you are dealing with, whether the
+// hold is in reach, what they pay for each thing you have, the equipment
+// they can build (recipes with have / need), the goods they sell, and where
+// each of the system's crystals is found.
 static void pushTrade() {
     if (app.tradePost < 0) return;
     Planet& p = dominantPlanet();
     if (app.tradePost >= (int)p.outposts.size()) { app.tradePost = -1; return; }
     Planet::Outpost& o = p.outposts[app.tradePost];
+    bool hold = holdAtPost(app.tradePost);
     auto num = [](int v) { return std::to_string(v); };
     std::string j = "{\"keeper\":\"" + o.keeper + "\",\"world\":\"" + p.name + "\",\"say\":\"" +
                     Outposts::phrase(o) + "\",\"line\":" + num((int)(o.seed % 9973u)) +
-                    ",\"want\":" + num(Trade::wanted(p, o)) + ",\"credits\":" + num(app.credits) + ",\"sell\":[";
+                    ",\"want\":" + num(Trade::wanted(p, o)) + ",\"credits\":" + num(app.credits) +
+                    ",\"hold\":" + num(hold ? 1 : 0) + ",\"sell\":[";
     bool first = true;
-    auto sellRow = [&](int id, int n) {
-        if (n <= 0) return;
-        j += std::string(first ? "" : ",") + "{\"id\":" + num(id) + ",\"n\":" + num(n) + ",\"p\":" +
-             num(Trade::sellPrice(p, o, id)) + ",\"t\":" + num(Trade::trend(p, o, id)) + "}";
+    auto sellRow = [&](int id, int inPack, int inHold) {
+        if (inPack + inHold <= 0) return;
+        j += std::string(first ? "" : ",") + "{\"id\":" + num(id) + ",\"pack\":" + num(inPack) + ",\"hold\":" +
+             num(inHold) + ",\"p\":" + num(Trade::sellPrice(p, o, id)) + ",\"t\":" + num(Trade::trend(p, o, id)) + "}";
         first = false;
     };
-    for (int i = 0; i < App::ITEM_COUNT; i++) sellRow(i, app.inventory[i]);
-    sellRow(Trade::COW, app.cargo);
+    for (int i = 0; i < App::ITEM_COUNT; i++) sellRow(i, app.pack[i], hold ? app.hold[i] : 0);
+    if (hold) sellRow(Trade::COW, 0, app.cargo);
     j += "],\"up\":[";
     for (int u = 0; u < Trade::UPGRADES; u++) {
-        j += std::string(u ? "," : "") + "{\"id\":" + num(u) + ",\"lvl\":" + num(app.upgrades[u]) + ",\"max\":" +
-             num(Trade::maxLevel(u)) + ",\"p\":" + num(Trade::upgradePrice(u, app.upgrades[u])) +
-             ",\"now\":" + num(Trade::effect(u, app.upgrades[u])) + ",\"next\":" +
-             num(Trade::effect(u, app.upgrades[u] + 1)) + "}";
+        int lvl = app.upgrades[u], mx = Trade::maxLevel(u);
+        Trade::Recipe r = Trade::recipe(u, lvl, app.sys);
+        bool can = lvl < mx && app.credits >= r.credits;
+        std::string mats;
+        for (int k = 0; k < r.matCount; k++) {
+            int have = haveItem(r.mats[k].item, hold);
+            can = can && have >= r.mats[k].count;
+            mats += std::string(k ? "," : "") + "{\"id\":" + num(r.mats[k].item) + ",\"need\":" +
+                    num(r.mats[k].count) + ",\"have\":" + num(have) + ",\"known\":" +
+                    num((app.everHeld >> r.mats[k].item) & 1u) + "}";
+        }
+        j += std::string(u ? "," : "") + "{\"id\":" + num(u) + ",\"lvl\":" + num(lvl) + ",\"max\":" + num(mx) +
+             ",\"cr\":" + num(r.credits) + ",\"can\":" + num(can ? 1 : 0) + ",\"now\":" +
+             num(Trade::effect(u, lvl)) + ",\"next\":" + num(Trade::effect(u, lvl + 1)) + ",\"mats\":[" + mats + "]}";
     }
     j += "],\"goods\":[";
     for (int s = 0; s < Trade::GOODS; s++) {
         j += std::string(s ? "," : "") + "{\"slot\":" + num(s) + ",\"id\":" + num(Trade::goodsItem(p, o, s)) +
              ",\"stock\":" + num(Trade::goodsStock(o, s)) + ",\"p\":" + num(Trade::goodsPrice(p, o, s)) + "}";
     }
-    j += "]}";
+    j += "],\"found\":[";
+    for (int k = 0; k < app.sys.kindCount; k++) {
+        int b = bodyWith(app.sys.kinds[k]);
+        const Planet* bp = b >= 0 ? &app.planets[b] : nullptr;
+        j += std::string(k ? "," : "") + "{\"id\":" + num(app.sys.kinds[k]) + ",\"body\":\"" +
+             (bp ? (bp->discovered ? bp->name : std::string("an uncharted world")) : std::string("")) +
+             "\",\"kind\":\"" + (bp ? bp->kind : std::string("")) + "\"}";
+    }
+    j += "],\"room\":" + num(packRoom() + (hold ? holdRoom() : 0)) + "}";
     EM_ASM({ if (window.showTrade) window.showTrade(UTF8ToString($0)); }, j.c_str());
 }
 
@@ -1993,83 +2177,915 @@ static void closeTrade() {
 }
 
 // A deal done: a few motes in the credits' teal pass between the trader and
-// the player.
-static void tradeSparkle(const Planet& p, const Planet::Outpost& o, int count) {
+// the player. It is also the post a rescue sets you down at, and the game
+// saves.
+static void dealDone(int sparkles) {
+    Planet& p = dominantPlanet();
+    const Planet::Outpost& o = p.outposts[app.tradePost];
     static const float teal[3] = {0.30f, 0.86f, 0.80f};
     Vec2 from = Outposts::traderHead(p, o);
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < sparkles; i++) {
         float ang = fxRand() * 360.0f, sp = 1.0f + fxRand() * 2.4f;
         spawnParticle(from + Vec2(cosd(ang), sind(ang)) * (4.0f * fxRand()), Vec2(cosd(ang) * sp, sind(ang) * sp),
                       0.8f + fxRand() * 0.5f, 1.8f + fxRand() * 1.4f, teal, 1);
     }
+    app.lastPostPlanet = app.dominantIdx;
+    app.lastPostIdx = app.tradePost;
+    saveGame();
+    pushTrade();
 }
 
-// The panel's buttons. Each returns what it did (credits earned / 1 or 0 /
-// how many bought) and refreshes the panel.
+// The panel's buttons. Each returns what it did and refreshes the panel.
 //
 // Sell to the post whose panel is open: `count` of `item` (an inventory id,
 // or Trade::COW for a cow out of the ship's hold); count <= 0 = all of it;
-// item < 0 = everything being carried (the cows stay).
+// item < 0 = everything you have but the carbon. From the pack first, then
+// the hold if the ship is parked close.
 extern "C" EMSCRIPTEN_KEEPALIVE int tradeSell(int item, int count) {
     if (app.tradePost < 0) return 0;
     Planet& p = dominantPlanet();
     if (app.tradePost >= (int)p.outposts.size()) return 0;
     Planet::Outpost& o = p.outposts[app.tradePost];
+    bool hold = holdAtPost(app.tradePost);
     int earned = 0;
     auto sell = [&](int id, int n) {
-        int& have = id == Trade::COW ? app.cargo : app.inventory[id];
+        int have = id == Trade::COW ? (hold ? app.cargo : 0) : haveItem(id, hold);
         if (n <= 0 || n > have) n = have;
         if (n <= 0) return;
-        have -= n;
+        if (id == Trade::COW) app.cargo -= n;
+        else takeItem(id, n, hold);
         earned += n * Trade::sellPrice(p, o, id);
     };
     if (item < 0) {
-        for (int i = 0; i < App::ITEM_COUNT; i++) sell(i, 0);
+        for (int i = 0; i < App::ITEM_COUNT; i++) if (i != Trade::CARBON) sell(i, 0);
     } else if (item == Trade::COW || item < App::ITEM_COUNT) {
         sell(item, count);
     }
     if (earned <= 0) return 0;
     app.inventoryDirty = true;
+    app.flags |= App::F_SOLD;
     addCredits(earned);
-    tradeSparkle(p, o, earned > 200 ? 10 : 6);
-    pushTrade();
+    dealDone(earned > 200 ? 10 : 6);
     return earned;
 }
 
-// Buy the next level of an upgrade (Trade::Upgrade).
+// Build the next level of an upgrade (Trade::Upgrade): its credits and its
+// materials, from the pack first, then the hold if the ship is parked close.
 extern "C" EMSCRIPTEN_KEEPALIVE int tradeBuyUpgrade(int id) {
     if (app.tradePost < 0 || id < 0 || id >= Trade::UPGRADES) return 0;
     int level = app.upgrades[id];
     if (level >= Trade::maxLevel(id)) return 0;
-    int price = Trade::upgradePrice(id, level);
-    if (app.credits < price) return 0;
-    addCredits(-price);
+    bool hold = holdAtPost(app.tradePost);
+    Trade::Recipe r = Trade::recipe(id, level, app.sys);
+    if (app.credits < r.credits) return 0;
+    for (int k = 0; k < r.matCount; k++)
+        if (haveItem(r.mats[k].item, hold) < r.mats[k].count) return 0;
+    for (int k = 0; k < r.matCount; k++) takeItem(r.mats[k].item, r.mats[k].count, hold);
+    addCredits(-r.credits);
     app.upgrades[id] = level + 1;
     applyUpgrades();
+    if (id == Trade::FuelTank && app.state == LANDED) app.lander.fuel = maxFuel();
     EM_ASM({ if (window.notifyUpgrade) window.notifyUpgrade($0, $1, $2); }, id, level + 1,
            Trade::effect(id, level + 1));
-    pushTrade();
+    dealDone(12);
     return 1;
 }
 
-// Buy `count` from a goods slot (as many as the stock and the money allow).
+// Buy `count` from a goods slot (as many as the stock, the money and the
+// room allow): into the pack, and the hold when it is in reach.
 extern "C" EMSCRIPTEN_KEEPALIVE int tradeBuyGoods(int slot, int count) {
     if (app.tradePost < 0 || slot < 0 || slot >= Trade::GOODS) return 0;
     Planet& p = dominantPlanet();
     if (app.tradePost >= (int)p.outposts.size()) return 0;
     Planet::Outpost& o = p.outposts[app.tradePost];
+    bool hold = holdAtPost(app.tradePost);
     int stock = Trade::goodsStock(o, slot), price = Trade::goodsPrice(p, o, slot);
-    if (count > stock) count = stock;
+    int room = packRoom() + (hold ? holdRoom() : 0);
+    count = std::min(std::min(count, stock), room);
     if (price > 0 && count > app.credits / price) count = app.credits / price;
-    if (count <= 0) return 0;
+    if (count <= 0) {
+        if (room <= 0) notice(hold ? "No room in the pack or the hold" : "No room in the pack");
+        return 0;
+    }
     o.stock[slot] -= count;
+    Net::op(5, app.dominantIdx, app.tradePost, slot, o.stock[slot]);
     addCredits(-count * price);
-    addItem(Trade::goodsItem(p, o, slot), count);
-    pushTrade();
+    int item = Trade::goodsItem(p, o, slot);
+    int put = addItem(item, count);
+    if (put < count) addItem(item, count - put, true);
+    dealDone(6);
     return count;
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE void tradeClose() { closeTrade(); }
+
+// The inventory panel's buttons: move `count` (<= 0: all) of an item from
+// the pack (0) or the hold (1) to the other — only at the ship — or drop it
+// (to = -1). Returns how many moved.
+extern "C" EMSCRIPTEN_KEEPALIVE int invMove(int item, int from, int to, int count) {
+    if (item < 0 || item >= App::ITEM_COUNT || from < 0 || from > 1) return 0;
+    int* src = from == 0 ? app.pack : app.hold;
+    if (count <= 0 || count > src[item]) count = src[item];
+    if (to >= 0) {
+        if (to == from || !atShip()) return 0;
+        count = std::min(count, to == 0 ? packRoom() : holdRoom());
+        (to == 0 ? app.pack : app.hold)[item] += std::max(count, 0);
+    }
+    if (count <= 0) return 0;
+    src[item] -= count;
+    app.inventoryDirty = true;
+    if (app.tradePost >= 0) pushTrade();
+    return count;
+}
+
+// ============================================================================
+// Keeping it (decision 8): the game saves itself on landing, on every trade,
+// on boarding, and after anything that costs you something. A save is one
+// flat JSON array of numbers in localStorage ("visitor:save"):
+//   [version, seed, jumps, credits, flags, everHeld, lastPostPlanet,
+//    lastPostIdx, parkPlanet (-1 = drop in fresh), parkAngle * 1000, cows,
+//    upgrades x UPGRADES, pack x ITEMS, hold x ITEMS, planetCount,
+//    then per planet: discovered | visited << 1, postCount,
+//    then per post: stock0, stock1, met]
+// What has been dug is not saved; what has been built is.
+// ============================================================================
+static constexpr int SAVE_VERSION = 1;
+
+// Where a rescue sets you down: by the last post you traded at, or the home
+// world's first post if you never have.
+static void rescueSpot(int& planet, float& angle) {
+    planet = app.lastPostPlanet;
+    int post = app.lastPostIdx;
+    if (planet < 0 || planet >= (int)app.planets.size() || post < 0 ||
+        post >= (int)app.planets[planet].outposts.size()) {
+        planet = app.homeIdx;
+        post = app.planets[planet].outposts.empty() ? -1 : 0;
+    }
+    const Planet& p = app.planets[planet];
+    angle = post >= 0 ? p.outposts[post].angle - 330.0f / (p.baseRadius * DEG2RAD) : -90.0f;
+}
+
+static std::string saveText(unsigned int seed, bool arriving) {
+    std::vector<long long> v;
+    v.push_back(SAVE_VERSION);
+    v.push_back(seed);
+    v.push_back(app.jumps);
+    v.push_back(app.credits);
+    v.push_back(app.flags);
+    v.push_back(app.everHeld);
+    int park = -1;
+    float angle = 0.0f;
+    if (!arriving) {
+        if (app.state == LANDED) {
+            park = app.stuckIdx;
+            const Planet& p = app.planets[park];
+            angle = atan2d(app.lander.pos.y - p.center.y, app.lander.pos.x - p.center.x);
+        } else {
+            rescueSpot(park, angle);
+        }
+    }
+    v.push_back(arriving ? -1 : app.lastPostPlanet);
+    v.push_back(arriving ? -1 : app.lastPostIdx);
+    v.push_back(park);
+    v.push_back((long long)lroundf(angle * 1000.0f));
+    v.push_back(app.cargo);
+    for (int i = 0; i < Trade::UPGRADES; i++) v.push_back(app.upgrades[i]);
+    for (int i = 0; i < App::ITEM_COUNT; i++) v.push_back(app.pack[i]);
+    for (int i = 0; i < App::ITEM_COUNT; i++) v.push_back(app.hold[i]);
+    if (arriving) {
+        v.push_back(0);
+    } else {
+        v.push_back((long long)app.planets.size());
+        for (const Planet& p : app.planets) {
+            v.push_back((p.discovered ? 1 : 0) | (p.visited ? 2 : 0));
+            v.push_back((long long)p.outposts.size());
+            for (const Planet::Outpost& o : p.outposts) {
+                v.push_back(o.stock[0]);
+                v.push_back(o.stock[1]);
+                v.push_back(o.met ? 1 : 0);
+            }
+        }
+    }
+    std::string s = "[";
+    for (size_t i = 0; i < v.size(); i++) s += (i ? "," : "") + std::to_string(v[i]);
+    return s + "]";
+}
+
+static void saveGame() {
+    if (app.titleOpen || app.jumpTime >= 0.0f) return;
+    std::string s = saveText(app.system.seed, false);
+    EM_ASM({ try { localStorage.setItem('visitor:save', UTF8ToString($0)); } catch (e) {} }, s.c_str());
+}
+
+// Read the stored save into window.SAVE_ARR; true when there is one for
+// this system.
+static bool readSave() {
+    return EM_ASM_INT({
+        try {
+            var t = localStorage.getItem('visitor:save');
+            if (!t) return 0;
+            var a = JSON.parse(t);
+            if (!Array.isArray(a) || a[0] !== $1) return 0;
+            window.SAVE_ARR = a;
+            return (a[1] >>> 0) === ($0 >>> 0) ? 1 : 0;
+        } catch (e) { return 0; }
+    }, app.system.seed, SAVE_VERSION) != 0;
+}
+
+// Put the ship down, parked, on a world at an angle — on the ground, or
+// afloat — with a full tank, the player aboard.
+static void parkShip(int idx, float angle) {
+    if (idx < 0 || idx >= (int)app.planets.size() || app.planets[idx].isSun) { idx = app.homeIdx; angle = -90.0f; }
+    Planet& p = app.planets[idx];
+    Vec2 out(cosd(angle), sind(angle));
+    closeTrade();
+    app.spacewalking = false;
+    app.astronaut.active = false;
+    app.lander.reset();
+    app.lander.fuel = maxFuel();
+    app.lander.pos = p.center + out * (p.visibleRadius(angle) + 6.0f);
+    app.dominantIdx = app.stuckIdx = idx;
+    updateActiveField();                      // the surface below comes from the live grid
+    app.lander.pos = p.center + out * (p.visibleRadius(angle) + 6.0f);
+    app.lander.rotation = app.lander.targetRotation = angle + 90.0f;
+    app.lander.vel = p.orbitVel;
+    app.lander.land(p);
+    app.state = LANDED;
+    app.warp = 1;
+    app.mapMode = false;
+    app.camAlt = 0.0f;
+    app.particles.clear();
+    app.suit = 1.0f;
+    app.view.focusX = app.lander.pos.x;
+    app.view.focusY = app.lander.pos.y;
+    app.view.scale = gDebug.cameraGroundZoom;
+    Vec2 g = app.lander.gravityAt(p, app.lander.pos);
+    app.view.rotation = 90.0f - atan2d(g.y, g.x);
+}
+
+static void applySave() {
+    auto at = [](int i) {
+        return (long long)EM_ASM_DOUBLE({ var a = window.SAVE_ARR; return a && $0 < a.length ? (+a[$0] || 0) : 0; }, i);
+    };
+    int i = 2;
+    app.jumps = (int)at(i++);
+    app.credits = (int)at(i++);
+    app.flags = (unsigned int)at(i++);
+    app.everHeld = (unsigned int)at(i++);
+    app.lastPostPlanet = (int)at(i++);
+    app.lastPostIdx = (int)at(i++);
+    int park = (int)at(i++);
+    float angle = at(i++) / 1000.0f;
+    app.cargo = (int)at(i++);
+    for (int k = 0; k < Trade::UPGRADES; k++) app.upgrades[k] = std::clamp((int)at(i++), 0, Trade::maxLevel(k));
+    for (int k = 0; k < App::ITEM_COUNT; k++) app.pack[k] = std::max(0, (int)at(i++));
+    for (int k = 0; k < App::ITEM_COUNT; k++) app.hold[k] = std::max(0, (int)at(i++));
+    int n = (int)at(i++);
+    if (n == (int)app.planets.size()) {
+        for (Planet& p : app.planets) {
+            int bits = (int)at(i++);
+            p.discovered = p.isSun || (bits & 1);
+            p.visited = (bits & 2) != 0;
+            int posts = (int)at(i++);
+            for (int k = 0; k < posts; k++) {
+                int s0 = (int)at(i++), s1 = (int)at(i++), met = (int)at(i++);
+                if (k < (int)p.outposts.size()) {
+                    p.outposts[k].stock[0] = s0;
+                    p.outposts[k].stock[1] = s1;
+                    p.outposts[k].met = met != 0;
+                }
+            }
+        }
+    }
+    app.cargo = std::clamp(app.cargo, 0, maxCargo());
+    app.inventoryDirty = true;
+    app.creditsDirty = true;
+    applyUpgrades();
+    if (park >= 0) parkShip(park, angle);
+    else startRun();                          // just arrived in this system
+}
+
+// The title screen's buttons: carry on from the save, or start over.
+extern "C" EMSCRIPTEN_KEEPALIVE void gameStart(int carryOn) {
+    if (carryOn && app.hasSave) {
+        applySave();
+    } else {
+        newGame();
+        EM_ASM({ try { localStorage.removeItem('visitor:save'); } catch (e) {} });
+        app.hasSave = false;
+    }
+    app.titleOpen = false;
+}
+
+// ============================================================================
+// What failing costs (decision 7): what you carry, never what you have built.
+// ============================================================================
+static void onLanded() {
+    Planet& p = dominantPlanet();
+    p.discovered = true;
+    app.flags |= App::F_LANDED;
+    if (isMoon(app.dominantIdx)) app.flags |= App::F_MOON;
+    else if (app.dominantIdx != app.homeIdx) app.flags |= App::F_PLANET;
+    if (!p.visited) {
+        p.visited = true;
+        if (app.dominantIdx != app.homeIdx) {
+            addCredits(150);
+            showEvent("First landing: " + p.name, p.kind + "  \xc2\xb7  the locals pay 150 for your survey");
+        }
+    }
+    saveGame();
+}
+
+// Lose the pack, the hold and the cows in it.
+static void loseCargo() {
+    for (int i = 0; i < App::ITEM_COUNT; i++) app.pack[i] = app.hold[i] = 0;
+    app.cargo = 0;
+    app.inventoryDirty = true;
+}
+
+static void onCrashed() {
+    closeTrade();
+    app.warp = 1;
+    loseCargo();
+    saveGame();          // saved where the rescue will set you down: no reloading out of it
+}
+
+// R after a crash, or adrift with an empty tank: set down by the last post
+// you traded at.
+static void rescue() {
+    if (app.state != CRASHED) { loseCargo(); app.lander.crash(); }
+    int planet;
+    float angle;
+    rescueSpot(planet, angle);
+    parkShip(planet, angle);
+    const Planet& p = app.planets[planet];
+    showEvent("Rescued", "The locals set you down on " + p.name + ". Your cargo is gone; your equipment is not.");
+    saveGame();
+}
+
+// The suit ran out: you black out and wake in the ship without your pack.
+static void blackout() {
+    for (int i = 0; i < App::ITEM_COUNT; i++) app.pack[i] = 0;
+    app.inventoryDirty = true;
+    closeTrade();
+    app.spacewalking = false;
+    app.astronaut.active = false;
+    app.suit = 1.0f;
+    app.suitWarned = 0;
+    showEvent("Your suit gave out", "You woke up in the ship. Everything you were carrying is gone.");
+    saveGame();
+}
+
+// ============================================================================
+// The suit meter (decision 5). One bar; it drains on worlds that are hard
+// to be outside on, at a rate set by the kind of world, the sun and shelter.
+// ============================================================================
+enum Hazard { H_NONE = 0, H_VACUUM, H_COLD, H_HEAT, H_TOXIC };
+
+// How much of the bar a second outside costs at a point, for a stock suit
+// (Seals divide it), and what the trouble is.
+static float hazardRate(const Planet& p, Vec2 at, bool sheltered, int* hazard) {
+    Vec2 up = (at - p.center).normalize();
+    Vec2 toSun = (sunWorldPos() - p.center).normalize();
+    float sun = smoothstepf(-0.10f, 0.15f, up.dot(toSun));
+    float shelter = sheltered ? 0.5f : 1.0f;    // underground: heat and cold at half
+    float rate = 0.0f;
+    int h = H_NONE;
+    switch (p.archetype) {
+        case 6: rate = 1.0f / 180.0f; h = H_VACUUM; break;                               // barren: no air
+        case 2: rate = (1.0f / 90.0f + (1.0f / 240.0f - 1.0f / 90.0f) * sun) * shelter;   // ice: worst in the dark
+                h = H_COLD; break;
+        case 1: rate = sun / 90.0f * shelter; h = rate > 1e-4f ? H_HEAT : H_NONE; break;  // desert: only in the sun
+        case 5: rate = 1.0f / 90.0f; h = H_TOXIC; break;                                 // exotic: the air itself
+        case 3: rate = 1.0f / 60.0f * shelter; h = H_HEAT; break;                        // volcanic: everywhere
+        default: break;                                                                  // temperate, jungle
+    }
+    if (hazard) *hazard = h;
+    return rate;
+}
+static float suitRate(int* hazard) {
+    if (!app.spacewalking) { if (hazard) *hazard = H_NONE; return 0.0f; }
+    float r = hazardRate(dominantPlanet(), app.astronaut.pos, app.inHole > 0.5f, hazard);
+    return r / Trade::suitScale(app.upgrades[Trade::Seals]);
+}
+
+// F: breathe carbon — five of it tops the suit up by a quarter.
+static void useCarbon() {
+    if (!app.spacewalking) return;
+    if (app.suit > 0.97f) { notice("The suit is full"); return; }
+    if (app.pack[Trade::CARBON] < 5) { notice("Needs 5 carbon (cut plants with the mining laser)"); return; }
+    app.pack[Trade::CARBON] -= 5;
+    app.inventoryDirty = true;
+    app.suit = std::min(1.0f, app.suit + 0.25f);
+    notice("Suit recharged with carbon");
+}
+
+static void updateSuit(float dt) {
+    // Full again in a couple of seconds aboard the ship or at a trader's stall.
+    bool refill = !app.spacewalking || app.nearPost >= 0;
+    if (refill) {
+        app.suit = std::min(1.0f, app.suit + dt / 2.0f);
+    } else {
+        app.suit -= suitRate(nullptr) * dt;
+    }
+    if (app.suit > 0.5f) app.suitWarned = 0;
+    if (!app.spacewalking) return;
+    if (app.suit < 0.25f && app.suitWarned < 1) {
+        app.suitWarned = 1;
+        showEvent("Suit at 25%", "Head back to the ship or a trader, or press F to breathe carbon.");
+    } else if (app.suit < 0.10f && app.suitWarned < 2) {
+        app.suitWarned = 2;
+        showEvent("Suit at 10%", "When it runs out you lose everything you are carrying.");
+    }
+    if (app.suit <= 0.0f) blackout();
+}
+
+// ============================================================================
+// The scanner (C): a pulse that shows the ore in the rock round you, through
+// the ground, for a few seconds.
+// ============================================================================
+static constexpr float SCAN_RANGE = 650.0f, SCAN_SHOW = 8.0f, SCAN_RECHARGE = 10.0f;
+
+static void scanPulse() {
+    if (!app.spacewalking) return;
+    if (app.upgrades[Trade::Scanner] < 1) { notice("No scanner: a trader can build one (moon crystal, glowcap)"); return; }
+    if (app.scanCooldown > 0.0f) { notice("The scanner is recharging"); return; }
+    Planet& p = dominantPlanet();
+    if (app.dominantIdx != app.activeFieldIdx) return;
+    static Deposits::ScanHit hits[96];
+    int n = Deposits::scan(p, app.astronaut.pos, SCAN_RANGE, hits, 96);
+    app.scanMarks.clear();
+    int gold = 0;
+    for (int k = 0; k < n; k++) {
+        app.scanMarks.push_back(App::ScanMark{hits[k].drawn - p.center, (int)hits[k].kind, hits[k].size});
+        gold += hits[k].kind == Planet::Ore::Gold;
+    }
+    app.scanFrom = app.astronaut.pos - p.center;
+    app.scanTime = SCAN_SHOW;
+    app.scanCooldown = SCAN_RECHARGE;
+    notice(n == 0 ? "Scan: no ore in range"
+                  : "Scan: " + std::to_string(n) + " clumps of ore" + (gold ? ", " + std::to_string(gold) + " of them gold" : ""));
+}
+
+// Inside an active world-space batch.
+static void drawScan() {
+    if (app.scanTime <= 0.0f || app.scanMarks.empty() && app.scanTime < SCAN_SHOW - 1.2f) return;
+    const Planet& p = dominantPlanet();
+    Renderer2D& r = app.renderer;
+    float age = SCAN_SHOW - app.scanTime;
+    const float SWEEP = 1.2f;
+    float ring = SCAN_RANGE * std::min(1.0f, age / SWEEP);
+    Vec2 from = p.center + app.scanFrom;
+    float px = 1.0f / std::max(app.view.scale, 1e-4f);     // one pixel, in world units
+    if (age < SWEEP) {
+        float a = 0.45f * (1.0f - age / SWEEP);
+        r.fill(0.45f, 1.0f, 0.88f, a);
+        const int N = 72;
+        for (int i = 0; i < N; i++) {
+            float a0 = i * 360.0f / N, a1 = (i + 1) * 360.0f / N;
+            r.line(from.x + cosd(a0) * ring, from.y + sind(a0) * ring, from.x + cosd(a1) * ring, from.y + sind(a1) * ring,
+                   2.0f * px);
+        }
+    }
+    float fade = std::min(1.0f, app.scanTime / 1.5f);
+    for (const App::ScanMark& m : app.scanMarks) {
+        Vec2 c = p.center + m.local;
+        if ((m.local - app.scanFrom).length() > ring) continue;      // the pulse has not reached it yet
+        float col[3];
+        Deposits::color(p, (Planet::Ore::Kind)m.kind, col);
+        float h = std::max(m.size * 0.9f, 6.0f * px);
+        float blink = 0.75f + 0.25f * sinf(age * 6.0f + m.local.x * 0.05f);
+        Vec2 up = (c - p.center).normalize(), side(-up.y, up.x);
+        Vec2 t = c + up * h, b = c - up * h, l = c - side * (h * 0.7f), rr = c + side * (h * 0.7f);
+        r.fill(col[0], col[1], col[2], 0.85f * fade * blink);
+        r.triangle(t.x, t.y, l.x, l.y, rr.x, rr.y);
+        r.triangle(b.x, b.y, l.x, l.y, rr.x, rr.y);
+        r.fill(1.0f, 1.0f, 1.0f, 0.5f * fade * blink);
+        Vec2 tt = c + up * (h * 0.55f), ll = c - side * (h * 0.3f), r2 = c + side * (h * 0.3f);
+        r.triangle(tt.x, tt.y, ll.x, ll.y, r2.x, r2.y);
+    }
+}
+
+// ============================================================================
+// Time warp (T): in open space, clear of air and well above the ground, the
+// simulation runs 4 or 16 steps a frame. Steering, air or the ground stop it.
+// ============================================================================
+static bool warpAllowed() {
+    if (app.online) return false;      // one clock for everyone in a shared system
+    if (app.state != PLAYING || !app.lander.active || app.spacewalking || app.jumpTime >= 0.0f) return false;
+    const Planet& p = dominantPlanet();
+    if (p.atmosphericDensity(app.lander.pos.x, app.lander.pos.y) > 0.0f) return false;
+    return app.lander.altitude > std::max(3000.0f, p.baseRadius * 0.15f);
+}
+
+// ============================================================================
+// The star drive and the jump (decision 1).
+// ============================================================================
+static bool clearOfWorlds() {
+    for (const Planet& p : app.planets) {
+        if (p.isSun) continue;
+        if (dist(app.lander.pos.x, app.lander.pos.y, p.center.x, p.center.y) < p.baseRadius * 3.0f + 4000.0f) return false;
+    }
+    return true;
+}
+
+static void tryJump() {
+    if (app.upgrades[Trade::StarDrive] < 1) { notice("No star drive: a trader can build one from every crystal in the system"); return; }
+    if (app.state != PLAYING || !app.lander.active) { notice("Take off first"); return; }
+    if (!clearOfWorlds()) { notice("Fly clear of every world first"); return; }
+    app.jumpTime = 0.0f;
+    app.warp = 1;
+    closeTrade();
+    EM_ASM({ if (window.startJump) window.startJump(); });
+}
+
+// The drive has spooled up: the next system. Everything you own comes with
+// you except the drive itself, which burns out; the page reloads into the new
+// seed and drops you in over its home world.
+static void finishJump() {
+    unsigned int h = app.system.seed * 2654435761u + 0x9e3779b9u * (unsigned int)(app.jumps + 1);
+    h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+    unsigned int next = 1 + h % 999998u;
+    app.jumps++;
+    app.flags |= App::F_JUMPED;
+    app.upgrades[Trade::StarDrive] = 0;
+    app.lastPostPlanet = app.lastPostIdx = -1;
+    std::string s = saveText(next, true);
+    EM_ASM({
+        try {
+            localStorage.setItem('visitor:save', UTF8ToString($0));
+            localStorage.setItem('rocket:seed', String($1));
+            sessionStorage.setItem('visitor:continue', '1');
+        } catch (e) {}
+        var url = new URL(window.location.href);
+        url.searchParams.delete('seed');
+        window.location.href = url.toString();
+    }, s.c_str(), next);
+    app.jumpTime = 1e9f;   // nothing more happens here
+}
+
+// ============================================================================
+// The objective line (decision 14): the next rung of the ladder.
+// ============================================================================
+static std::string objective() {
+    auto name = [](int id) {
+        static const char* names[App::ITEM_COUNT] = {"carbon", "ferrite", "lumenite", "sunstone", "cryolite",
+                                                     "emberglass", "verdite", "xenolith", "moonshard", "calcite",
+                                                     "glowcap", "gold"};
+        return std::string(id >= 0 && id < App::ITEM_COUNT ? names[id] : "?");
+    };
+    int moon = homeMoon();
+    std::string moonName = moon >= 0 ? app.planets[moon].name : std::string("the moon");
+    if (!(app.flags & App::F_LANDED)) return "Land the ship: slow, upright, on level ground";
+    if (!(app.flags & App::F_POST)) return "Step out (E) and walk to the trading post";
+    if (!(app.flags & App::F_SOLD)) return "Sell something at the trading post";
+    if (!hasCutter()) return "Buy the terrain cutter (10 ferrite: mine rocks with the laser)";
+    if (!((app.everHeld >> Trade::CALCITE) & 1u)) return "Bring back calcite from a cave (under a mesa)";
+    if (app.upgrades[Trade::Seals] < 1) return "Get Seals I at a trader, for worlds without air";
+    if (!(app.flags & App::F_MOON)) return "Fly to " + moonName + " and land on it";
+    if (!((app.everHeld >> app.sys.moon) & 1u)) return "Mine " + name(app.sys.moon) + " on " + moonName;
+    if (app.upgrades[Trade::Laser] < 1) return "Build Laser II from " + name(app.sys.moon) + ": it mines gold";
+    if (!((app.everHeld >> Trade::GOLD) & 1u)) return "Mine gold, deep underground";
+    if (!(app.flags & App::F_PLANET)) return "Land on another planet (a bigger tank helps)";
+    if (app.upgrades[Trade::StarDrive] < 1) {
+        int got = 0;
+        for (int k = 0; k < app.sys.kindCount; k++) got += haveItem(app.sys.kinds[k], true) >= 10;
+        if (got < app.sys.kindCount)
+            return "Gather 10 of every kind of crystal (" + std::to_string(got) + " of " +
+                   std::to_string(app.sys.kindCount) + ")";
+        return "Build the star drive at a trader";
+    }
+    return "Fly clear of every world and press J to jump";
+}
+
+// The herd grows back, one cow at a time, out of sight.
+static void updateHerd(float dt) {
+    app.herdTimer += dt;
+    if (app.herdTimer < 40.0f) return;
+    app.herdTimer = 0.0f;
+    const Planet& home = homePlanet();
+    Vec2 pp = playerPos();
+    Vec2 herd = home.center + Vec2(cosd(-90.0f), sind(-90.0f)) * home.surfaceRadius(-90.0f);
+    if (app.dominantIdx == app.homeIdx && dist(pp.x, pp.y, herd.x, herd.y) < 2500.0f) return;
+    for (Cow& cow : app.cows) {
+        if (cow.state != Cow::State::Stowed) continue;
+        float angle = -90.0f + (fxRand() - 0.5f);
+        cow.spawn(home, angle, home.surfaceRadius(angle) + 7.0f);
+        return;
+    }
+}
+
+// ============================================================================
+// Multiplayer (server/server.mjs; the page's window.net does the WebSocket).
+//
+// The seed builds the same system on every client, so only two things
+// travel: where each player is (to the players at the same world, ~15 times
+// a second), and every change to the world, in the order the server got it
+// (so a late joiner replays the log and sees everyone's tunnels). The orbits
+// run from the server's clock (Planet::advanceTo), so everyone has the same
+// sky. Each player's progress stays their own; nothing collides.
+//
+// Positions on the wire are relative to the world the player is at: worlds
+// move tens of units a frame along their orbits.
+// ============================================================================
+namespace Net {
+
+// A player's state, as floats (see sendState for the layout).
+constexpr int STATE = 26;
+enum Op { DIG = 1, HARVEST = 2, CAVE = 3, ORE_GONE = 4, STOCK = 5 };
+
+struct Peer {
+    int id = -1;
+    int planet = -1;
+    float d[STATE] = {0};
+    double seen = 0;          // when the last state came (seconds)
+    Vec2 ship, astro;         // shown, planet-local (eased toward the state)
+    bool placed = false;
+    Lander lander;
+    Astronaut walker;
+};
+std::vector<Peer> peers;
+float incoming[STATE];
+float sendTimer = 0.0f;
+struct PendingCave { int planet, idx; float age; double at; };
+std::vector<PendingCave> pendingCave;     // cave formations mined before that world's caves were built here
+double nowSec() { return emscripten_get_now() / 1000.0; }
+
+void op(int kind, double a, double b, double c, double d, double e) {
+    if (!app.online) return;
+    EM_ASM({ if (window.net) window.net.op($0, $1, $2, $3, $4, $5); }, kind, a, b, c, d, e);
+}
+
+int planetIndex(const Planet& p) { return (int)(&p - &app.planets[0]); }
+
+// Every bite anyone here digs (Planet::digHook) goes to the others.
+void digHook(const Planet& p, Vec2 local, float radius) {
+    op(DIG, planetIndex(p), roundf(local.x * 100.0f) / 100.0f, roundf(local.y * 100.0f) / 100.0f, radius);
+}
+
+// 10 times a second: where I am, as the layout below. (Peers ease and
+// extrapolate between states; the hosted server's free allowance counts
+// every message, so this is the main cost of playing online.)
+void sendState(float dt) {
+    if (!app.online || app.titleOpen) return;
+    sendTimer -= dt;
+    if (sendTimer > 0.0f) return;
+    sendTimer = 1.0f / 10.0f;
+    static float s[STATE];
+    const Planet& p = dominantPlanet();
+    Vec2 sl = app.lander.pos - p.center, sv = app.lander.vel - p.orbitVel;
+    const Astronaut& a = app.astronaut;
+    Vec2 al = a.pos - p.center, av = a.vel, aim = a.aimWorld - p.center, le = app.laserEnd - p.center;
+    float v[STATE] = {
+        (float)(app.state == PLAYING ? 0 : (app.state == LANDED ? 1 : 2)),      // 0 ship: flying / landed / wreck
+        sl.x, sl.y, sv.x, sv.y, app.lander.rotation, app.lander.thrustLevel,     // 1-6
+        (float)(app.spacewalking ? 1 : 0), al.x, al.y, av.x, av.y,             // 7-11 on foot
+        (float)a.facing, a.walkAnim, a.stride, a.air, a.aim, aim.x, aim.y,      // 12-18 the pose
+        (float)(a.jetting ? 1 : 0), a.swimPose, a.swimAnim, a.swimGo,          // 19-22
+        (float)(app.laserOn ? (app.laserCutting ? 2 : 1) : 0), le.x, le.y,     // 23-25 the hand tool
+    };
+    // What the others do not use is sent as 0, so a player standing still
+    // sends the same state (and the page can skip it): the parked ship's
+    // velocity, the astronaut while aboard (they snap to the new place when
+    // they step out: over 200 away), the tool's end while it is off.
+    if (v[0] >= 1.0f) v[3] = v[4] = 0.0f;
+    if (v[7] < 0.5f) for (int i = 8; i <= 22; i++) v[i] = 0.0f;
+    if (v[23] < 0.5f) v[24] = v[25] = 0.0f;
+    // ...and the counters that tick on while they stand still: the run cycle
+    // (only drawn with some stride), the swim cycle (only in the water), the
+    // aim point (only when aiming).
+    if (v[14] <= 0.001f) v[13] = 0.0f;
+    if (v[20] <= 0.001f) v[21] = 0.0f;
+    if (v[16] <= 0.001f) v[17] = v[18] = 0.0f;
+    for (int i = 0; i < STATE; i++) s[i] = v[i];
+    EM_ASM({
+        if (!window.net) return;
+        var a = new Array($2);
+        for (var i = 0; i < $2; i++) a[i] = HEAPF32[($1 >> 2) + i];
+        window.net.sendState($0, a);
+    }, app.dominantIdx, s, STATE);
+}
+
+// Move the others along: ease what is shown toward where they said they
+// were, carried on by their velocity since.
+void update(float timeScale) {
+    double now = nowSec();
+    for (size_t i = 0; i < peers.size();) {
+        if (now - peers[i].seen > 5.0) { peers.erase(peers.begin() + i); continue; }
+        Peer& q = peers[i++];
+        float age = (float)(now - q.seen) * 60.0f;
+        if (age > 30.0f) age = 30.0f;
+        Vec2 ship(q.d[1] + q.d[3] * age, q.d[2] + q.d[4] * age);
+        if (q.d[0] >= 1.0f) ship = Vec2(q.d[1], q.d[2]);              // parked or wrecked: it stays put
+        Vec2 astro(q.d[8] + q.d[10] * age, q.d[9] + q.d[11] * age);
+        float k = std::min(1.0f, 0.3f * std::max(timeScale, 0.1f));
+        if (!q.placed || (q.ship - ship).length() > 400.0f) q.ship = ship; else q.ship += (ship - q.ship) * k;
+        if (!q.placed || (q.astro - astro).length() > 200.0f) q.astro = astro; else q.astro += (astro - q.astro) * k;
+        q.placed = true;
+        q.lander.anim += timeScale;
+        q.walker.idleAnim += timeScale * 0.08f;
+    }
+}
+
+// The others at the world you are at, inside an active world-space batch.
+void draw(Renderer2D& r) {
+    const Planet& p = dominantPlanet();
+    for (Peer& q : peers) {
+        if (q.planet != app.dominantIdx || !q.placed) continue;
+        Lander& l = q.lander;
+        l.pos = p.center + q.ship;
+        l.rotation = q.d[5];
+        l.thrusting = q.d[6];
+        l.thrustLevel = q.d[6];
+        l.active = q.d[0] < 0.5f;
+        l.crashed = q.d[0] > 1.5f;
+        l.fuel = 1.0f;
+        l.bob = Vec2(0, 0);
+        l.draw(r);
+        if (q.d[7] < 0.5f) continue;
+        Astronaut& a = q.walker;
+        a.active = true;
+        a.pos = p.center + q.astro;
+        a.facing = q.d[12] < 0.0f ? -1 : 1;
+        a.walkAnim = q.d[13];
+        a.stride = q.d[14];
+        a.air = q.d[15];
+        a.aim = q.d[16];
+        a.aimWorld = p.center + Vec2(q.d[17], q.d[18]);
+        a.jetting = q.d[19] > 0.5f;
+        a.swimPose = q.d[20];
+        a.swimAnim = q.d[21];
+        a.swimGo = q.d[22];
+        a.draw(r, p);
+        if (q.d[23] > 0.5f) {
+            // Their hand tool: a thin beam in its color.
+            bool cutter = q.d[23] > 1.5f;
+            Vec2 end = p.center + Vec2(q.d[24], q.d[25]);
+            float px = 1.0f / std::max(app.view.scale, 1e-4f);
+            r.setBlend(Renderer2D::Blend::Additive);
+            if (cutter) r.fill(0.45f, 1.0f, 0.88f, 0.75f); else r.fill(1.0f, 0.62f, 0.30f, 0.75f);
+            r.line(a.muzzleWorld.x, a.muzzleWorld.y, end.x, end.y, 2.0f * px);
+            r.circle(end.x, end.y, 3.0f * px, 10);
+            r.setBlend(Renderer2D::Blend::Normal);
+        }
+    }
+}
+
+// Name tags over the others, for the page to place: "id,x,y;" in canvas pixels.
+void pushLabels() {
+    static std::string last;
+    std::string s;
+    if (app.online) {
+        const Planet& p = dominantPlanet();
+        Mat3 vm = app.view.matrix(app.width, app.height);
+        for (const Peer& q : peers) {
+            if (q.planet != app.dominantIdx || !q.placed) continue;
+            Vec2 at = q.d[7] > 0.5f ? p.center + q.astro : p.center + q.ship;
+            Vec2 up = (at - p.center).normalize();
+            Vec2 clip = vm.transform(at + up * (q.d[7] > 0.5f ? 34.0f : 40.0f));
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%d,%.0f,%.0f;", q.id, (clip.x * 0.5f + 0.5f) * app.width,
+                     (1.0f - (clip.y * 0.5f + 0.5f)) * app.height);
+            s += buf;
+        }
+    }
+    if (s == last) return;
+    last = s;
+    EM_ASM({ if (window.setPeerLabels) window.setPeerLabels(UTF8ToString($0)); }, s.c_str());
+}
+
+void mineCave(Planet& p, int idx, float age) {
+    Planet::CaveProp& q = p.caveProps[idx];
+    CaveField::mine(q);
+    if (q.goneFor < 1.0e29f) q.goneFor = std::max(0.0f, q.goneFor - age);
+}
+
+// Cave formations mined elsewhere, waiting for their world's caves to be
+// built here (that happens when you first come near it).
+void applyPending() {
+    for (size_t i = 0; i < pendingCave.size();) {
+        PendingCave& c = pendingCave[i];
+        Planet& p = app.planets[c.planet];
+        if (c.idx < (int)p.caveProps.size()) {
+            mineCave(p, c.idx, c.age + (float)(nowSec() - c.at));
+            pendingCave.erase(pendingCave.begin() + i);
+        } else {
+            i++;
+        }
+    }
+}
+
+}  // namespace Net
+
+// ---- What the page calls (window.net) ----------------------------------------
+
+// Joined a room: the clock (ms since the room opened) and my id. Called before
+// the log is replayed and before the game starts.
+extern "C" EMSCRIPTEN_KEEPALIVE void netWelcome(int id, double clockMs) {
+    app.online = true;
+    app.netId = id;
+    app.warp = 1;
+    app.worldFrames = clockMs * 0.06;
+    for (int k = 0; k < 2; k++)
+        for (Planet& p : app.planets) p.advanceTo(app.planets, app.worldFrames);
+    Net::peers.clear();
+}
+
+// Lost the server: carry on alone, the world as it is.
+extern "C" EMSCRIPTEN_KEEPALIVE void netLost() {
+    app.online = false;
+    Net::peers.clear();
+    Net::pushLabels();
+}
+
+// Another player's state, a value at a time, then committed.
+extern "C" EMSCRIPTEN_KEEPALIVE void netPeerSet(int i, float v) {
+    if (i >= 0 && i < Net::STATE) Net::incoming[i] = v;
+}
+extern "C" EMSCRIPTEN_KEEPALIVE void netPeerCommit(int id, int planet) {
+    if (id == app.netId || planet < 0 || planet >= (int)app.planets.size()) return;
+    Net::Peer* q = nullptr;
+    for (Net::Peer& p : Net::peers) if (p.id == id) q = &p;
+    if (!q) {
+        Net::peers.push_back(Net::Peer());
+        q = &Net::peers.back();
+        q->id = id;
+        q->lander.reset();
+        q->walker.spawn(Vec2(0, 0));
+    }
+    if (q->planet != planet) q->placed = false;
+    q->planet = planet;
+    for (int i = 0; i < Net::STATE; i++) q->d[i] = Net::incoming[i];
+    q->seen = Net::nowSec();
+}
+extern "C" EMSCRIPTEN_KEEPALIVE void netBye(int id) {
+    for (size_t i = 0; i < Net::peers.size(); i++)
+        if (Net::peers[i].id == id) { Net::peers.erase(Net::peers.begin() + i); break; }
+}
+
+// A change to the world from someone else (or from the log, on joining):
+// `age` is how long ago it happened, in seconds.
+extern "C" EMSCRIPTEN_KEEPALIVE void netOp(int kind, int planet, double a, double b, double c, double d, float age) {
+    if (planet < 0 || planet >= (int)app.planets.size() || app.planets[planet].isSun) return;
+    Planet& p = app.planets[planet];
+    bool active = planet == app.activeFieldIdx;
+    switch (kind) {
+    case Net::DIG: {
+        Vec2 local((float)a, (float)b), world = p.center + local;
+        float radius = (float)c;
+        Planet::digQuiet = true;
+        CarveMap::Rect rc = p.dig(world, radius);
+        Planet::digQuiet = false;
+        if (active && !rc.empty()) {
+            uploadCarveRegion(rc);
+            Deposits::revealNear(p, world, radius);
+        }
+        // Whatever grew on ground that is now gone goes with it.
+        NearField::Frame f;
+        f.viewAngle = atan2d(local.y, local.x);
+        f.halfSpanDeg = (radius + 120.0f) / (p.baseRadius * DEG2RAD);
+        NearField::uproot(p, f, world, radius + 4.0f);
+        break;
+    }
+    case Net::HARVEST: {
+        int i = (int)a;
+        if (i < 0 || i >= (int)p.harvest.size()) break;
+        Planet::Harvestable& h = p.harvest[i];
+        NearField::harvest(h);
+        h.regrowIn -= age;
+        if (h.regrowIn < 0.0f) {
+            h.grow = std::min(1.0f, -h.regrowIn / 5.0f);
+            h.regrowIn = 0.0f;
+        }
+        break;
+    }
+    case Net::CAVE: {
+        int i = (int)a;
+        if (i < 0) break;
+        if (i < (int)p.caveProps.size()) Net::mineCave(p, i, age);
+        else Net::pendingCave.push_back({planet, i, age, Net::nowSec()});
+        break;
+    }
+    case Net::ORE_GONE: {
+        unsigned long long id = (unsigned long long)a;
+        auto it = p.oreSeen.find(id);
+        if (it == p.oreSeen.end()) p.oreSeen[id] = -1;          // never shows here
+        else if (it->second >= 0) {
+            Planet::Ore& o = p.ores[it->second];
+            o.mined = true;
+            o.hp = 0.0f;
+        }
+        break;
+    }
+    case Net::STOCK: {
+        int post = (int)a, slot = (int)b;
+        if (post >= 0 && post < (int)p.outposts.size() && slot >= 0 && slot < Trade::GOODS)
+            p.outposts[post].stock[slot] = (int)c;
+        if (app.tradePost == post && planet == app.dominantIdx) pushTrade();
+        break;
+    }
+    }
+}
 
 // Ore just uncovered (p.ores from `before` on): a glint of sparks in its
 // color, and a line in the pickup feed.
@@ -2171,6 +3187,7 @@ static void burnOre(Planet& p, int idx, float dt, Vec2 tool) {
     b.heat = 1.0f;
     b.radius = (o.size + Deposits::POCKET) * 1.3f;
     EM_ASM({ if (window.notifyLost) window.notifyLost($0); }, resourceItem(p, Deposits::yield(o).resource));
+    Net::op(4, app.dominantIdx, (double)o.id);
     // Its pocket is burnt out of the rock, which can show the next clump of
     // the vein. (That can add to p.ores: `o` is not used past here.)
     size_t known = p.ores.size();
@@ -2224,6 +3241,20 @@ static void updateLaser(float dt, float time) {
     // The tool upgrades the traders sell: the laser mines faster, the cutter
     // bites more often.
     const float mineDt = dt * Trade::laserScale(app.upgrades[Trade::Laser]);
+    // The laser's walls (decisions 6 and 4): it takes nothing into a full
+    // pack, and the stock laser cannot work gold — it glances off.
+    auto canTake = [&](bool gold) {
+        if (gold && !Trade::laserMinesGold(app.upgrades[Trade::Laser])) {
+            notice("Gold is too hard for this laser: Laser II mines it");
+            return false;
+        }
+        if (packRoom() <= 0) {
+            notice(atShip() ? "The pack is full: open it (Tab) and store things in the hold"
+                            : "The pack is full: take it to the ship or sell it");
+            return false;
+        }
+        return true;
+    };
     const float cutInterval = CUT_INTERVAL / Trade::cutterScale(app.upgrades[Trade::Cutter]);
     if (cutter) {
         // ---- Terrain cutter ---------------------------------------------------
@@ -2368,7 +3399,7 @@ static void updateLaser(float dt, float time) {
         app.laserEnd = Deposits::pieceCenter(p, o, had);
         app.laserDepth = -6.0f;
         app.laserHit = true;
-        o.hp -= mineDt / Deposits::toughness(o.kind);
+        if (canTake(o.kind == Planet::Ore::Gold)) o.hp -= mineDt / Deposits::toughness(o.kind);
         int got = Deposits::taken(o);
         float col[3];
         Deposits::color(p, o.kind, col);
@@ -2404,6 +3435,7 @@ static void updateLaser(float dt, float time) {
             // ...and its pocket is dug out of the rock, which shows the next
             // clump of the vein. (That can add to p.ores: `o` is not used past here.)
             size_t known = p.ores.size();
+            Net::op(4, app.dominantIdx, (double)o.id);
             uploadCarveRegion(Deposits::extract(p, app.laserOre));
             oreFound(p, known);
             app.laserOre = -1;
@@ -2415,7 +3447,7 @@ static void updateLaser(float dt, float time) {
         app.laserEnd = CaveField::center(p, q);
         app.laserDepth = q.front ? 10.0f : -6.0f;
         app.laserHit = true;
-        q.hp -= mineDt / CaveField::toughness(q.kind);
+        if (canTake(q.kind == Planet::CaveProp::GoldVein)) q.hp -= mineDt / CaveField::toughness(q.kind);
         if (q.hp <= 0.0f) {
             NearField::Yield y = CaveField::yield(q);
             addItem(resourceItem(p, y.resource), y.amount);
@@ -2430,6 +3462,7 @@ static void updateLaser(float dt, float time) {
                               0.9f + fxRand() * 0.5f, 2.2f + fxRand() * 1.8f, col, 1);
             }
             CaveField::mine(q);
+            Net::op(3, app.dominantIdx, app.laserProp);
             app.laserProp = -1;
         }
     } else if (app.hoverTarget >= 0) {
@@ -2439,7 +3472,7 @@ static void updateLaser(float dt, float time) {
         app.laserEnd = NearField::center(p, h);
         app.laserDepth = h.depth;
         app.laserHit = true;
-        h.hp -= mineDt / NearField::toughness(h.kind);
+        if (canTake(false)) h.hp -= mineDt / NearField::toughness(h.kind);
         if (h.hp <= 0.0f) {
             NearField::Yield y = NearField::yield(h);
             addItem(resourceItem(p, y.resource), y.amount);
@@ -2453,6 +3486,7 @@ static void updateLaser(float dt, float time) {
                               0.9f + fxRand() * 0.5f, 2.2f + fxRand() * 1.8f, col, 1);
             }
             NearField::harvest(h);
+            Net::op(2, app.dominantIdx, app.laserTarget);
             app.laserTarget = -1;
         }
     } else {
@@ -3248,7 +4282,16 @@ static void init() {
     // starts with them (a customised Max Fuel used to start at the built-in
     // 250 and only fill up after the first landing).
     syncDebugFromJS();
-    resetGame();
+    // The system's crystals, by role, for the recipes.
+    app.sys = Trade::systemOf(app.planets, app.homeIdx);
+    // Every bite dug goes to the other players (when there are any).
+    Planet::digHook = Net::digHook;
+    // Ready a fresh start behind the title screen, and see whether there is a
+    // game to carry on (the page's title buttons call gameStart).
+    newGame();
+    app.hasSave = readSave();
+    app.titleOpen = true;
+    EM_ASM({ if (window.showTitle) window.showTitle($0); }, app.hasSave ? 1 : 0);
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
@@ -3300,7 +4343,8 @@ static void updateCows(float timeScale) {
     for (Cow& cow : app.cows) {
         if (cow.update(homePlanet(), app.lander, app.cargo, maxCargo(), timeScale)) {
             app.cargo += 1;
-            app.score += 50;
+            notice("A cow in the hold (" + std::to_string(app.cargo) + " of " + std::to_string(maxCargo()) +
+                   "): the locals buy them");
         }
     }
 }
@@ -4682,6 +5726,9 @@ static void syncDebugFromJS() {
         gDebug.planetDensity = dens;
         for (Planet& p : app.planets) p.applyGlobalDensity(dens);
         updateKeplerSpeeds(app.planets);
+        // Keep every body where it is: its orbit now runs at a new rate
+        // from here (advanceTo works from the clock).
+        for (Planet& p : app.planets) p.orbitStart = p.orbitAngle - (double)p.orbitSpeed * app.worldFrames;
     }
     if (app.lander.fuel > maxFuel()) app.lander.fuel = maxFuel();
 }
@@ -4841,8 +5888,28 @@ extern "C" EMSCRIPTEN_KEEPALIVE int debugVisitOutpost(int idx, float offset) {
 extern "C" EMSCRIPTEN_KEEPALIVE void debugGive(int what, int amount) {
     if (what == 200) addCredits(amount);
     else if (what == Trade::COW) app.cargo = std::min(maxCargo(), app.cargo + amount);
-    else addItem(what, amount);
+    else if (what >= 0 && what < App::ITEM_COUNT) {
+        int put = addItem(what, amount);
+        if (put < amount) addItem(what, amount - put, true);
+    }
     if (app.tradePost >= 0) pushTrade();
+}
+// Dev hook: every upgrade at `level` (clamped to each one's top), or the
+// whole ladder climbed with level >= 9 (the star drive included).
+// Module._debugUpgrade(level).
+extern "C" EMSCRIPTEN_KEEPALIVE void debugUpgrade(int level) {
+    for (int i = 0; i < Trade::UPGRADES; i++) {
+        if (i == Trade::StarDrive && level < 9) continue;
+        app.upgrades[i] = std::clamp(level, 0, Trade::maxLevel(i));
+    }
+    applyUpgrades();
+    if (app.tradePost >= 0) pushTrade();
+}
+// Dev hook: set the progress flags (App::Flag bits) and the suit meter.
+// Module._debugProgress(flags, suit) — suit < 0 leaves it.
+extern "C" EMSCRIPTEN_KEEPALIVE void debugProgress(int flags, float suit) {
+    app.flags = (unsigned int)flags;
+    if (suit >= 0.0f) app.suit = suit;
 }
 // Kind and depth below the ground line of prop `idx` (kind * 10000 + depth),
 // or -1: lets a test pick out, say, the deepest crystal.
@@ -4978,11 +6045,22 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugDump() {
     items += ",\"hoverProp\":" + std::to_string(app.hoverProp) + ",\"hoverOre\":" + std::to_string(app.hoverOre) +
              ",\"burnOre\":" + std::to_string(app.burnOre) +
              ",\"tool\":" + std::to_string(app.toolMode) + ",\"inv\":[";
-    for (int i = 0; i < App::ITEM_COUNT; i++) items += (i ? "," : "") + std::to_string(app.inventory[i]);
+    for (int i = 0; i < App::ITEM_COUNT; i++) items += (i ? "," : "") + std::to_string(app.pack[i]);
+    items += "],\"hold\":[";
+    for (int i = 0; i < App::ITEM_COUNT; i++) items += (i ? "," : "") + std::to_string(app.hold[i]);
     items += "]";
     // Trading: the money, the upgrade levels, which post is in reach / open,
     // and every post of the world you are at — how far along the ground it
     // is (+ = right) and where its stall is on screen.
+    items += ",\"suit\":" + std::to_string(app.suit) + ",\"flags\":" + std::to_string(app.flags) +
+             ",\"everHeld\":" + std::to_string(app.everHeld) + ",\"warp\":" + std::to_string(app.warp) +
+             ",\"jumps\":" + std::to_string(app.jumps) + ",\"seed\":" + std::to_string(app.system.seed) +
+             ",\"fuel\":" + std::to_string(app.lander.fuel) + ",\"maxFuel\":" + std::to_string(maxFuel()) +
+             ",\"title\":" + std::to_string(app.titleOpen ? 1 : 0) + ",\"stuck\":" + std::to_string(app.stuckIdx) +
+             ",\"scan\":" + std::to_string((int)app.scanMarks.size()) + ",\"online\":" +
+             std::to_string(app.online ? 1 : 0) + ",\"netId\":" + std::to_string(app.netId) + ",\"clock\":" +
+             std::to_string(app.worldFrames) + ",\"lastPost\":[" +
+             std::to_string(app.lastPostPlanet) + "," + std::to_string(app.lastPostIdx) + "]";
     items += ",\"credits\":" + std::to_string(app.credits) + ",\"cargo\":" + std::to_string(app.cargo) +
              ",\"nearPost\":" + std::to_string(app.nearPost) + ",\"tradePost\":" + std::to_string(app.tradePost) +
              ",\"upgrades\":[";
@@ -5018,8 +6096,9 @@ static void updateDiscovery() {
         float reach = p.baseRadius * 2.5f + 6000.0f;
         if (dist(sp.x, sp.y, p.center.x, p.center.y) > reach) continue;
         p.discovered = true;
-        app.score += 25;
-        showEvent("Discovered " + p.name, p.kind + "  +25");
+        // The locals pay for your survey (decision 9).
+        addCredits(50);
+        showEvent("Discovered " + p.name, p.kind + "  \xc2\xb7  charted for 50 credits");
     }
 }
 
@@ -5078,6 +6157,24 @@ static void mainLoop() {
     app.lastFrameTime = now;
     if (dt > 0.05f) dt = 0.05f;        // clamp to avoid huge catch-up steps
     float timeScale = dt * 60.0f;       // 1 == one 60fps frame (original tuning)
+    // The title screen holds the world still, and the keys do nothing.
+    const bool live = !app.titleOpen;
+    if (!live) { dt = 0.0f; timeScale = 0.0f; }
+    // Online, the system's clock is the server's: this frame is however far
+    // it has moved (a little more or less than the local frame when the two
+    // drift), and a big gap (a tab left in the background) is jumped.
+    bool clockJump = false;
+    if (app.online && live) {
+        double target = EM_ASM_DOUBLE({ return window.net ? window.net.clockMs() : 0; }) * 0.06;
+        double diff = target - app.worldFrames;
+        if (diff > 180.0 || diff < -180.0) {
+            clockJump = true;
+            app.worldFrames = target - timeScale;
+        } else {
+            timeScale = (float)std::clamp(diff, 0.0, 3.0);
+            dt = timeScale / 60.0f;
+        }
+    }
 
     syncDebugFromJS();
     // The water-level knob moved: what has flooded was worked out for the old
@@ -5091,20 +6188,20 @@ static void mainLoop() {
     }
 
     // Edge-triggered keys: thrust (lift off from a landing) and R (restart).
-    bool thrustKey = Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP);
-    bool restartKey = Input::isKeyDown(KEY_R);
+    bool thrustKey = live && (Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP));
+    bool restartKey = live && Input::isKeyDown(KEY_R);
     bool thrustPressed = thrustKey && !app.prevThrustKey;
     bool restartPressed = restartKey && !app.prevRestartKey;
     app.prevThrustKey = thrustKey;
     app.prevRestartKey = restartKey;
 
     // M — toggle the system map (the camera frames every orbit; you keep flying).
-    bool mapKey = Input::isKeyDown(KEY_M);
+    bool mapKey = live && Input::isKeyDown(KEY_M);
     if (mapKey && !app.prevMapKey) app.mapMode = !app.mapMode;
     app.prevMapKey = mapKey;
 
     // E — exit ship (when landed) or re-enter (when close enough on foot).
-    bool exitKey     = Input::isKeyDown(Input::KEY_E);
+    bool exitKey     = live && Input::isKeyDown(Input::KEY_E);
     bool exitPressed = exitKey && !app.prevExitKey;
     app.prevExitKey  = exitKey;
 
@@ -5121,6 +6218,9 @@ static void mainLoop() {
             if (enterDist < app.lander.radius * 4.0f) {
                 app.astronaut.active = false;
                 app.spacewalking     = false;
+                // Aboard: the pack goes in the hold (all but the carbon).
+                storePack();
+                saveGame();
             }
         } else if (app.state == LANDED) {
             const Planet& p = dominantPlanet();
@@ -5143,6 +6243,27 @@ static void mainLoop() {
     // world you're at (or its planet, if you're on a moon) is frozen on its
     // orbit at the angle that puts the star in the requested direction —
     // 270 = noon over the spawn point, ~350 = sunset there.
+    // Time warp (T): several simulation steps a frame in open space. Steering,
+    // air or the ground stop it.
+    {
+        bool warpKey = live && Input::isKeyDown(KEY_T);
+        if (warpKey && !app.prevWarpKey) {
+            if (warpAllowed()) {
+                app.warp = app.warp == 1 ? 4 : (app.warp == 4 ? 16 : 1);
+                notice(app.warp == 1 ? "Time warp off" : "Time warp x" + std::to_string(app.warp));
+            } else {
+                notice(app.online ? "No time warp when playing online: everyone shares one clock"
+                                  : "Time warp works only in open space, out of the air and well above the ground");
+            }
+        }
+        app.prevWarpKey = warpKey;
+        bool steer = Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP) ||
+                     Input::isKeyDown(Input::KEY_A) || Input::isKeyDown(Input::KEY_LEFT) ||
+                     Input::isKeyDown(Input::KEY_D) || Input::isKeyDown(Input::KEY_RIGHT);
+        if (app.warp > 1 && (steer || !warpAllowed())) app.warp = 1;
+    }
+    const int steps = live ? app.warp : 1;
+    for (int step = 0; step < steps; step++) {
     int pinIdx = -1;
     if (gDebug.sunOverride >= 0.0f) {
         pinIdx = app.dominantIdx;
@@ -5151,11 +6272,12 @@ static void mainLoop() {
             pinIdx = app.planets[pinIdx].orbitParent;
     }
     const Vec2 domVelBefore = dominantPlanet().orbitVel;
+    app.worldFrames += timeScale;
     for (int i = 0; i < (int)app.planets.size(); i++) {
         Planet& p = app.planets[i];
         p.orbitPinned = (i == pinIdx);
         if (p.orbitPinned) p.orbitAngle = gDebug.sunOverride - 180.0f;
-        p.updateOrbit(app.planets, timeScale);
+        p.advanceTo(app.planets, app.worldFrames);
     }
     // Engaging, moving or releasing the pin is not physics: the world you're
     // at jumps along its orbit and its velocity changes in a single frame.
@@ -5163,7 +6285,8 @@ static void mainLoop() {
     // can be used mid-flight; landed ships, the astronaut and the cows already
     // ride the body's orbitStep.
     bool pinEvent = pinIdx != app.prevPinIdx ||
-                    (pinIdx >= 0 && gDebug.sunOverride != app.prevSunOverride);
+                    (pinIdx >= 0 && gDebug.sunOverride != app.prevSunOverride) ||
+                    (clockJump && step == 0);
     app.prevPinIdx = pinIdx;
     app.prevSunOverride = gDebug.sunOverride;
     if (pinEvent) {
@@ -5203,7 +6326,13 @@ static void mainLoop() {
                     app.stuckIdx = app.sunIdx;
                     app.lander.landingOffset = app.lander.pos - sun.center;
                     app.state = CRASHED;
+                    onCrashed();
                 }
+            }
+            // Adrift with an empty tank: R calls for a rescue (the cargo is lost).
+            if (step == 0 && restartPressed && app.lander.active && app.lander.fuel <= 0.0f) {
+                rescue();
+                break;
             }
             app.lander.updateBeam(dominantPlanet());
             runBeamGrab();
@@ -5237,10 +6366,12 @@ static void mainLoop() {
             const Planet& body = app.planets[app.stuckIdx];
             app.lander.pos = body.center + app.lander.landingOffset;
             app.lander.vel = body.orbitVel;
-            if (restartPressed) resetGame();
+            if (restartPressed) rescue();
             break;
         }
     }
+    if (app.state != PLAYING) break;
+    }   // time-warp steps
 
     if (app.spacewalking) {
         // The astronaut simulates in the body's co-moving frame: carry them
@@ -5257,13 +6388,25 @@ static void mainLoop() {
         pollInputAstronaut(timeScale);
         app.astronaut.update(dominantPlanet(), timeScale);
 
-        // Q switches the hand tool between mining laser and terrain cutter.
-        bool toolKey = Input::isKeyDown(Input::KEY_Q);
-        if (toolKey && !app.prevToolKey && app.cutterUnlocked) {
-            app.toolMode ^= 1;
-            EM_ASM({ if (window.setTool) window.setTool($0); }, app.toolMode);
+        // Q switches the hand tool between mining laser and terrain cutter —
+        // once you have bought the cutter.
+        bool toolKey = live && Input::isKeyDown(Input::KEY_Q);
+        if (toolKey && !app.prevToolKey) {
+            if (hasCutter()) {
+                app.toolMode ^= 1;
+                EM_ASM({ if (window.setTool) window.setTool($0); }, app.toolMode);
+            } else {
+                notice("No terrain cutter yet: a trader builds one (10 ferrite)");
+            }
         }
         app.prevToolKey = toolKey;
+        // F breathes carbon into the suit; C sends out a scanner pulse.
+        bool airKey = live && Input::isKeyDown(KEY_F);
+        if (airKey && !app.prevAirKey) useCarbon();
+        app.prevAirKey = airKey;
+        bool scanKey = live && Input::isKeyDown(KEY_C);
+        if (scanKey && !app.prevScanKey) scanPulse();
+        app.prevScanKey = scanKey;
     } else if ((app.state == LANDED || (app.state == PLAYING && app.lander.altitude < 1500.0f)) &&
                app.dominantIdx == app.activeFieldIdx && dominantPlanet().hasDigs()) {
         // Parked, or flying low: show the caves and whatever has been dug
@@ -5278,12 +6421,34 @@ static void mainLoop() {
         Outposts::update(dp, dt, playerPos(), app.spacewalking);
         app.nearPost = app.spacewalking ? Outposts::inReach(dp, app.astronaut.pos) : -1;
         if (app.tradePost >= 0 && app.nearPost != app.tradePost) closeTrade();
+        if (app.nearPost >= 0) app.flags |= App::F_POST;
         // The page's hint for what E does here.
         std::string prompt;
         if (app.tradePost < 0 && wouldTrade()) prompt = "Trade with " + dp.outposts[app.nearPost].keeper;
         if (prompt != app.promptShown) {
             app.promptShown = prompt;
             EM_ASM({ if (window.setPrompt) window.setPrompt(UTF8ToString($0)); }, prompt.c_str());
+        }
+    }
+
+    // The other players: move them along, tell them where I am, and catch up
+    // on cave formations they mined before this world's caves were built here.
+    Net::update(timeScale);
+    Net::sendState(dt);
+    if (app.online) Net::applyPending();
+
+    // The suit, the scanner's clock, the herd, the jump.
+    if (live) {
+        updateSuit(dt);
+        app.scanTime = std::max(0.0f, app.scanTime - dt);
+        app.scanCooldown = std::max(0.0f, app.scanCooldown - dt);
+        updateHerd(dt);
+        bool jumpKey = Input::isKeyDown(KEY_J);
+        if (jumpKey && !app.prevJumpKey && app.jumpTime < 0.0f) tryJump();
+        app.prevJumpKey = jumpKey;
+        if (app.jumpTime >= 0.0f && app.jumpTime < 1e8f) {
+            app.jumpTime += dt;
+            if (app.jumpTime > 2.6f) finishJump();
         }
     }
 
@@ -5435,6 +6600,8 @@ static void mainLoop() {
     // 3c) Ship + astronaut + space aids stay crisp on top of the sky.
     app.renderer.begin(viewMat, app.width, app.height);
     if (spaceAids) drawTrajectory();
+    // The other players at this world: behind your own ship and you.
+    Net::draw(app.renderer);
     app.lander.drawBeam(app.renderer);
     app.lander.draw(app.renderer);   // always draw the actual ship
     // The astronaut after the ship: stepping out (and walking past it) they
@@ -5490,6 +6657,12 @@ static void mainLoop() {
     //     they are the closest depth plane. Screen-anchored, so they frame the
     //     scene without ever covering the player.
     drawForeground(shaderTime);
+    // The scanner's marks are seen through everything, the near ground too.
+    if (app.scanTime > 0.0f) {
+        app.renderer.begin(viewMat, app.width, app.height);
+        drawScan();
+        app.renderer.end();
+    }
 
     // 4) Clouds (alpha) in front of everything, incl. the ship (fly behind them).
     drawCloudsPass(shaderTime);
@@ -5506,18 +6679,46 @@ static void mainLoop() {
        // Speed relative to the world you're at — its own orbital motion is
        // tens of units a frame and would swamp the number you fly by.
        (app.lander.vel - dominantPlanet().orbitVel).length(),
-       (int)app.state, app.cargo, maxCargo(), app.score,
+       (int)app.state, app.cargo, maxCargo(), app.credits,
        (int)app.spacewalking);
+    {
+        // The suit, the pack and the hold, time warp, an empty tank.
+        int hazard = 0;
+        float rate = suitRate(&hazard);
+        float left = rate > 1e-6f ? app.suit / rate : -1.0f;
+        bool dry = app.state == PLAYING && app.lander.active && app.lander.fuel <= 0.0f;
+        EM_ASM({
+            if (window.updateGame) window.updateGame($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+        }, app.suit, left, hazard, (int)app.spacewalking, itemTotal(app.pack), packSize(), itemTotal(app.hold),
+           holdSize(), app.cargo, maxCargo(), app.warp,
+           app.astronaut.jetpackMax > 0.0f ? app.astronaut.jetpackFuel / app.astronaut.jetpackMax : 0.0f, (int)dry);
+        std::string obj = app.titleOpen ? std::string() : objective();
+        if (obj != app.objectiveShown) {
+            app.objectiveShown = obj;
+            EM_ASM({ if (window.setObjective) window.setObjective(UTF8ToString($0)); }, obj.c_str());
+        }
+    }
     updateNavHud();
     updateTraderHud();
+    Net::pushLabels();
     if (app.creditsDirty) {
         app.creditsDirty = false;
         EM_ASM({ if (window.setCredits) window.setCredits($0); }, app.credits);
     }
+    {
+        static int lastAt = -1;
+        int at = atShip() ? 1 : 0;
+        if (at != lastAt) { lastAt = at; app.inventoryDirty = true; }
+    }
     if (app.inventoryDirty) {
         app.inventoryDirty = false;
+        // "pack counts | hold counts | pack size | hold size | at the ship | cows"
         std::string counts;
-        for (int i = 0; i < App::ITEM_COUNT; i++) counts += std::to_string(app.inventory[i]) + ",";
+        for (int i = 0; i < App::ITEM_COUNT; i++) counts += std::to_string(app.pack[i]) + ",";
+        counts += "|";
+        for (int i = 0; i < App::ITEM_COUNT; i++) counts += std::to_string(app.hold[i]) + ",";
+        counts += "|" + std::to_string(packSize()) + "|" + std::to_string(holdSize()) + "|" +
+                  std::to_string(atShip() ? 1 : 0) + "|" + std::to_string(app.cargo);
         EM_ASM({ if (window.setInventory) window.setInventory(UTF8ToString($0)); }, counts.c_str());
     }
 }

@@ -276,6 +276,89 @@
         .trade-empty { font-size: 12.5px; line-height: 1.45; color: rgba(159, 179, 200, 0.85); padding: 9px 2px; }
         .trade-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
 
+        .inv-head.second { margin: 14px 0 10px; }
+        #inventory { max-height: calc(100vh - 32px); overflow-y: auto; }
+        .inv-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+        #inv-detail-act { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+        #trade-holdnote { margin-top: 4px; font-size: 11.5px; color: #8fffe0; }
+        .trade-group { margin: 8px 0 1px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(159, 179, 200, 0.75); }
+        .trade-group:first-child { margin-top: 0; }
+        .trade-recipe { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+        .trade-recipe .mat { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px 1px 3px; border-radius: 5px;
+                             font-size: 11px; color: #ffb3a3; background: rgba(255, 110, 80, 0.10); border: 1px solid rgba(255, 110, 80, 0.25); }
+        .trade-recipe .mat.ok { color: #bff5d2; background: rgba(80, 200, 120, 0.10); border-color: rgba(80, 200, 120, 0.28); }
+        .trade-recipe .mat.new { border-style: dashed; }
+        .trade-recipe .mat svg { width: 15px; height: 15px; }
+        .trade-recipe .mat b { font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-weight: 700; margin-left: 2px; }
+        .trade-recipe .mat .cr { font-size: 11px; color: inherit; }
+        .trade-hint { flex-basis: 100%; font-size: 10.5px; color: rgba(159, 179, 200, 0.85); margin-top: 1px; }
+
+        /* ---- HUD: the objective, the suit ---- */
+        #hud { width: 236px; }
+        #hud-obj { margin: -2px 0 9px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+        #hud-obj .label { font-size: 10px; letter-spacing: 0.16em; color: #8fffe0; }
+        #hud-obj-text { color: #fff; font-size: 12.5px; line-height: 1.35; white-space: normal; }
+        #hud .gauge.thin { height: 7px; margin: 2px 0 6px; }
+        #hud .gauge.mini { display: inline-block; width: 80px; height: 6px; margin: 0; vertical-align: middle; }
+        #hud .gauge.mini .gauge-fill { display: block; background: #f58f33; }
+        #hud-suit-label.warn #hud-suit { color: #ff7a6c; animation: blink 0.8s steps(2) infinite; }
+        @keyframes blink { 50% { opacity: 0.35; } }
+
+        /* ---- Short notices ---- */
+        #notice {
+            position: fixed; left: 50%; bottom: 134px; transform: translateX(-50%); z-index: 58;
+            padding: 6px 13px; background: rgba(9, 13, 21, 0.80); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #eef7ff;
+            pointer-events: none; user-select: none; opacity: 0; transition: opacity 0.2s ease; white-space: nowrap;
+        }
+        #notice.show { opacity: 1; }
+
+        /* ---- The jump: the screen goes white ---- */
+        #jumpfx { position: fixed; inset: 0; z-index: 200; background: #f4fbff; opacity: 0; pointer-events: none; }
+        #jumpfx.go { animation: jumpflash 2.6s ease-in forwards; }
+        @keyframes jumpflash { 0% { opacity: 0; } 70% { opacity: 0.35; } 100% { opacity: 1; } }
+
+        /* ---- Title screen ---- */
+        #title {
+            position: fixed; inset: 0; z-index: 150; display: none; align-items: center; justify-content: center;
+            padding: 16px; background: radial-gradient(ellipse at 50% 60%, rgba(8, 14, 28, 0.55), rgba(4, 6, 12, 0.88));
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #e8eef5;
+        }
+        #title.open { display: flex; }
+        .title-box { max-width: 620px; text-align: center; }
+        .title-name { font-size: clamp(44px, 9vw, 86px); font-weight: 800; letter-spacing: 0.32em; margin-right: -0.32em; color: #fff; }
+        .title-tag { margin: 10px auto 26px; max-width: 470px; font-size: 15px; line-height: 1.5; color: rgba(232, 238, 245, 0.82); }
+        .title-buttons { display: flex; gap: 12px; justify-content: center; }
+        .title-buttons button {
+            font: inherit; font-size: 15px; font-weight: 700; padding: 11px 26px; border-radius: 9px; cursor: pointer;
+            border: 1px solid rgba(120, 255, 220, 0.45); background: rgba(120, 255, 220, 0.14); color: #eafff8;
+        }
+        .title-buttons button:hover, .title-buttons button:focus-visible { background: rgba(120, 255, 220, 0.28); outline: none; }
+        #title-new { border-color: rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.07); }
+        .title-note { min-height: 18px; margin-top: 10px; font-size: 12px; color: #ffd66e; }
+        .title-keys { margin-top: 22px; font-size: 12px; line-height: 1.7; color: rgba(159, 179, 200, 0.9); }
+        .title-keys b { color: #cfe3f5; font-weight: 700; margin-right: 4px; }
+
+        .title-online { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+        .title-online input {
+            font: inherit; font-size: 14px; width: 170px; padding: 9px 12px; border-radius: 9px;
+            border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.07); color: #fff;
+        }
+        .title-online input:focus { outline: none; border-color: rgba(120, 255, 220, 0.55); }
+        .title-online button {
+            font: inherit; font-size: 14px; font-weight: 700; padding: 9px 18px; border-radius: 9px; cursor: pointer;
+            border: 1px solid rgba(160, 180, 255, 0.45); background: rgba(140, 160, 255, 0.14); color: #eef0ff;
+        }
+        .title-online button:hover { background: rgba(140, 160, 255, 0.28); }
+        .title-online button[disabled] { opacity: 0.5; cursor: default; }
+        /* Other players' name tags (placed from C++). */
+        #peer-labels { position: fixed; inset: 0; z-index: 41; pointer-events: none; overflow: hidden; }
+        #peer-labels .tag {
+            position: absolute; transform: translate(-50%, -100%); padding: 2px 7px; border-radius: 6px;
+            background: rgba(9, 13, 21, 0.62); color: #dfe6ff; white-space: nowrap;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; font-weight: 600;
+        }
+
         /* ---- "E  Trade with ..." hint ---- */
         #prompt {
             position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 58;
@@ -421,42 +504,58 @@
     <canvas id="canvas"></canvas>
 
     <div id="hud">
+        <div id="hud-obj" style="display:none"><div class="label">NEXT</div><div id="hud-obj-text"></div></div>
         <div class="label">FUEL <span id="hud-fuel">0/0</span></div>
         <div class="gauge"><div id="hud-fuel-fill" class="gauge-fill"></div></div>
         <div class="row"><span class="label">Altitude</span><span id="hud-alt">0</span></div>
         <div class="row"><span class="label">Velocity</span><span id="hud-vel">0.0</span></div>
-        <div class="row"><span class="label">Cargo</span><span id="hud-cargo">0/3</span></div>
-        <div class="row"><span class="label">Score</span><span id="hud-score">0</span></div>
         <div class="row"><span class="label">Credits</span><span class="cr" id="hud-credits"></span></div>
+        <div class="row"><span class="label">Hold</span><span id="hud-hold">0/150</span></div>
+        <div class="row" id="hud-warp-row" style="display:none"><span class="label">Time warp (T)</span><span id="hud-warp"></span></div>
         <div class="row"><span class="label">Status</span><span id="hud-status">FLYING</span></div>
         <div class="row" id="hud-tool-row" style="display:none"><span class="label">Tool (Q)</span><span id="hud-tool">Mining laser</span></div>
+        <div id="hud-foot" style="display:none">
+            <div class="row" id="hud-suit-label"><span class="label">SUIT</span><span id="hud-suit"></span></div>
+            <div class="gauge thin"><div id="hud-suit-fill" class="gauge-fill"></div></div>
+            <div class="row"><span class="label">Pack</span><span id="hud-pack">0/40</span></div>
+            <div class="row"><span class="label">Jetpack</span><span class="gauge mini"><span id="hud-jet-fill" class="gauge-fill"></span></span></div>
+        </div>
         <div class="sep"></div>
         <div class="row"><span class="label">World</span><span id="hud-world">&mdash;</span></div>
         <div class="row"><span class="label">Type</span><span id="hud-kind">&mdash;</span></div>
         <div class="row"><span class="label">System</span><span id="hud-system">&mdash;</span></div>
         <div class="row"><span class="label">Charted</span><span id="hud-charted">0/0</span></div>
         <div class="row" id="hud-trader-row" style="display:none"><span class="label">Trader</span><span id="hud-trader"></span></div>
-        <div class="keys">M map &nbsp;&middot;&nbsp; Tab inventory &nbsp;&middot;&nbsp; wheel zoom</div>
+        <div class="row" id="hud-online-row" style="display:none"><span class="label">Online</span><span id="hud-online"></span></div>
+        <div class="keys">M map &nbsp;&middot;&nbsp; Tab inventory &nbsp;&middot;&nbsp; T time warp &nbsp;&middot;&nbsp; wheel zoom</div>
     </div>
 
     <div id="nav-labels"></div>
+    <div id="peer-labels"></div>
 
     <!-- Inventory: Tab / I opens it. Filled from C++ via window.setInventory. -->
     <div id="inventory" role="dialog" aria-label="Inventory">
         <div class="inv-head">
             <span class="inv-title">EXOSUIT</span>
-            <span class="inv-sub">Cargo</span>
+            <span class="inv-sub">Pack <span id="inv-pack-n"></span></span>
             <span class="cr" id="inv-credits"></span>
             <span class="inv-hint">Tab to close</span>
         </div>
         <div id="inv-grid"></div>
+        <div class="inv-head second">
+            <span class="inv-title">SHIP</span>
+            <span class="inv-sub">Hold <span id="inv-hold-n"></span></span>
+            <span class="inv-hint" id="inv-hold-note"></span>
+        </div>
+        <div id="inv-hold" class="inv-grid"></div>
         <div id="inv-detail">
             <div id="inv-detail-icon"></div>
             <div class="inv-detail-text">
                 <div id="inv-detail-name">Nothing selected</div>
                 <div id="inv-detail-kind"></div>
-                <div id="inv-detail-desc">Point at something you are carrying.</div>
+                <div id="inv-detail-desc">Point at something you have.</div>
             </div>
+            <div id="inv-detail-act"></div>
         </div>
     </div>
     <!-- Trading post: E beside a trader opens it. Filled from C++ via window.showTrade. -->
@@ -467,22 +566,46 @@
             <span class="cr" id="trade-credits"></span>
             <span class="inv-hint">E to leave</span>
         </div>
-        <div class="trade-say"><span class="alien" id="trade-alien"></span><span id="trade-line"></span></div>
+        <div class="trade-say"><span class="alien" id="trade-alien"></span><span id="trade-line"></span>
+            <div id="trade-holdnote"></div></div>
         <div class="trade-cols">
             <div>
                 <div class="trade-h"><span>You sell</span></div>
                 <div class="trade-list" id="trade-sell"></div>
                 <div class="trade-foot"><button class="trade-btn" id="trade-sell-all" type="button"></button></div>
-            </div>
-            <div>
-                <div class="trade-h"><span>Upgrades</span></div>
-                <div class="trade-list" id="trade-upgrades"></div>
                 <div class="trade-h gap"><span>Goods</span><span id="trade-goods-note"></span></div>
                 <div class="trade-list" id="trade-goods"></div>
+            </div>
+            <div>
+                <div class="trade-h"><span>Equipment</span><span>built from materials + credits</span></div>
+                <div class="trade-list" id="trade-upgrades"></div>
             </div>
         </div>
     </div>
     <div id="prompt"><span class="key">E</span><span id="prompt-text"></span></div>
+    <div id="notice"></div>
+    <div id="jumpfx"></div>
+    <!-- The front door: Continue / New game. main.cpp's init calls window.showTitle. -->
+    <div id="title">
+        <div class="title-box">
+            <div class="title-name">VISITOR</div>
+            <div class="title-tag">You are stranded in a star system that is not yours. Its worlds hold what you need to build a star drive. Land, explore, trade with the locals, upgrade, and leave.</div>
+            <div class="title-buttons">
+                <button id="title-continue" type="button">Continue</button>
+                <button id="title-new" type="button">New game</button>
+            </div>
+            <div class="title-online">
+                <input id="title-name" type="text" maxlength="20" placeholder="Your name" aria-label="Your name">
+                <button id="title-online" type="button">Play online</button>
+            </div>
+            <div class="title-note" id="title-note"></div>
+            <div class="title-keys">
+                <div><b>Ship</b> W thrust &middot; A/D turn &middot; Space tractor beam &middot; E step out &middot; M map &middot; T time warp</div>
+                <div><b>On foot</b> A/D walk &middot; W jump &middot; Space jetpack &middot; mouse fires the tool &middot; Q laser / cutter &middot; F breathe carbon &middot; C scan &middot; E trade / board &middot; Tab inventory</div>
+                <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
+            </div>
+        </div>
+    </div>
     <div id="pickups"></div>
     <div id="event"><div class="title" id="event-title"></div><div class="sub" id="event-sub"></div></div>
     <div id="message"></div>
@@ -518,6 +641,13 @@
                 var q = new URLSearchParams(window.location.search).get('seed');
                 if (q !== null && /^\d+$/.test(q)) seed = parseInt(q, 10);
             } catch (e) {}
+            // A saved game (main.cpp: saveGame) names its own system.
+            window.SAVE_SEED = 0;
+            try {
+                var sv = JSON.parse(localStorage.getItem('visitor:save') || 'null');
+                if (Array.isArray(sv) && sv[1] > 0) window.SAVE_SEED = sv[1] >>> 0;
+            } catch (e) {}
+            if (!seed) seed = window.SAVE_SEED;
             if (!seed) { try { seed = parseInt(localStorage.getItem(KEY) || '0', 10) || 0; } catch (e) {} }
             if (!seed) seed = 1 + Math.floor(Math.random() * 999998);
             try { localStorage.setItem(KEY, String(seed)); } catch (e) {}
@@ -559,7 +689,7 @@
             var DEFAULTS = {
                 // thrust 0.15 = the original game's tuning: thrust-to-weight
                 // ~1.25 at the home surface, enough to climb out to space.
-                thrust: 0.15, maxFuel: 250, fuelBurn: 0.05, refuelRate: 0.25,
+                thrust: 0.15, maxFuel: 160, fuelBurn: 0.05, refuelRate: 0.25,
                 beamRange: 300, beamWidth: 20,
                 planetDensity: 0.025, atmosphereScale: 0.4, atmosphereDrag: 0.015,
                 atmRayleighH: 1.5, atmRimH: 7.5, atmMieH: 2.0, atmSunIntensity: 44.0, atmExtinction: 4.5,
@@ -574,7 +704,7 @@
             };
             var PARAMS = [
                 { key: 'thrust',           label: 'Thrust',               min: 0.01,  max: 0.5,  step: 0.005 },
-                { key: 'maxFuel',          label: 'Max Fuel',             min: 100,   max: 1000, step: 25 },
+                { key: 'maxFuel',          label: 'Stock Fuel Tank',      min: 25,    max: 1000, step: 5 },
                 { key: 'fuelBurn',         label: 'Fuel Burn (per frame)', min: 0.01, max: 0.3,  step: 0.01 },
                 { key: 'refuelRate',       label: 'Refuel While Landed',  min: 0,     max: 2.0,  step: 0.05 },
                 { key: 'beamRange',        label: 'Beam Range',           min: 50,    max: 800,  step: 10 },
@@ -619,7 +749,7 @@
             // every slider whenever any one was touched — so it is dropped and
             // the current default takes over. Add an entry here whenever a
             // default changes.
-            var SUPERSEDED = { cameraGroundZoom: [0.2], frontVeil: [0.55] };
+            var SUPERSEDED = { cameraGroundZoom: [0.2], frontVeil: [0.55], maxFuel: [250] };
 
             var DBG = Object.assign({}, DEFAULTS);
             if (DEBUG_MODE) try {
@@ -696,8 +826,7 @@
                 fuelFill = document.getElementById('hud-fuel-fill');
                 altEl = document.getElementById('hud-alt');
                 velEl = document.getElementById('hud-vel');
-                cargoEl = document.getElementById('hud-cargo');
-                scoreEl = document.getElementById('hud-score');
+
                 statusEl = document.getElementById('hud-status');
                 msgEl = document.getElementById('message');
                 toastEl = document.getElementById('toast');
@@ -735,7 +864,7 @@
             // caves hold (9 calcite, 10 glowcap, 11 gold).
             var ITEMS = [
                 { name: 'Carbon', kind: 'Organic', icon: 'leaf', color: '#6fb05a',
-                  desc: 'Plant matter. Cut from grass and bulb plants with the mining laser.' },
+                  desc: 'Plant matter, cut from grass and bulb plants with the mining laser. It is also air: on foot, F breathes five of it to top the suit up by a quarter. Boarding the ship leaves it in your pack.' },
                 { name: 'Ferrite', kind: 'Metal', icon: 'rock', color: '#b9ad9c',
                   desc: 'Common metal-bearing rock. Mined from boulders, and from rust-flecked clumps buried a little way under the ground: dig with the terrain cutter until it stops at one, then take it out with the mining laser. (Keep the cutter on a clump and it burns away instead.)' },
                 { name: 'Lumenite', kind: 'Crystal', icon: 'crystal', color: '#8cd9eb',
@@ -757,9 +886,8 @@
                 { name: 'Glowcap', kind: 'Organic', icon: 'cap', color: '#6ff2cc',
                   desc: 'A luminous cave mushroom. It grows back a while after it is picked.' },
                 { name: 'Gold', kind: 'Metal', icon: 'nugget', color: '#ffcc42',
-                  desc: 'Native gold. In veins in the walls of the deepest caves, and in clumps buried deep in the rock: the further down you dig, the more of it there is.' }
+                  desc: 'Native gold. In veins in the walls of the deepest caves, and in clumps buried deep in the rock: the further down you dig, the more of it there is. Too hard for the stock laser: it takes Laser II.' }
             ];
-            var SLOT_COUNT = 18;
             function shade(hex, k) {
                 var n = parseInt(hex.slice(1), 16);
                 var r = Math.round(((n >> 16) & 255) * k), g = Math.round(((n >> 8) & 255) * k), b = Math.round((n & 255) * k);
@@ -805,6 +933,18 @@
                 } else if (item.icon === 'crate') {
                     body = '<path d="M5 14 L20 7 L35 14 L35 29 L20 36 L5 29 Z" fill="' + d + '"/>' +
                            '<path d="M5 14 L20 21 L35 14 L20 7 Z" fill="' + c + '"/><path d="M19 21 L21 21 L21 36 L19 36 Z" fill="' + c + '"/>';
+                } else if (item.icon === 'drive') {
+                    body = '<circle cx="20" cy="20" r="15" fill="' + d + '"/><circle cx="20" cy="20" r="9" fill="' + c + '"/>' +
+                           '<path d="M20 2 L23 17 L38 20 L23 23 L20 38 L17 23 L2 20 L17 17 Z" fill="#fff" opacity="0.85"/>';
+                } else if (item.icon === 'seal') {
+                    body = '<circle cx="20" cy="19" r="15" fill="' + d + '"/><ellipse cx="22" cy="18" rx="10" ry="9" fill="#0f1628"/>' +
+                           '<ellipse cx="25" cy="14" rx="3.5" ry="2" fill="' + c + '"/><rect x="9" y="31" width="22" height="5" rx="2" fill="' + c + '"/>';
+                } else if (item.icon === 'bag') {
+                    body = '<rect x="8" y="10" width="24" height="26" rx="6" fill="' + d + '"/><rect x="11" y="13" width="18" height="12" rx="3" fill="' + c + '"/>' +
+                           '<path d="M14 10 Q20 2 26 10" stroke="' + c + '" stroke-width="3" fill="none"/>';
+                } else if (item.icon === 'radar') {
+                    body = '<circle cx="20" cy="20" r="16" fill="' + d + '"/><circle cx="20" cy="20" r="11" fill="none" stroke="' + c + '" stroke-width="2"/>' +
+                           '<circle cx="20" cy="20" r="5" fill="none" stroke="' + c + '" stroke-width="2"/><path d="M20 20 L33 11 L35 18 Z" fill="' + c + '"/>';
                 } else if (item.icon === 'nugget') {
                     body = '<path d="M6 30 L10 16 L22 9 L33 15 L35 28 L24 35 L12 35 Z" fill="' + d + '"/>' +
                            '<path d="M12 18 L22 11 L31 16 L25 23 L15 25 Z" fill="' + c + '"/>';
@@ -815,42 +955,97 @@
                 }
                 return '<svg viewBox="0 0 40 40" aria-hidden="true">' + body + '</svg>';
             }
-            var invCounts = [], invSelected = -1;
-            function showDetail(id) {
-                invSelected = id;
-                var item = ITEMS[id];
-                document.getElementById('inv-detail-icon').innerHTML = item ? iconSvg(item) : '';
-                document.getElementById('inv-detail-name').textContent = item ? item.name + '  \u00d7 ' + (invCounts[id] || 0) : 'Nothing selected';
-                document.getElementById('inv-detail-kind').textContent = item ? item.kind : '';
-                document.getElementById('inv-detail-desc').textContent = item ? item.desc : 'Point at something you are carrying.';
-                var slots = document.querySelectorAll('#inv-grid .inv-slot');
-                for (var i = 0; i < slots.length; i++) slots[i].classList.toggle('sel', slots[i].dataset.item === String(id));
+            // ---- Pack and hold ---------------------------------------------
+            // The suit's pack is small; the ship's hold is the bank. Boarding
+            // empties the pack into the hold (all but the carbon: that is your
+            // air). At the ship you can move things either way; anywhere, you
+            // can drop what you do not want.
+            var inv = { pack: [], hold: [], packMax: 40, holdMax: 150, atShip: false, cows: 0 };
+            var invSel = null;            // { id, where: 'pack' | 'hold' }
+            var GRID_SLOTS = 12;
+            function sum(a) { var n = 0; for (var i = 0; i < a.length; i++) n += a[i] || 0; return n; }
+            function moveItem(id, from, to, count) {
+                if (window.Module && Module._invMove) Module._invMove(id, from === 'pack' ? 0 : 1, to === 'drop' ? -1 : (to === 'pack' ? 0 : 1), count);
             }
-            function renderInventory() {
-                var grid = document.getElementById('inv-grid');
+            function invButton(label, fn) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'trade-btn';
+                b.textContent = label;
+                b.addEventListener('click', function () { fn(); b.blur(); });
+                return b;
+            }
+            function showDetail(sel) {
+                invSel = sel;
+                var item = sel ? ITEMS[sel.id] : null;
+                var have = sel ? (inv[sel.where][sel.id] || 0) : 0;
+                document.getElementById('inv-detail-icon').innerHTML = item ? iconSvg(item) : '';
+                document.getElementById('inv-detail-name').textContent = item ? item.name + '  × ' + have : 'Nothing selected';
+                document.getElementById('inv-detail-kind').textContent = item ? item.kind + (sel.where === 'hold' ? ' · in the hold' : ' · in the pack') : '';
+                document.getElementById('inv-detail-desc').textContent = item ? item.desc : 'Point at something you have.';
+                var act = document.getElementById('inv-detail-act');
+                act.innerHTML = '';
+                if (item && have > 0) {
+                    if (sel.where === 'pack') {
+                        if (sel.id === 0) act.appendChild(invButton('Breathe 5 (F)', function () { /* the key does it */ }));
+                        if (inv.atShip) act.appendChild(invButton('Store in hold', function () { moveItem(sel.id, 'pack', 'hold', 0); }));
+                        act.appendChild(invButton('Drop all', function () { moveItem(sel.id, 'pack', 'drop', 0); }));
+                    } else {
+                        if (inv.atShip) act.appendChild(invButton('Take', function () { moveItem(sel.id, 'hold', 'pack', 0); }));
+                        act.appendChild(invButton('Jettison', function () { moveItem(sel.id, 'hold', 'drop', 0); }));
+                    }
+                    // The carbon button only explains; F is the key.
+                    if (sel.id === 0 && sel.where === 'pack') act.firstChild.disabled = true;
+                }
+                var slots = document.querySelectorAll('#inventory .inv-slot');
+                for (var i = 0; i < slots.length; i++)
+                    slots[i].classList.toggle('sel', !!sel && slots[i].dataset.item === String(sel.id) && slots[i].dataset.where === sel.where);
+            }
+            function fillGrid(gridId, where) {
+                var grid = document.getElementById(gridId);
                 grid.innerHTML = '';
-                var held = [];
-                for (var id = 0; id < ITEMS.length; id++) if (invCounts[id] > 0) held.push(id);
-                for (var s = 0; s < SLOT_COUNT; s++) {
+                var counts = inv[where], held = [];
+                for (var id = 0; id < ITEMS.length; id++) if (counts[id] > 0) held.push(id);
+                for (var s = 0; s < Math.max(GRID_SLOTS, held.length); s++) {
                     var slot = document.createElement('div');
                     slot.className = 'inv-slot';
                     if (s < held.length) {
                         var item = ITEMS[held[s]];
                         slot.className += ' filled';
                         slot.dataset.item = held[s];
+                        slot.dataset.where = where;
                         slot.innerHTML = '<div class="name">' + item.name + '</div>' + iconSvg(item) +
-                                         '<div class="count">' + invCounts[held[s]] + '</div>';
-                        (function (id2) { slot.addEventListener('mouseenter', function () { showDetail(id2); }); })(held[s]);
+                                         '<div class="count">' + counts[held[s]] + '</div>';
+                        (function (id2) {
+                            slot.addEventListener('mouseenter', function () { showDetail({ id: id2, where: where }); });
+                            slot.addEventListener('click', function () { showDetail({ id: id2, where: where }); });
+                        })(held[s]);
                     }
                     grid.appendChild(slot);
                 }
-                if (invSelected >= 0 && !(invCounts[invSelected] > 0)) invSelected = -1;
-                if (invSelected < 0 && held.length) invSelected = held[0];
-                showDetail(invSelected);
+                return held;
             }
-            // "c0,c1,c2,..." from main.cpp whenever a count changes.
+            function renderInventory() {
+                var ph = fillGrid('inv-grid', 'pack');
+                var hh = fillGrid('inv-hold', 'hold');
+                document.getElementById('inv-pack-n').textContent = sum(inv.pack) + ' / ' + inv.packMax;
+                document.getElementById('inv-hold-n').textContent = sum(inv.hold) + ' / ' + inv.holdMax +
+                    (inv.cows > 0 ? '  ·  ' + inv.cows + (inv.cows === 1 ? ' cow' : ' cows') : '');
+                document.getElementById('inv-hold-note').textContent = inv.atShip ? 'at the ship: move things either way' : 'reach it at the ship';
+                if (invSel && !(inv[invSel.where][invSel.id] > 0)) invSel = null;
+                if (!invSel) invSel = ph.length ? { id: ph[0], where: 'pack' } : (hh.length ? { id: hh[0], where: 'hold' } : null);
+                showDetail(invSel);
+            }
+            // "pack,.. | hold,.. | pack size | hold size | at the ship | cows" from main.cpp.
             window.setInventory = function (packed) {
-                invCounts = packed.split(',').filter(function (x) { return x !== ''; }).map(Number);
+                var parts = packed.split('|');
+                var nums = function (t) { return t.split(',').filter(function (x) { return x !== ''; }).map(Number); };
+                inv.pack = nums(parts[0] || '');
+                inv.hold = nums(parts[1] || '');
+                inv.packMax = +parts[2] || 40;
+                inv.holdMax = +parts[3] || 150;
+                inv.atShip = parts[4] === '1';
+                inv.cows = +parts[5] || 0;
                 renderInventory();
             };
             window.toggleInventory = function (open) {
@@ -859,6 +1054,7 @@
                 el.classList.toggle('open', want);
             };
             document.addEventListener('keydown', function (e) {
+                if (titleOpen) return;
                 if (e.key === 'Tab' || e.key === 'i' || e.key === 'I') { e.preventDefault(); if (!e.repeat) window.toggleInventory(); }
                 else if (e.key === 'Escape') {
                     window.toggleInventory(false);
@@ -869,8 +1065,8 @@
             // ---- Credits ---------------------------------------------------
             // The mark for credits: a two-tone teal diamond (the game draws the
             // same one in the trader's speech bubble).
-            var COIN = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 0.5 L1.200 6 L6 11.5 Z" fill="#1f8580"/>' +
-                       '<path d="M6 0.5 L10.800 6 L6 11.5 Z" fill="#4ddbcc"/></svg>';
+            var COIN = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 0.5 L1.2 6 L6 11.5 Z" fill="#1f8580"/>' +
+                       '<path d="M6 0.5 L10.8 6 L6 11.5 Z" fill="#4ddbcc"/></svg>';
             function cr(n) { return '<span class="cr">' + COIN + n + '</span>'; }
             var credits = 0;
             window.setCredits = function (n) {
@@ -891,7 +1087,7 @@
                 var entry = crFeed;
                 entry.total += amount;
                 entry.el.className = 'pickup credits' + (entry.total < 0 ? ' spent' : '');
-                entry.el.innerHTML = COIN + '<span class="amt">' + (entry.total < 0 ? '\u2212' : '+') + Math.abs(entry.total) +
+                entry.el.innerHTML = COIN + '<span class="amt">' + (entry.total < 0 ? '−' : '+') + Math.abs(entry.total) +
                                      '</span><span>credits</span>';
                 clearTimeout(entry.timer);
                 entry.timer = setTimeout(function () {
@@ -900,22 +1096,44 @@
                 }, 2600);
             };
 
-            // ---- Trading post ------------------------------------------------
-            // What the traders sell besides goods, by Trade::Upgrade in
-            // trade.cpp (which owns the prices and what a level does; `fx`
-            // only words the number it sends).
+            // ---- Equipment ---------------------------------------------------
+            // By Trade::Upgrade in trade.h (which owns the recipes and what a
+            // level does; `fx` only words the number it sends).
             var UPGRADES = [
-                { name: 'Fuel tank', icon: 'tank', color: '#50c878', what: 'Ship',
-                  fx: function (v) { return '+' + v + '% fuel'; } },
-                { name: 'Jetpack cell', icon: 'pack', color: '#f58f33', what: 'Suit',
-                  fx: function (v) { return '+' + v + '% jetpack fuel'; } },
-                { name: 'Laser focus', icon: 'lens', color: '#ffb27a', what: 'Tool',
-                  fx: function (v) { return '+' + v + '% mining speed'; } },
-                { name: 'Cutter coil', icon: 'coil', color: '#8fffe0', what: 'Tool',
-                  fx: function (v) { return '+' + v + '% digging speed'; } },
-                { name: 'Cargo bay', icon: 'crate', color: '#b9ad9c', what: 'Ship',
-                  fx: function (v) { return '+' + v + (v === 1 ? ' cow' : ' cows') + ' in the hold'; } }
+                { name: 'Fuel tank', icon: 'tank', color: '#50c878', group: 'Ship',
+                  fx: function (v, l) { return l === 0 ? 'stock tank' : '+' + v + '% fuel: reaches further in one hop'; } },
+                { name: 'Cargo bay', icon: 'crate', color: '#b9ad9c', group: 'Ship',
+                  fx: function (v, l) { return 'hold takes ' + v + ' items and ' + (3 + l) + ' cows'; } },
+                { name: 'Star drive', icon: 'drive', color: '#c9a8ff', group: 'Ship',
+                  fx: function (v, l) { return l === 0 ? 'not built' : 'jump to the next star (J, clear of every world)'; } },
+                { name: 'Seals', icon: 'seal', color: '#7fd3ff', group: 'Suit',
+                  fx: function (v, l) { return l === 0 ? 'stock suit' : 'the suit lasts ' + v + '× as long'; } },
+                { name: 'Pack', icon: 'bag', color: '#e3c48f', group: 'Suit',
+                  fx: function (v) { return 'carries ' + v + ' items'; } },
+                { name: 'Jetpack cell', icon: 'pack', color: '#f58f33', group: 'Suit',
+                  fx: function (v, l) { return l === 0 ? 'stock jetpack' : '+' + v + '% jetpack fuel'; } },
+                { name: 'Terrain cutter', icon: 'coil', color: '#8fffe0', group: 'Tool',
+                  fx: function (v, l) { return l === 0 ? 'not owned' : (l === 1 ? 'digs (Q to switch)' : '+' + v + '% digging speed'); } },
+                { name: 'Mining laser', icon: 'lens', color: '#ffb27a', group: 'Tool',
+                  fx: function (v, l) { return l === 0 ? 'stock: too weak for gold' : 'mines gold, +' + v + '% speed'; } },
+                { name: 'Scanner', icon: 'radar', color: '#9effa8', group: 'Tool',
+                  fx: function (v, l) { return l === 0 ? 'not owned' : 'C: shows ore through the rock'; } }
             ];
+            var LEVEL = ['', ' I', ' II', ' III'];
+            // A level's name: the laser you start with is the first (so the
+            // first one you build is II); the cutter's first level is the
+            // cutter itself.
+            function levelName(id, l) {
+                if (id === 7) return l > 0 ? LEVEL[l + 1] : '';
+                if (id === 6 || id === 2 || id === 8) return l > 1 ? LEVEL[l] : '';
+                return LEVEL[l] || '';
+            }
+            // Where each material comes from, for one you have never held.
+            var WHERE = {
+                0: 'plants, cut with the mining laser', 1: 'rocks on the ground, and ore just under it',
+                9: 'the formations in natural caves (under mesas)', 10: 'natural caves: glowing mushrooms',
+                11: 'deep underground and in deep caves; needs Laser II'
+            };
             // A cow from the hold, as a thing to sell (Trade::COW).
             var COW_ID = 100;
             var COW_ITEM = { name: 'Cow', kind: 'Livestock', icon: 'cow', color: '#d9d1c7' };
@@ -952,12 +1170,22 @@
             window.showTrade = function (json) {
                 var d = JSON.parse(json);
                 var M = window.Module;
-                document.getElementById('trade-who').textContent = d.keeper + ' \u00b7 ' + d.world;
+                var found = {};
+                (d.found || []).forEach(function (f) { found[f.id] = f; });
+                function whereFrom(id) {
+                    if (WHERE[id]) return WHERE[id];
+                    var f = found[id];
+                    return f && f.body ? 'on ' + f.body + (f.kind ? ' (' + f.kind.toLowerCase() + ')' : '') : 'somewhere in this system';
+                }
+                document.getElementById('trade-who').textContent = d.keeper + ' · ' + d.world;
                 window.setCredits(d.credits);
-                document.getElementById('trade-alien').textContent = '\u201c' + d.say + '\u201d';
+                document.getElementById('trade-alien').textContent = '“' + d.say + '”';
                 var wantItem = ITEMS[d.want];
                 document.getElementById('trade-line').textContent = LINES[d.line % LINES.length] +
                     (wantItem ? ' We are short of ' + wantItem.name.toLowerCase() + '.' : '');
+                document.getElementById('trade-holdnote').textContent = d.hold
+                    ? 'Your ship is parked close by: trading from the pack and the hold.'
+                    : 'Your ship is not parked close by: trading from your pack only.';
 
                 // What you can sell them.
                 var sell = document.getElementById('trade-sell');
@@ -966,41 +1194,81 @@
                 d.sell.forEach(function (r) {
                     var item = r.id === COW_ID ? COW_ITEM : ITEMS[r.id];
                     if (!item) return;
-                    if (r.id !== COW_ID) total += r.n * r.p;
-                    var trend = r.t > 0 ? '<span class="trade-up">\u25b2 wanted here</span>'
-                              : r.t < 0 ? '<span class="trade-down">\u25bc common here</span>' : '';
-                    var row = tradeRow(item, item.name + '<span class="qty">\u00d7' + r.n + '</span>', cr(r.p) + ' each' + trend);
+                    var n = r.pack + r.hold;
+                    if (r.id !== COW_ID && r.id !== 0) total += n * r.p;
+                    var trend = r.t > 0 ? '<span class="trade-up">▲ wanted here</span>'
+                              : r.t < 0 ? '<span class="trade-down">▼ common here</span>' : '';
+                    var where = r.hold > 0 && r.pack > 0 ? ' <span class="qty">(' + r.hold + ' in hold)</span>'
+                              : r.hold > 0 ? ' <span class="qty">(in hold)</span>' : '';
+                    var row = tradeRow(item, item.name + '<span class="qty">×' + n + '</span>' + where, cr(r.p) + ' each' + trend);
                     var act = row.querySelector('.act');
                     act.appendChild(tradeButton('Sell 1', true, function () { M._tradeSell(r.id, 1); }));
-                    if (r.n > 1) act.appendChild(tradeButton('All ' + cr('+' + (r.n * r.p)), true, function () { M._tradeSell(r.id, 0); }));
+                    if (n > 1) act.appendChild(tradeButton('All ' + cr('+' + (n * r.p)), true, function () { M._tradeSell(r.id, 0); }));
                     sell.appendChild(row);
                 });
                 if (!d.sell.length) {
-                    sell.innerHTML = '<div class="trade-empty">You have nothing to sell. Cut plants, rocks and crystals with the ' +
-                                     'mining laser, dig for ore, or bring cows in the hold of the ship.</div>';
+                    sell.innerHTML = '<div class="trade-empty">You have nothing to sell here. Cut plants, rocks and crystals with the ' +
+                                     'mining laser, explore the caves, or park the ship close by to sell from its hold' +
+                                     ' (cows included).</div>';
                 }
                 var all = document.getElementById('trade-sell-all');
-                all.innerHTML = 'Sell everything carried ' + cr('+' + total);
+                all.innerHTML = 'Sell everything but carbon ' + cr('+' + total);
                 all.style.display = total > 0 ? '' : 'none';
                 all.onclick = function () { M._tradeSell(-1, 0); all.blur(); };
 
-                // Upgrades.
+                // Equipment, by what it is for.
                 var ups = document.getElementById('trade-upgrades');
                 ups.innerHTML = '';
+                var group = '';
                 d.up.forEach(function (u) {
                     var info = UPGRADES[u.id];
                     if (!info) return;
-                    var pips = '<span class="trade-pips">';
-                    for (var i = 0; i < u.max; i++) pips += '<i' + (i < u.lvl ? ' class="on"' : '') + '></i>';
-                    pips += '</span>';
+                    if (info.group !== group) {
+                        group = info.group;
+                        var h = document.createElement('div');
+                        h.className = 'trade-group';
+                        h.textContent = group;
+                        ups.appendChild(h);
+                    }
+                    var pips = '';
+                    if (u.max > 1) {
+                        pips = '<span class="trade-pips">';
+                        for (var i = 0; i < u.max; i++) pips += '<i' + (i < u.lvl ? ' class="on"' : '') + '></i>';
+                        pips += '</span>';
+                    }
                     var maxed = u.lvl >= u.max;
-                    // "Ship . +30% fuel", and once you own a level: "now +30% . next +60% fuel".
-                    var sub = info.what + ' \u00b7 ' + (maxed ? info.fx(u.now)
-                              : (u.lvl > 0 ? 'now +' + u.now + (u.id === 4 ? '' : '%') + ' \u00b7 next ' : '') + info.fx(u.next));
-                    var row = tradeRow(info, info.name + pips, sub);
+                    var sub = maxed ? info.fx(u.now, u.lvl) : (u.lvl > 0 ? info.fx(u.now, u.lvl) + ' → ' : '') + info.fx(u.next, u.lvl + 1);
+                    var row = tradeRow(info, info.name + levelName(u.id, u.lvl) + pips, sub);
+                    if (!maxed) {
+                        // The recipe: credits and each material, have / need.
+                        var rec = document.createElement('div');
+                        rec.className = 'trade-recipe';
+                        var html = '<span class="mat' + (d.credits >= u.cr ? ' ok' : '') + '">' + cr(u.cr) + '</span>';
+                        u.mats.forEach(function (m) {
+                            var it = ITEMS[m.id];
+                            if (!it) return;
+                            var tip = m.known ? '' : ' title="Found ' + whereFrom(m.id).replace(/"/g, '') + '"';
+                            html += '<span class="mat' + (m.have >= m.need ? ' ok' : '') + (m.known ? '' : ' new') + '"' + tip + '>' +
+                                    iconSvg(it) + it.name + ' <b>' + Math.min(m.have, m.need) + '/' + m.need + '</b></span>';
+                        });
+                        rec.innerHTML = html;
+                        var unknown = u.mats.filter(function (m) { return !m.known && m.have < m.need; });
+                        if (unknown.length > 2) {
+                            var hint3 = document.createElement('div');
+                            hint3.className = 'trade-hint';
+                            hint3.textContent = 'A crystal from every kind of world in this system, and gold from deep down.';
+                            rec.appendChild(hint3);
+                        } else if (unknown.length) {
+                            var hint = document.createElement('div');
+                            hint.className = 'trade-hint';
+                            hint.textContent = unknown.map(function (m) { return ITEMS[m.id].name + ': ' + whereFrom(m.id); }).join(' · ');
+                            rec.appendChild(hint);
+                        }
+                        row.querySelector('div').appendChild(rec);
+                    }
                     var act = row.querySelector('.act');
-                    if (maxed) act.innerHTML = '<span class="trade-max">MAX</span>';
-                    else act.appendChild(tradeButton('Buy ' + cr(u.p), d.credits >= u.p, function () { M._tradeBuyUpgrade(u.id); }));
+                    if (maxed) act.innerHTML = '<span class="trade-max">' + (u.max > 1 ? 'MAX' : 'OWNED') + '</span>';
+                    else act.appendChild(tradeButton('Build', !!u.can, function () { M._tradeBuyUpgrade(u.id); }));
                     ups.appendChild(row);
                 });
 
@@ -1010,10 +1278,11 @@
                 d.goods.forEach(function (g) {
                     var item = ITEMS[g.id];
                     if (!item) return;
-                    var row = tradeRow(item, item.name, g.stock > 0 ? cr(g.p) + ' each \u00b7 ' + g.stock + ' left' : 'Sold out');
+                    var row = tradeRow(item, item.name, g.stock > 0 ? cr(g.p) + ' each · ' + g.stock + ' left' : 'Sold out');
                     var act = row.querySelector('.act');
-                    act.appendChild(tradeButton('Buy 1', g.stock > 0 && d.credits >= g.p, function () { M._tradeBuyGoods(g.slot, 1); }));
-                    if (g.stock >= 5) act.appendChild(tradeButton('Buy 5', d.credits >= g.p * 5, function () { M._tradeBuyGoods(g.slot, 5); }));
+                    var room = d.room > 0;
+                    act.appendChild(tradeButton('Buy 1', room && g.stock > 0 && d.credits >= g.p, function () { M._tradeBuyGoods(g.slot, 1); }));
+                    if (g.stock >= 5) act.appendChild(tradeButton('Buy 5', room && d.credits >= g.p * 5, function () { M._tradeBuyGoods(g.slot, 5); }));
                     goods.appendChild(row);
                 });
                 document.getElementById('trade-goods-note').textContent = 'worth more on other worlds';
@@ -1027,8 +1296,132 @@
             };
             window.notifyUpgrade = function (id, level, value) {
                 var info = UPGRADES[id];
-                if (info) window.showEvent(info.name + ' upgraded', 'Level ' + level + ' \u00b7 ' + info.fx(value));
+                if (!info) return;
+                if (id === 2) window.showEvent('Star drive built', 'Fly clear of every world and press J to jump to the next star.');
+                else window.showEvent(info.name + levelName(id, level) + ' built', info.fx(value, level));
             };
+
+            // ---- Short notices ("The pack is full") -------------------------
+            var noticeTimer = null, noticeText = '';
+            window.showNotice = function (text) {
+                var el = document.getElementById('notice');
+                if (text !== noticeText || !el.classList.contains('show')) {
+                    noticeText = text;
+                    el.textContent = text;
+                }
+                el.classList.add('show');
+                clearTimeout(noticeTimer);
+                noticeTimer = setTimeout(function () { el.classList.remove('show'); }, 2400);
+            };
+
+            // ---- The objective line, the suit, the pack, the hold ------------
+            window.setObjective = function (text) {
+                var el = document.getElementById('hud-obj');
+                el.style.display = text ? 'block' : 'none';
+                document.getElementById('hud-obj-text').textContent = text;
+            };
+            var HAZARDS = ['Breathable', 'No air', 'Cold', 'Heat', 'Toxic air'];
+            window.updateGame = function (suit, left, hazard, onFoot, packN, packMax, holdN, holdMax, cows, cowMax, warp, jet, dry) {
+                document.getElementById('hud-hold').textContent = holdN + '/' + holdMax + '  ·  cows ' + cows + '/' + cowMax;
+                var foot = document.getElementById('hud-foot');
+                foot.style.display = onFoot ? 'block' : 'none';
+                if (onFoot) {
+                    var pct = Math.max(0, Math.min(1, suit));
+                    var fill = document.getElementById('hud-suit-fill');
+                    fill.style.width = (pct * 100) + '%';
+                    fill.style.background = pct > 0.5 ? '#7fd3ff' : pct > 0.25 ? '#e6a23c' : '#e05a4a';
+                    var t = left < 0 ? HAZARDS[hazard] : HAZARDS[hazard] + ' · ' + Math.floor(left / 60) + ':' + ('0' + Math.floor(left % 60)).slice(-2);
+                    document.getElementById('hud-suit').textContent = t;
+                    document.getElementById('hud-suit-label').classList.toggle('warn', left >= 0 && pct < 0.25);
+                    document.getElementById('hud-pack').textContent = packN + '/' + packMax;
+                    document.getElementById('hud-pack').style.color = packN >= packMax ? '#ff9a84' : '';
+                    document.getElementById('hud-jet-fill').style.width = (Math.max(0, Math.min(1, jet)) * 100) + '%';
+                }
+                var wr = document.getElementById('hud-warp-row');
+                wr.style.display = warp > 1 ? 'flex' : 'none';
+                document.getElementById('hud-warp').textContent = '×' + warp;
+                dryTank = !!dry;
+            };
+            var dryTank = false;
+
+            // ---- The jump ----------------------------------------------------
+            window.startJump = function () {
+                document.getElementById('jumpfx').classList.add('go');
+            };
+
+            // ---- The front door ------------------------------------------------
+            var titleOpen = false;
+            window.showTitle = function (hasSave) {
+                var M = window.Module;
+                var q = new URLSearchParams(window.location.search);
+                var carryOn = false, wasOnline = false;
+                try {
+                    carryOn = sessionStorage.getItem('visitor:continue') === '1';
+                    wasOnline = sessionStorage.getItem('visitor:online') === '1';
+                    sessionStorage.removeItem('visitor:continue');
+                } catch (e) {}
+                // Arriving through a jump: carry on (online again if you were).
+                if (carryOn) {
+                    if (wasOnline) window.net.connect(window.net.defaultName(), function (ok) { M._gameStart(hasSave ? 1 : 0); });
+                    else setTimeout(function () { M._gameStart(hasSave ? 1 : 0); }, 0);
+                    return;
+                }
+                // The capture rig and tests skip it into a fresh game;
+                // ?online=Name joins the server straight away (tests too).
+                if (q.has('notitle')) {
+                    if (q.get('online')) window.net.connect(q.get('online'), function () { M._gameStart(0); });
+                    else setTimeout(function () { M._gameStart(0); }, 0);
+                    return;
+                }
+                titleOpen = true;
+                var el = document.getElementById('title');
+                el.classList.add('open');
+                var cont = document.getElementById('title-continue');
+                var fresh = document.getElementById('title-new');
+                var note = document.getElementById('title-note');
+                var savedElsewhere = !hasSave && window.SAVE_SEED && window.SAVE_SEED !== window.GAME_SEED;
+                cont.style.display = hasSave || savedElsewhere ? '' : 'none';
+                note.textContent = savedElsewhere ? 'Your saved game is in another star system (this link names system ' + window.GAME_SEED + ').' : '';
+                function close() { titleOpen = false; el.classList.remove('open'); document.getElementById('canvas').focus(); }
+                cont.onclick = function () {
+                    if (savedElsewhere) {
+                        var url = new URL(window.location.href);
+                        url.searchParams.delete('seed');
+                        window.location.href = url.toString();
+                        return;
+                    }
+                    close();
+                    M._gameStart(1);
+                };
+                fresh.onclick = function () {
+                    if ((hasSave || savedElsewhere) && !window.confirm('Start a new game? Your saved game will be lost.')) return;
+                    close();
+                    M._gameStart(0);
+                };
+                // Online: the same system (this seed) with whoever else is in it.
+                var nameEl = document.getElementById('title-name');
+                var online = document.getElementById('title-online');
+                nameEl.value = window.net.defaultName();
+                nameEl.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') online.click(); });
+                nameEl.addEventListener('keyup', function (e) { e.stopPropagation(); });
+                online.onclick = function () {
+                    online.disabled = true;
+                    online.textContent = 'Connecting\u2026';
+                    note.textContent = '';
+                    window.net.connect(nameEl.value, function (ok, why) {
+                        if (!ok) {
+                            online.disabled = false;
+                            online.textContent = 'Play online';
+                            note.textContent = why || 'Could not reach the server.';
+                            return;
+                        }
+                        close();
+                        M._gameStart(hasSave ? 1 : 0);
+                    });
+                };
+                (hasSave ? cont : fresh).focus();
+            };
+
             // "E  Trade with Zuvi": what the interact key does where you stand ('' = nothing).
             window.setPrompt = function (text) {
                 var el = document.getElementById('prompt');
@@ -1193,7 +1586,7 @@
                     toastEl.style.display = 'none';
                 }
                 if (enteredSpacewalk && !spacewalkToastDismissed) {
-                    showToast('Spacewalking', 'A/D walk, W jump, Space jetpack. In water, hold W to swim up and S to dive. Hold the mouse button to fire the tool at the cursor; Q switches between the mining laser (plants, rocks, crystals, ore) and the terrain cutter (digs; it cannot cut buried ore, so when it stops at some, take that out with the laser). Tab opens your inventory. E re-enters the ship when you are close, and trades with the locals at one of their stalls (the HUD points to the nearest).');
+                    showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor; once you own a terrain cutter, Q switches to it. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.');
                 }
                 wasSpacewalking = !!spacewalking;
                 // On foot the pointer aims the hand tool, and the HUD says which mode it is in.
@@ -1210,8 +1603,6 @@
                     frac > 0.5 ? '#50c878' : frac > 0.2 ? '#e6a23c' : '#e05a4a';
                 altEl.textContent = Math.round(altitude);
                 velEl.textContent = velocity.toFixed(1);
-                cargoEl.textContent = cargo + '/' + maxCargo;
-                scoreEl.textContent = score;
 
                 if (state === 1) {
                     statusEl.style.color = '#7fe3a0';
@@ -1227,13 +1618,211 @@
                     statusEl.textContent = 'CRASHED';
                     statusEl.style.color = '#ff7a6c';
                     msgEl.style.display = 'block';
-                    msgEl.innerHTML = 'CRASHED<div class="sub">press R to restart</div>';
+                    msgEl.innerHTML = 'CRASHED<div class="sub">your cargo is lost &nbsp;&middot;&nbsp; R to be rescued</div>';
+                } else if (dryTank) {
+                    statusEl.textContent = 'NO FUEL';
+                    statusEl.style.color = '#ff7a6c';
+                    msgEl.style.display = 'block';
+                    msgEl.innerHTML = 'OUT OF FUEL<div class="sub">R to call for a rescue (your cargo is lost)</div>';
                 } else {
                     statusEl.textContent = 'FLYING';
                     statusEl.style.color = '#e8eef5';
                     msgEl.style.display = 'none';
                 }
             };
+        })();
+    </script>
+
+    <script>
+        // ---- Multiplayer: the WebSocket to server/server.mjs -------------------
+        // One room per star system (this page's seed). The server sends a
+        // clock, the log of every change made to the world so far, and the
+        // states of the players at the same world; main.cpp does the rest
+        // (Net in main.cpp). The server is ?server=ws://host:port; else, on a
+        // local page, port 9001 of the page's own host (server/server.mjs);
+        // else the hosted one (worker/, a Cloudflare Worker).
+        //
+        // Every message the hosted server receives counts against its free
+        // daily allowance, so: changes to the world ride along with the
+        // state, a state that has not changed is only repeated once a second,
+        // and the clock is pinged often only until it settles.
+        var HOSTED_SERVER = 'wss://visitor-server.team-channel.workers.dev';   // worker/, on Cloudflare
+        window.net = (function () {
+            var ws = null, ready = false, myId = -1, offset = 0, bestRtt = 1e9, pingTimer = null, pings = 0;
+            var names = {}, roster = [], myPlanet = -1;
+            var queue = [], queueTimer = null, lastState = null, lastPlanet = -1, lastSent = 0, logsLeft = 0;
+            // The state's position fields (see Net::sendState in main.cpp).
+            var POS = {}; [1, 2, 8, 9, 17, 18, 24, 25].forEach(function (k) { POS[k] = 1; });
+            function now() { return performance.now(); }
+            function base() {
+                var q = new URLSearchParams(window.location.search).get('server');
+                if (q) return q;
+                var host = window.location.hostname;
+                var local = !host || host === 'localhost' || host === '127.0.0.1' || /^(10|192\.168)\./.test(host);
+                if (HOSTED_SERVER && !local) return HOSTED_SERVER;
+                return (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + (host || 'localhost') + ':9001';
+            }
+            function url() {
+                // The room is picked by the address (the hosted server routes on it).
+                var b = base();
+                return b + (b.indexOf('?') < 0 ? '?' : '&') + 'seed=' + (window.GAME_SEED >>> 0);
+            }
+            function flushOps() {
+                clearTimeout(queueTimer); queueTimer = null;
+                if (queue.length && ready && ws.readyState === 1) ws.send(JSON.stringify({ t: 'ops', o: queue }));
+                queue = [];
+            }
+            function op(o) {
+                // [time, kind, planet, a, b, c, d]
+                var M = window.Module, age = Math.max(0, (api.clockMs() - o[0]) / 1000);
+                M._netOp(o[1] | 0, o[2] | 0, +o[3] || 0, +o[4] || 0, +o[5] || 0, +o[6] || 0, age);
+            }
+            function showRoster() {
+                var row = document.getElementById('hud-online-row');
+                if (!ready) { row.style.display = 'none'; return; }
+                row.style.display = 'flex';
+                var here = roster.filter(function (r) { return r.id !== myId && r.p === myPlanet; }).length;
+                document.getElementById('hud-online').textContent =
+                    roster.length + (roster.length === 1 ? ' player' : ' players') + (here ? ' \u00b7 ' + here + ' here' : '');
+            }
+            var api = {
+                online: function () { return ready; },
+                clockMs: function () { return now() + offset; },
+                defaultName: function () {
+                    try { return localStorage.getItem('visitor:name') || ''; } catch (e) { return ''; }
+                },
+                connect: function (name, done) {
+                    name = String(name || '').trim().slice(0, 20) || 'Visitor';
+                    try { localStorage.setItem('visitor:name', name); } catch (e) {}
+                    var finished = false;
+                    function finish(ok, why) { if (!finished) { finished = true; done(ok, why); } }
+                    // The world is all here: start playing, and keep the clock in step
+                    // (every 2 s at first, every 10 s once it has settled).
+                    function welcomed() {
+                        function ping() {
+                            if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'ping', c: now() }));
+                            pingTimer = setTimeout(ping, ++pings < 10 ? 2000 : 10000);
+                        }
+                        ping();
+                        showRoster();
+                        finish(true);
+                    }
+                    try { ws = new WebSocket(url()); } catch (e) { finish(false, 'Bad server address.'); return; }
+                    var timeout = setTimeout(function () { finish(false, 'No answer from ' + url() + '.'); try { ws.close(); } catch (e) {} }, 6000);
+                    ws.onopen = function () {
+                        ws.send(JSON.stringify({ t: 'join', seed: window.GAME_SEED, name: name }));
+                    };
+                    ws.onerror = function () { clearTimeout(timeout); finish(false, 'Could not reach ' + url() + '.'); };
+                    ws.onclose = function () {
+                        clearTimeout(timeout);
+                        clearTimeout(pingTimer);
+                        clearTimeout(queueTimer); queueTimer = null; queue = [];
+                        finish(false, 'The server closed the connection.');
+                        if (ready) {
+                            ready = false;
+                            window.Module._netLost();
+                            if (window.showNotice) window.showNotice('Lost the server: playing alone');
+                            try { sessionStorage.removeItem('visitor:online'); } catch (e) {}
+                            showRoster();
+                        }
+                    };
+                    ws.onmessage = function (ev) {
+                        var m;
+                        try { m = JSON.parse(ev.data); } catch (e) { return; }
+                        var M = window.Module;
+                        switch (m.t) {
+                        case 'welcome':
+                            clearTimeout(timeout);
+                            myId = m.id;
+                            offset = m.clock - now();
+                            ready = true;
+                            try { sessionStorage.setItem('visitor:online', '1'); } catch (e) {}
+                            M._netWelcome(m.id, api.clockMs());
+                            for (var i = 0; i < m.ops.length; i++) op(m.ops[i]);
+                            // The rest of the world log may follow, in batches.
+                            logsLeft = m.logs | 0;
+                            if (!logsLeft) welcomed();
+                            break;
+                        case 'log':
+                            for (var j = 0; j < m.ops.length; j++) op(m.ops[j]);
+                            if (--logsLeft === 0) welcomed();
+                            break;
+                        case 'pong': {
+                            // Keep the offset from the fastest round trip seen.
+                            var rtt = now() - m.c;
+                            if (rtt <= bestRtt * 1.25) {
+                                bestRtt = Math.min(bestRtt, rtt);
+                                offset = m.s + rtt / 2 - now();
+                            }
+                            break;
+                        }
+                        case 's':
+                            for (var k = 0; k < m.d.length; k++) M._netPeerSet(k, +m.d[k] || 0);
+                            M._netPeerCommit(m.id, m.p | 0);
+                            break;
+                        case 'op':
+                            if (m.id !== myId) op(m.o);
+                            break;
+                        case 'bye':
+                            M._netBye(m.id);
+                            break;
+                        case 'roster': {
+                            var was = names;
+                            names = {};
+                            roster = m.players || [];
+                            roster.forEach(function (r) { names[r.id] = r.name; });
+                            if (ready) roster.forEach(function (r) {
+                                if (r.id !== myId && !was[r.id] && window.showNotice) window.showNotice(r.name + ' is here, in this system');
+                            });
+                            showRoster();
+                            break;
+                        }
+                        }
+                    };
+                },
+                sendState: function (planet, d) {
+                    if (!ready || ws.readyState !== 1) return;
+                    myPlanet = planet;
+                    for (var i = 0; i < d.length; i++) d[i] = Math.round(d[i] * 100) / 100;
+                    // Unchanged: every number as last sent, the positions to within
+                    // half a unit (a parked ship creeps by hundredths as it rides
+                    // its world).
+                    var same = lastState && planet === lastPlanet && d.length === lastState.length;
+                    for (var k = 0; same && k < d.length; k++)
+                        same = POS[k] ? Math.abs(d[k] - lastState[k]) < 0.5 : d[k] === lastState[k];
+                    if (same && !queue.length && now() - lastSent < 1000) return;
+                    lastState = d.slice(); lastPlanet = planet; lastSent = now();
+                    var m = { t: 's', p: planet, d: d };
+                    if (queue.length) { m.o = queue; queue = []; clearTimeout(queueTimer); queueTimer = null; }
+                    ws.send(JSON.stringify(m));
+                },
+                // A change to the world: it goes with the next state (a tenth of
+                // a second at most), or on its own if no state is going.
+                op: function (kind, a, b, c, d, e) {
+                    if (!ready || ws.readyState !== 1) return;
+                    queue.push([kind, a, b, c, d, e]);
+                    if (!queueTimer) queueTimer = setTimeout(flushOps, 250);
+                },
+                name: function (id) { return names[id] || 'Visitor'; }
+            };
+            // Name tags: "id,x,y;" from main.cpp each time they move.
+            var tags = {};
+            window.setPeerLabels = function (packed) {
+                var layer = document.getElementById('peer-labels');
+                var seen = {};
+                (packed ? packed.split(';') : []).forEach(function (rec) {
+                    if (!rec) return;
+                    var f = rec.split(',');
+                    var id = f[0], el = tags[id];
+                    if (!el) { el = tags[id] = document.createElement('div'); el.className = 'tag'; layer.appendChild(el); }
+                    el.textContent = api.name(+id);
+                    el.style.left = f[1] + 'px';
+                    el.style.top = f[2] + 'px';
+                    seen[id] = true;
+                });
+                for (var id in tags) if (!seen[id]) { tags[id].remove(); delete tags[id]; }
+            };
+            return api;
         })();
     </script>
 

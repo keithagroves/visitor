@@ -367,6 +367,49 @@ StarSystem generateSystem(unsigned int seed, std::vector<Planet>& planets) {
         b.reach = b.hasMoon ? b.moonOrbit + b.moonRadius * 2.0f : b.radius * 1.6f;
     }
 
+    // Every system must be winnable (docs/gameplay.md): the equipment ladder
+    // asks for two "far" crystals — kinds other than the home world's and the
+    // moons' — so at least two of the other planets must be neither
+    // temperate nor bare rock. Where the draw above came up short, bare-rock
+    // planets are turned into kinds the system does not have yet, nearest the
+    // home world first.
+    {
+        auto farKinds = [&]() {
+            int n = 0;
+            std::vector<Arch> seen;
+            for (int i = 0; i < planetCount; i++) {
+                Arch a = specs[i].arch;
+                if (i == homeSlot || a == Arch::Barren || a == Arch::Temperate) continue;
+                bool dup = false;
+                for (Arch u : seen) dup = dup || u == a;
+                if (!dup) { seen.push_back(a); n++; }
+            }
+            return n;
+        };
+        for (int dist = 1; dist < planetCount && farKinds() < 2; dist++) {
+            for (int side = -1; side <= 1 && farKinds() < 2; side += 2) {
+                int i = homeSlot + side * dist;
+                if (i < 0 || i >= planetCount || specs[i].arch != Arch::Barren) continue;
+                const Arch pool[] = {Arch::Desert, Arch::Ice, Arch::Volcanic, Arch::Jungle, Arch::Exotic};
+                Arch pick = Arch::Desert;
+                for (int attempt = 0; attempt < 12; attempt++) {
+                    pick = pool[rng.irange(0, 4)];
+                    bool used = false;
+                    for (int k = 0; k < planetCount; k++) used = used || specs[k].arch == pick;
+                    if (!used) break;
+                }
+                BodySpec& b = specs[i];
+                b.arch = pick;
+                b.radius = rng.range(14000.0f, 24000.0f);
+                b.noise = b.radius * rng.range(0.050f, 0.080f);
+                b.points = clampi((int)(b.radius / 125.0f), 110, 255);
+                b.gSurface = std::fmin(0.105f, 0.1f * powf(b.radius / 32000.0f, 0.6f) * rng.range(0.85f, 1.15f));
+                if (b.hasMoon) b.moonOrbit = std::fmax(b.moonOrbit, b.radius * 3.0f);
+                b.reach = b.hasMoon ? b.moonOrbit + b.moonRadius * 2.0f : b.radius * 1.6f;
+            }
+        }
+    }
+
     // The shaders handle SHADER_MAX_PLANETS (10) bodies including the star:
     // trim moons from the outside in until the system fits.
     auto bodyCount = [&]() {

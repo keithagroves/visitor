@@ -28,7 +28,8 @@ sequenceDiagram
 
     Loop->>JS: syncDebugFromJS() — pull live tunables into gDebug
     Loop->>In: read edge keys (E enter/exit, R restart, M map, thrust liftoff)
-    Loop->>P: updateOrbit() for every body (parents first), re-pick dominant body
+    Note over Loop: the title screen freezes everything (dt = 0) until gameStart
+    Loop->>P: updateOrbit() for every body (parents first), re-pick dominant body — repeated 4 or 16 times a frame under time warp (T), with the ship's physics
     Loop->>Cows: carry cows by the home planet's orbitStep
     alt state == PLAYING
         Loop->>In: pollInput()
@@ -49,6 +50,7 @@ sequenceDiagram
         Loop->>A: update(planet, timeScale)
     end
     Loop->>P: Outposts::update() — the locals wander, look, wave; which trader is in reach (E trades)
+    Loop->>A: updateSuit() — the suit meter drains or refills; F breathes carbon, C scans, J jumps, the herd regrows
     Loop->>P: updateDiscovery() — chart worlds on approach
     Loop->>V: updateZoom() + updateView() — framing, follow, auto-roll, map
     Loop->>A: updateLaser() — aim at the cursor: harvest, or cut terrain (after the camera)
@@ -78,7 +80,7 @@ flowchart LR
     WaterF --> Veil["3c0. Front-ground veil<br/>over dug holes (body pass, veil mode)"]
     Veil --> WaterB["3c0'. Water over the bed in front<br/>(water pass, mode 2)"]
     WaterB --> Near["3c1. Harvestables in front<br/>+ mining laser, sparks, chips, spray"]
-    Near --> Fg["3d. Foreground band<br/>(screen-anchored)"]
+    Near --> Fg["3d. Foreground band<br/>(screen-anchored)<br/>+ scanner marks over it"]
     Fg --> Clouds["4. Clouds<br/>FBM band"]
     Clouds --> Top["5. Motes + vignette"]
     Top --> HUD["updateHUD() / updateNav() → DOM overlay"]

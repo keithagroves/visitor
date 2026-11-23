@@ -1,0 +1,15 @@
+// The hosted multiplayer server (see src/index.js). Free plan:
+//   npx wrangler login     (once: a free Cloudflare account)
+//   npm run deploy         -> wss://visitor-server.<your-subdomain>.workers.dev
+// Run it locally with `npm run dev` (ws://localhost:8787, no account needed).
+{
+    "name": "visitor-server",
+    "main": "src/index.js",
+    "compatibility_date": "2025-11-01",
+    "durable_objects": {
+        "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+    },
+    // new_sqlite_classes: the SQLite storage backend, the one the free plan has.
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+    "observability": { "enabled": true }
+}

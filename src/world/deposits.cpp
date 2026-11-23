@@ -228,6 +228,7 @@ int reveal(Planet& p, const Clump& c) {
     o.hp = 1.0f;
     o.heat = 0.0f;
     o.found = 0.0f;
+    o.id = c.id;
     p.ores.push_back(o);
     int idx = (int)p.ores.size() - 1;
     p.oreSeen[c.id] = idx;
@@ -457,6 +458,21 @@ CarveMap::Rect extract(Planet& p, int idx) {
     CarveMap::Rect rc = p.dig(world, r);
     revealNear(p, world, r);
     return rc;
+}
+
+int scan(const Planet& p, Vec2 world, float range, ScanHit* out, int maxCount) {
+    Vec2 local = world - p.center;
+    int n = 0;
+    forClumps(p, local, range, [&](const Clump& c) {
+        if (n >= maxCount || (c.local - local).length() > range) return;
+        int s = seen(p, c.id);
+        if (s == -1 || (s == -2 && hollow(p, c))) return;
+        if (s >= 0 && p.ores[s].mined) return;
+        Ore o{};
+        o.local = c.local;
+        out[n++] = ScanHit{center(p, o), c.kind, c.size};
+    });
+    return n;
 }
 
 int revealAll(Planet& p, Vec2 world, float range) {

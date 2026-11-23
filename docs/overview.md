@@ -109,10 +109,16 @@ own flow:
   banners, the map's name labels, and the debug panel (sliders, "New random
   system", per-world "Warp to" buttons).
 - **Controls** — W/Up thrust, A/D rotate, Space tractor beam, E exit/enter the
-  ship (and, on foot beside a trader's stall, trade), M system map, wheel or +/- zoom, R restart after a crash. On foot:
+  ship (and, on foot beside a trader's stall, trade), M system map, T time
+  warp in open space, J jump (with a star drive), R rescue after a crash, wheel or +/- zoom, R restart after a crash. On foot:
   A/D walk (and steer in the air), W jump, Space jetpack, hold the mouse
   button to fire the hand tool at the cursor, Q to switch it between mining
-  laser and terrain cutter, Tab (or I) for the inventory.
+  laser and terrain cutter (once bought), F breathe carbon into the suit, C
+  scan for ore, Tab (or I) for the pack and the hold. A title screen offers
+  Continue / New game / Play online; the game saves itself (localStorage).
+- **Multiplayer** — [server/](../server/) is a uWebSockets.js room server:
+  one room per seed, a shared clock for the orbits, and an ordered log of
+  every change to the world. See [core](architecture/core.md) (Multiplayer).
 
 ## Building & running
 

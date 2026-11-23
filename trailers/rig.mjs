@@ -100,7 +100,7 @@ export const VT_INIT = String.raw`(() => {
 
 // Everything on the page that is debug/dev chrome rather than game. The
 // pickup feed, inventory, discovery banner and world labels stay.
-const CLEAN_CSS = `#hud, #debug-toggle, #debug-panel, #toast, #message, #status { display: none !important; }`;
+const CLEAN_CSS = `#hud, #debug-toggle, #debug-panel, #toast, #message, #status, #notice, #title { display: none !important; }`;
 
 const KEYS = { w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD', e: 'KeyE', q: 'KeyQ', m: 'KeyM', r: 'KeyR', i: 'KeyI',
                space: 'Space', tab: 'Tab', esc: 'Escape', left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp' };
@@ -134,7 +134,8 @@ export class Rig {
     // to hide on top of the dev chrome (e.g. '#event' for no banners);
     // `css`: extra styles for the video.
     async goto(seed, { clean = true, hide = [], css = '' } = {}) {
-        await this.page.goto(`${this.base}/game.html?seed=${seed}`);
+        // notitle: straight into a new game (no title screen, no saved game).
+        await this.page.goto(`${this.base}/game.html?seed=${seed}&notitle`);
         await this.page.waitForFunction(() => typeof Module !== 'undefined' && Module._debugDump &&
             document.getElementById('status').style.display === 'none' && window.DBG, null, { timeout: 30000 });
         if (clean) await this.page.addStyleTag({ content: CLEAN_CSS });

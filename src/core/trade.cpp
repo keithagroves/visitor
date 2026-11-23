@@ -1,13 +1,11 @@
 #include "trade.h"
+#include <algorithm>
 #include <cmath>
 
 namespace Trade {
 
 namespace {
 
-// Item ids, as App::inventory: 0 carbon, 1 ferrite, 2..8 the crystal of each
-// kind of world (2 + Planet::archetype), 9 calcite, 10 glowcap, 11 gold.
-const int CARBON = 0, FERRITE = 1, CRYSTAL0 = 2, CRYSTAL_END = 9, CALCITE = 9, GLOWCAP = 10, GOLD = 11;
 
 // A stable 0..1 number for (post, thing).
 float hash01(unsigned int seed, unsigned int salt) {
@@ -18,7 +16,6 @@ float hash01(unsigned int seed, unsigned int salt) {
     return (h & 0xffffffu) * (1.0f / 16777216.0f);
 }
 
-bool isCrystal(int item) { return item >= CRYSTAL0 && item < CRYSTAL_END; }
 
 // How much this post wants an item: the multiplier on its base value.
 float demand(const Planet& p, const Planet::Outpost& o, int item) {
@@ -42,13 +39,46 @@ float demand(const Planet& p, const Planet::Outpost& o, int item) {
     return m;
 }
 
-struct UpgradeInfo { int levels; int price[4]; };
+// Recipes name some materials by role; System says which crystal each is.
+constexpr int HOME = -1, MOON = -2, FAR_A = -3, FAR_B = -4, EVERY = -5;
+
+struct Step { int credits; Cost mats[3]; };
+struct UpgradeInfo { int levels; Step step[3]; };
+// The ladder (docs/gameplay.md). Tier 0: ferrite. Tier I: calcite, glowcap,
+// the home crystal. Then the moon's crystal (Laser II, the scanner), gold
+// (tier II) and the far crystals (tier III).
 const UpgradeInfo kUpgrades[UPGRADES] = {
-    {4, {200, 450, 900, 1600}},    // FuelTank
-    {3, {150, 350, 750, 0}},       // Jetpack
-    {3, {180, 420, 850, 0}},       // Laser
-    {3, {220, 480, 950, 0}},       // Cutter
-    {3, {250, 550, 1100, 0}},      // CargoBay
+    // FuelTank
+    {3, {{250,  {{FERRITE, 12}, {CALCITE, 8}, {HOME, 6}}},
+         {700,  {{GOLD, 12}, {MOON, 10}, {0, 0}}},
+         {1500, {{FAR_A, 12}, {GOLD, 15}, {0, 0}}}}},
+    // CargoBay
+    {3, {{200,  {{FERRITE, 15}, {CARBON, 10}, {0, 0}}},
+         {600,  {{GOLD, 8}, {FERRITE, 15}, {0, 0}}},
+         {1300, {{FAR_B, 12}, {GOLD, 10}, {0, 0}}}}},
+    // StarDrive: ten of every kind of crystal in the system, and gold
+    {1, {{3000, {{EVERY, 10}, {GOLD, 30}, {0, 0}}}}},
+    // Seals
+    {3, {{250,  {{HOME, 10}, {GLOWCAP, 6}, {0, 0}}},
+         {700,  {{GOLD, 12}, {MOON, 10}, {0, 0}}},
+         {1500, {{FAR_A, 15}, {FAR_B, 10}, {0, 0}}}}},
+    // Pack
+    {3, {{150,  {{CARBON, 10}, {CALCITE, 8}, {0, 0}}},
+         {500,  {{GOLD, 8}, {MOON, 10}, {0, 0}}},
+         {1200, {{FAR_A, 10}, {FAR_B, 10}, {0, 0}}}}},
+    // Jetpack
+    {3, {{150,  {{GLOWCAP, 8}, {FERRITE, 10}, {0, 0}}},
+         {500,  {{GOLD, 8}, {MOON, 8}, {0, 0}}},
+         {1100, {{FAR_B, 12}, {GOLD, 8}, {0, 0}}}}},
+    // Cutter: the first thing you buy, then two levels of speed
+    {3, {{150,  {{FERRITE, 10}, {0, 0}, {0, 0}}},
+         {300,  {{CALCITE, 8}, {FERRITE, 10}, {0, 0}}},
+         {800,  {{GOLD, 10}, {FERRITE, 10}, {0, 0}}}}},
+    // Laser: II mines gold
+    {2, {{400,  {{MOON, 12}, {FERRITE, 10}, {0, 0}}},
+         {1500, {{FAR_B, 15}, {GOLD, 15}, {0, 0}}}}},
+    // Scanner
+    {1, {{350,  {{MOON, 10}, {GLOWCAP, 6}, {0, 0}}}}},
 };
 
 }  // namespace
@@ -114,29 +144,89 @@ int goodsStock(Planet::Outpost& o, int slot) {
     return o.stock[slot];
 }
 
+System systemOf(const std::vector<Planet>& planets, int homeIdx) {
+    System sys;
+    const Planet& home = planets[homeIdx];
+    sys.home = crystalOf(home.archetype);
+    sys.moon = crystalOf(6);
+    auto addKind = [&](int item) {
+        for (int k = 0; k < sys.kindCount; k++) if (sys.kinds[k] == item) return;
+        if (sys.kindCount < 7) sys.kinds[sys.kindCount++] = item;
+    };
+    // The far kinds, nearest to the home orbit first.
+    struct Far { int item; float gap; };
+    std::vector<Far> far;
+    for (const Planet& p : planets) {
+        if (p.isSun) continue;
+        int item = crystalOf(p.archetype);
+        addKind(item);
+        if (item == sys.home || item == sys.moon) continue;
+        const Planet* top = &p;      // a moon counts at its planet's distance
+        while (top->orbitParent >= 0 && !planets[top->orbitParent].isSun) top = &planets[top->orbitParent];
+        float gap = fabsf(top->orbitRadius - home.orbitRadius);
+        bool seen = false;
+        for (Far& f : far) if (f.item == item) { f.gap = std::min(f.gap, gap); seen = true; }
+        if (!seen) far.push_back({item, gap});
+    }
+    std::sort(far.begin(), far.end(), [](const Far& a, const Far& b) { return a.gap < b.gap; });
+    sys.farA = far.size() > 0 ? far[0].item : sys.moon;
+    sys.farB = far.size() > 1 ? far[1].item : sys.farA;
+    std::sort(sys.kinds, sys.kinds + sys.kindCount);
+    return sys;
+}
+
 int maxLevel(int upgrade) {
     return upgrade >= 0 && upgrade < UPGRADES ? kUpgrades[upgrade].levels : 0;
 }
 
-int upgradePrice(int upgrade, int level) {
-    if (upgrade < 0 || upgrade >= UPGRADES || level < 0 || level >= kUpgrades[upgrade].levels) return 0;
-    return kUpgrades[upgrade].price[level];
+Recipe recipe(int upgrade, int level, const System& sys) {
+    Recipe r;
+    if (upgrade < 0 || upgrade >= UPGRADES || level < 0 || level >= kUpgrades[upgrade].levels) return r;
+    const Step& st = kUpgrades[upgrade].step[level];
+    r.credits = st.credits;
+    auto add = [&](int item, int n) {
+        for (int k = 0; k < r.matCount; k++)
+            if (r.mats[k].item == item) { r.mats[k].count += n; return; }
+        if (r.matCount < 8) r.mats[r.matCount++] = Cost{item, n};
+    };
+    for (const Cost& c : st.mats) {
+        if (c.count <= 0) continue;
+        switch (c.item) {
+            case HOME:  add(sys.home, c.count); break;
+            case MOON:  add(sys.moon, c.count); break;
+            case FAR_A: add(sys.farA, c.count); break;
+            case FAR_B: add(sys.farB, c.count); break;
+            case EVERY: for (int k = 0; k < sys.kindCount; k++) add(sys.kinds[k], c.count); break;
+            default:    add(c.item, c.count); break;
+        }
+    }
+    return r;
 }
 
-float fuelScale(int level)    { return 1.0f + 0.30f * level; }
+// What the levels do. Tank sizes are tuned so the stock ship reaches the
+// home world's moon and lands there with some to spare, but no other planet
+// (see docs/gameplay.md).
+float fuelScale(int level)    { static const float k[4] = {1.0f, 1.5f, 2.2f, 3.0f}; return k[std::clamp(level, 0, 3)]; }
+int   holdSize(int level)     { return 150 + 100 * level; }
+int   cowStalls(int level)    { return 3 + level; }
+float suitScale(int level)    { return 1.0f + level; }
+int   packSize(int level)     { static const int k[4] = {40, 70, 100, 140}; return k[std::clamp(level, 0, 3)]; }
 float jetpackScale(int level) { return 1.0f + 0.40f * level; }
-float laserScale(int level)   { return 1.0f + 0.40f * level; }
-float cutterScale(int level)  { return 1.0f + 0.35f * level; }
-int   cargoBonus(int level)   { return level; }
+float cutterScale(int level)  { static const float k[4] = {0.0f, 1.0f, 1.35f, 1.75f}; return k[std::clamp(level, 0, 3)]; }
+float laserScale(int level)   { static const float k[3] = {1.0f, 1.4f, 2.0f}; return k[std::clamp(level, 0, 2)]; }
+bool  laserMinesGold(int level) { return level >= 1; }
 
 int effect(int upgrade, int level) {
+    auto pct = [](float x) { return (int)lroundf((x - 1.0f) * 100.0f); };
     switch (upgrade) {
-        case FuelTank: return (int)lroundf((fuelScale(level) - 1.0f) * 100.0f);
-        case Jetpack:  return (int)lroundf((jetpackScale(level) - 1.0f) * 100.0f);
-        case Laser:    return (int)lroundf((laserScale(level) - 1.0f) * 100.0f);
-        case Cutter:   return (int)lroundf((cutterScale(level) - 1.0f) * 100.0f);
-        case CargoBay: return cargoBonus(level);
-        default:       return 0;
+        case FuelTank: return pct(fuelScale(level));
+        case CargoBay: return holdSize(level);
+        case Seals:    return (int)lroundf(suitScale(level));
+        case Pack:     return packSize(level);
+        case Jetpack:  return pct(jetpackScale(level));
+        case Cutter:   return level <= 0 ? 0 : pct(cutterScale(level));
+        case Laser:    return pct(laserScale(level));
+        default:       return level;
     }
 }
 

@@ -48,7 +48,7 @@ flowchart TD
   `activeFieldIdx` tracks the one live destructible field, `stuckIdx` is the
   body a landed or wrecked ship rides along with), the `Lander`, the cow herd, the
   `Astronaut`, the `View`, plus GL handles for the shader passes, the
-  starfield, cargo/score, and timing.
+  starfield, what the player owns (see Progress), and timing.
 - **State machine** — `GameState` is `PLAYING`, `LANDED`, or `CRASHED`.
   `updateContact()` judges ground contact as a safe landing (slow + upright +
   flat, via `terrainFlat()`/`pointInTriangle()`) or a crash. Edge-triggered keys
@@ -81,8 +81,9 @@ flowchart TD
   world, the star's in open space); a dashed ghost ring marks where another
   world will be at closest approach. `drawNavOverlay` fades in when the view
   is far out: orbit rings, marker discs for worlds too small to see, and DOM
-  name labels. `updateDiscovery` charts worlds on approach (+25) and
-  `updateContact` scores first landings (+100).
+  name labels. `updateDiscovery` charts worlds on approach (the locals pay
+  50 credits for the survey) and `onLanded` pays 150 for a first landing.
+  There is no score.
 - **Hand tool** — on foot, holding the mouse button fires the tool at the
   cursor; Q switches its mode. **Terrain cutter:** the beam runs from head
   height toward the cursor and bites the first rock it meets, a small circle
@@ -124,28 +125,99 @@ flowchart TD
   particles and the brackets around a targetable item. **It must run after
   `updateView`**: the cursor is unprojected through the camera, and the world
   moves ~60 units a frame, so last frame's view puts the beam that far off.
+- **Progress** (docs/gameplay.md) — what the player owns lives in `App`:
+  the suit's `pack` (40 items stock), the ship's `hold` (150) and its cow
+  stalls (`cargo`), `credits`, the equipment levels (`upgrades`, by
+  `Trade::Upgrade`), the ladder `flags`, `everHeld` (a bit per item id),
+  the last post traded at and the jump count. `addItem` fills the pack (or
+  the hold); boarding empties the pack into the hold, all but the carbon
+  (`storePack`). The **objective line** (`objective()`) is worked out from
+  that each frame and pushed to the HUD when it changes. **Failing**
+  (`onCrashed`, `rescue`, `blackout`) costs the pack, the hold and the cows,
+  never credits or equipment: R after a crash, or adrift with an empty
+  tank, parks the ship by the last post you traded at. **Saving**
+  (`saveGame` / `readSave` / `applySave`): a flat JSON array in
+  localStorage (`visitor:save`), written on landing, trades, boarding,
+  crashes and blackouts; `parkShip` puts you back where you were parked.
+  The **title screen** holds the simulation still (`titleOpen`) until the
+  page calls `gameStart(carryOn)`. **The suit meter** (`updateSuit`,
+  `hazardRate`): drains by the kind of world (no air, cold, heat, toxic
+  air), the sun at the player's spot and shelter underground, divided by
+  Seals; refills in the ship and at a trader's stall; F burns 5 carbon for
+  a quarter; at 0 the player blacks out. **Scanner** (C, `scanPulse` /
+  `drawScan`, from `Deposits::scan`), **time warp** (T: 4 or 16 simulation
+  steps a frame in open space, out of the air; steering cancels it), **the
+  jump** (J with a star drive, clear of every world: `tryJump` /
+  `finishJump` save the next seed and reload the page into it), and the
+  **herd** grows back one cow at a time out of sight (`updateHerd`).
+  The mining laser's walls are in `updateLaser` (`canTake`): it takes
+  nothing into a full pack, and gold (ore and the caves' veins) needs
+  Laser II.
+- **Multiplayer** (`namespace Net` in main.cpp, `window.net` in shell.html,
+  [server/server.mjs](../../server/server.mjs), or hosted:
+  [worker/src/index.js](../../worker/src/index.js)) — one room per seed.
+  The seed builds the same system on every client,
+  so only two things travel. **States** (`Net::sendState`, 10 Hz: the
+  ship and the astronaut, pose and hand tool, positions RELATIVE to the
+  world you are at) go to the uWS topic of that world only, so you hear
+  about the players in your vicinity; `Net::update` eases the others toward
+  them and `Net::draw` draws them with their own `Lander` / `Astronaut`,
+  name tags via `setPeerLabels`. Fields nobody draws are sent as 0 (the
+  astronaut while aboard, idle animation counters), and the page skips a
+  state that has not changed except once a second, so a player standing
+  still costs one message a second. **World changes** go to everyone in the
+  system and into the server's ordered log, which a joiner replays
+  (`netOp`): every bite dug (`Planet::digHook`, so even a mined clump's
+  pocket goes), a plant cut, a cave formation mined (queued until that
+  world's caves are built here), a clump of ore gone (by its grid id,
+  `Ore::id`), a post's stock. Regrowth timers are wound on by the change's
+  age. **The clock**: orbits are computed from `app.worldFrames`
+  (`Planet::advanceTo`), which online is the server's room clock
+  (ping/pong keeps the offset; a big gap is jumped like the sun-angle pin);
+  alone it just counts up. Time warp is off online. Each player's progress
+  and save stay their own; nothing collides, and other players cannot be
+  hurt. Losing the server leaves you playing alone in the world as it is.
+  The page batches world changes onto the next state message. The address
+  carries `?seed=N`, which is how the hosted server picks the room. A
+  welcome can be followed by `logs` more messages of the log, and play
+  starts once they have all arrived.
+- **The hosted server** ([worker/](../../worker/)) — a Cloudflare Worker
+  routes each socket to a Durable Object named by the seed. The Object uses
+  the WebSocket hibernation API, so each socket's id, name and world are
+  kept in its attachment, not only in memory. The room's clock start and
+  world log are in its SQLite storage, written a batch per row (every 3 s,
+  or 2,000 changes), to stay inside the free plan's 100,000 rows written a
+  day. A pending write keeps the room awake until it is done, so
+  hibernation loses nothing; a redeploy can lose the last 3 s. The stored
+  batches go out to a joiner as they are, one `log` message each, without
+  being parsed. Anyone can open a room for any seed, and the log is capped
+  at 500,000 changes per room, with no compaction yet.
 - **Trading** — the locals keep trading posts on every world
   ([world](world.md): `Outposts`). On foot within `Outposts::TRADE_REACH` of
   a trader, **E** opens the trade panel (`openTrade` → `pushTrade` sends
-  the page one JSON blob: who, what they pay for each thing carried, the
-  upgrades, the goods); E again, Escape, walking off or boarding the ship
-  closes it. When the ship is in reach too, E does whichever is nearer
-  (`wouldTrade`), and the page shows the "E — Trade with …" hint only when
-  E would trade. The panel's buttons call back into `tradeSell`,
-  `tradeBuyUpgrade`, `tradeBuyGoods` and `tradeClose` (exported), which
-  change `App::credits`, `App::inventory`, `App::cargo` (cows in the hold
-  can be sold) and `App::upgrades`, and push the panel again. The rules are
-  [trade.cpp](../../src/core/trade.cpp): an item's base value times the
-  post's **demand** for it — a world's own crystal is cheap there and
-  worth about three times as much on any other kind of world, plant matter
-  is dear where nothing grows, each post is short of one thing, cows fetch
-  more away from home; a post **sells** its world's crystal and one local
-  staple at half as much again as it pays, from a stock that does not
-  refill; and five **upgrades** in levels, same price everywhere — fuel
-  tank (`maxFuel()`), jetpack cell (`Astronaut::jetpackMax`), laser focus
-  (mining speed), cutter coil (bite rate), cargo bay (`maxCargo()`). The
-  mining laser is off while the panel is up. A restart (R) clears credits
-  and upgrades and restocks the stalls.
+  the page one JSON blob: who, whether the hold is in reach, what they pay
+  for each thing you have, every piece of equipment with its recipe —
+  credits and materials, have / need — the goods, and where each of the
+  system's crystals is found); E again, Escape, walking off or boarding
+  the ship closes it. When the ship is in reach too, E does whichever is
+  nearer (`wouldTrade`). A post deals with the ship's hold, cows included,
+  only when the ship is parked within `HOLD_REACH` (600) of the stall
+  (`holdAtPost`); otherwise with the pack alone. The panel's buttons call
+  back into `tradeSell`, `tradeBuyUpgrade` (builds the next level from its
+  recipe), `tradeBuyGoods`, `tradeClose` and, from the inventory panel,
+  `invMove` (pack <-> hold at the ship, or drop); every deal records the
+  post for rescues and saves. The rules are
+  [trade.cpp](../../src/core/trade.cpp): prices are an item's base value
+  times the post's **demand** for it (a world's own crystal is cheap there
+  and worth about three times as much on any other kind of world, plant
+  matter is dear where nothing grows, each post is short of one thing, cows
+  fetch more away from home); a post **sells** its world's crystal and one
+  local staple from a stock that does not refill; and the **equipment
+  ladder** — nine upgrades (fuel tank, cargo bay, star drive; seals, pack,
+  jetpack cell; terrain cutter, mining laser, scanner), each level a recipe
+  of credits plus materials named by role (the home crystal, the moon's,
+  two "far" kinds, every kind) that `Trade::systemOf` resolves for the
+  system being played. The mining laser is off while the panel is up.
 - **Fullscreen shader passes** — GLSL sources and their draw calls are defined
   here: the **planet body** (fills rock from the R16F density-field texture
   with fwidth-smoothed iso-line edges, altitude-banded material, slope lighting
@@ -220,9 +292,12 @@ flowchart TD
   panel stores only sliders that differ from their default, and
   `SUPERSEDED` in shell.html lists replaced defaults so a stale stored copy
   of one doesn't mask a new default.
-- **HUD** — pushes fuel/altitude/speed/cargo/score to the DOM overlay via
+- **HUD** — pushes fuel/altitude/speed/state to the DOM overlay via
   `EM_ASM(window.updateHUD(...))`, the current world / system / chart progress
   via `updateNav` (only on change), and event banners via `showEvent`.
+  `updateGame` carries the suit, the pack and hold counts, time warp and an
+  empty tank; `setObjective` the objective line; `setInventory` the pack
+  and the hold; `showNotice` short one-liners ("The pack is full").
   Credits go out via `setCredits`, money in and out to the pickup feed via
   `notifyCredits`, and `updateTraderHud` keeps a "Trader" row pointing at
   the nearest post on the world you are at (ground distance and which way),
@@ -241,7 +316,10 @@ flowchart TD
   and `Module._debugParkAt(angle)` sets the ship down parked there — on the
   ground, or afloat. `GAME_DUMP` has `sea`, `seaAlt` (the player's height
   above the water level), `wet` (how deep in water they are) and
-  `overWater`. For trading: `Module._debugVisitOutpost(i, offset)` parks the
+  `overWater`. `Module._debugUpgrade(level)` sets every upgrade to that
+  level (9 = the whole ladder, star drive included) and
+  `Module._debugProgress(flags, suit)` sets the ladder flags and the suit
+  meter. For trading: `Module._debugVisitOutpost(i, offset)` parks the
   ship beside post `i` of the world you are at and puts the astronaut
   `offset` units along the ground from its stall (returns how many posts
   there are; `i < 0` just asks), and `Module._debugGive(what, n)` hands over

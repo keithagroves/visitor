@@ -3,6 +3,7 @@ build/
 *.wasm
 *.js
 !build.sh
+!worker/src/*.js
 
 # Emscripten SDK (large, install separately)
 emsdk/
@@ -35,3 +36,5 @@ emsdkbuild/
 
 # Local-only reference material (not for the public repo)
 .archive/
+node_modules/
+.wrangler/

@@ -494,6 +494,9 @@ float Planet::waterDepth(Vec2 world) const {
     return 0.0f;
 }
 
+void (*Planet::digHook)(const Planet&, Vec2, float) = nullptr;
+bool Planet::digQuiet = false;
+
 CarveMap::Rect Planet::dig(Vec2 world, float radius) {
     CarveMap::Op op{Vec2(world.x - center.x, world.y - center.y), radius};
     // Holding the cutter on one spot adds nothing after the first bite.
@@ -503,6 +506,7 @@ CarveMap::Rect Planet::dig(Vec2 world, float radius) {
             return CarveMap::Rect{};
     }
     digOps_.push_back(op);
+    if (digHook && !digQuiet) digHook(*this, op.local, radius);
     carve.setSea(seaRadius());
     CarveMap::Rect rc = carve.apply(op, terrainLocal());
     // Water that got in may have run on into older tunnels.
@@ -521,6 +525,12 @@ void Planet::setOrbit(int parentIdx, float radius, float speedDegPerFrame, float
     orbitRadius = radius;
     orbitSpeed = speedDegPerFrame;
     orbitAngle = startAngleDeg;
+    orbitStart = startAngleDeg;
+}
+
+void Planet::advanceTo(const std::vector<Planet>& planets, double frames) {
+    if (!orbitPinned) orbitAngle = (float)std::fmod(orbitStart + (double)orbitSpeed * frames, 360.0);
+    updateOrbit(planets, 0.0f);
 }
 
 void Planet::updateOrbit(const std::vector<Planet>& planets, float timeScale) {

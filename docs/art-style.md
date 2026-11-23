@@ -223,6 +223,12 @@ computed sky.**
      hut's window keep their color at any hour and have one smooth halo
      each, faint by day and bright at night. The lantern's halo never
      shrinks below a few pixels, so it is what marks a post from the air.
+   - **The scanner draws over everything, briefly.** A thin pale-teal ring
+     sweeps out from the player, and each clump of ore it passes shows as a
+     flat diamond in the ore's own color with one white facet, never less
+     than a few pixels, blinking gently and gone after eight seconds. It is
+     the one thing allowed in front of the near ground: it is a readout,
+     not part of the scene.
    - **Dust motes are off by default** (`motes` knob). As small pale squares
      drawn over the whole frame they read as stars showing through the
      mountains and the ground. If they come back they need to read as dust,

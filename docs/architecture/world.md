@@ -64,7 +64,11 @@ flowchart TD
   frequency, craters) and surface gravity. The **home world is always
   Temperate with the original tuning** (radius 32000, g 0.1, the hand-tuned
   look, one moon at 112000), so the starting planet feels the same in every
-  system. The star's mass is derived from the home world's orbital speed
+  system. **Every system is winnable** (docs/gameplay.md): the equipment
+  ladder needs two "far" crystals, kinds other than the home world's and
+  the moons', so where the draw leaves fewer than two non-temperate,
+  non-barren planets, the bare-rock planets nearest home are turned into
+  kinds the system lacks (checked over 500 seeds). The star's mass is derived from the home world's orbital speed
   (54–62 units/frame → a home day of roughly ten minutes). Names come from a
   syllable generator. The shaders handle 10 bodies including the star; moons
   are trimmed from the outside in if a lineup exceeds that.
