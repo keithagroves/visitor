@@ -7,8 +7,8 @@ set -e
 BUILD_DIR="build"
 SRC_DIR="src"
 
-if ! command -v emcc &> /dev/null; then
-    echo "Error: Emscripten (emcc) not found!"
+if ! command -v em++ &> /dev/null; then
+    echo "Error: Emscripten (em++) not found!"
     echo ""
     echo "Install Emscripten:"
     echo "  git clone https://github.com/emscripten-core/emsdk.git"
@@ -47,7 +47,7 @@ SOURCES="
 "
 
 echo "Compiling..."
-emcc $SOURCES \
+em++ $SOURCES \
     -o "$BUILD_DIR/game.html" \
     -std=c++17 \
     -I"$SRC_DIR" \
