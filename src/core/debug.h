@@ -59,6 +59,11 @@ struct Debug {
     // moon (it was 8: nine body heights at home).
     float walkSpeed = 2.4f;
     float jumpSpeed = 3.0f;
+    // The jetpack's push, world units / frame^2 (gravity on the home world's
+    // surface is 0.1). 0.115 lifts you at a tenth of what the old 0.25 did
+    // there (net 0.015 against 0.15): a full tank climbs ~430 in ~4 s, where
+    // 0.25 went up thousands. Under 0.1 it would only slow a fall at home.
+    float jetpackThrust = 0.115f;
     // How far below screen center the ship sits when on the ground (fraction of
     // screen height): puts the horizon on the lower third so the sky gets the
     // frame. Eases back to centered as the ship climbs.

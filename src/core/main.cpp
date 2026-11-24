@@ -5768,6 +5768,7 @@ static void syncDebugFromJS() {
     gDebug.cameraSpeedLook  = EM_ASM_DOUBLE({ return window.DBG.cameraSpeedLook !== undefined ? window.DBG.cameraSpeedLook : $0; }, gDebug.cameraSpeedLook);
     gDebug.walkSpeed        = EM_ASM_DOUBLE({ return window.DBG.walkSpeed !== undefined ? window.DBG.walkSpeed : $0; }, gDebug.walkSpeed);
     gDebug.jumpSpeed        = EM_ASM_DOUBLE({ return window.DBG.jumpSpeed !== undefined ? window.DBG.jumpSpeed : $0; }, gDebug.jumpSpeed);
+    gDebug.jetpackThrust    = EM_ASM_DOUBLE({ return window.DBG.jetpackThrust !== undefined ? window.DBG.jetpackThrust : $0; }, gDebug.jetpackThrust);
 
     // The gravity knob scales every body together (each keeps its own relative
     // density; the star keeps its mass ratio), then the orbit rates are

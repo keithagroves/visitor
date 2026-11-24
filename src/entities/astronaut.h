@@ -36,7 +36,6 @@ public:
     static constexpr float AIR_ACCEL        = 0.10f;  // world units / frame^2
     static constexpr float SCALE            = 0.5f;
     static constexpr float JETPACK_MAX_FUEL = 100.0f;
-    static constexpr float JETPACK_THRUST   = 0.25f;
     static constexpr float JETPACK_DRAIN    = 0.55f;
     static constexpr float JETPACK_CHARGE   = 0.55f;
     // In water (Planet::waterDepth). The suit is heavy, so you sink — slowly:

@@ -308,8 +308,8 @@ void Astronaut::jetpack(const Planet& planet, float timeScale) {
     float dy = pos.y - planet.center.y;
     float d  = sqrtf(dx * dx + dy * dy);
     if (d < 1.0f) return;
-    vel.x += (dx / d) * JETPACK_THRUST * timeScale;
-    vel.y += (dy / d) * JETPACK_THRUST * timeScale;
+    vel.x += (dx / d) * gDebug.jetpackThrust * timeScale;
+    vel.y += (dy / d) * gDebug.jetpackThrust * timeScale;
     jetpackFuel -= JETPACK_DRAIN * timeScale;
     if (jetpackFuel < 0.0f) jetpackFuel = 0.0f;
     jetting = true;
