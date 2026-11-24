@@ -262,7 +262,19 @@ Good ideas that wait until the loop above is fun. Parked, not dropped:
 - ~~**Multiplayer.**~~ Built 2026-11-23 (players share a system's world —
   tunnels, mined ore, cut plants, trader stock — and see each other; no
   collisions, no combat, own progress each). Whether players can attack
-  each other is undecided.
+  each other is undecided. Everyone shares one universe (2026-11-23, the
+  user: "everyone uses the same universe by default. They can land on
+  different planets/locations though. It makes sense to be within reasonable
+  distance to alien bases"): a new game starts in the same first system
+  (seed 1) for all, dropping in near one of the home world's trading posts
+  picked at random, about 400 to 750 units to one side. Players
+  start apart but always with a trader close by. A jump's next system depends
+  only on the system jumped from, so everyone who leaves a system arrives in
+  the same next one. Starts stay on the home world (my call, unconfirmed):
+  the stock suit and tank are tuned for it. Online is the default (the
+  user: "play online should be the default. We can add the other options
+  later if we want them"): the title is a name and Play, with no New game
+  and no offline choice for now.
 - **Salvaging your wreck** — fly back to where you crashed and beam the
   cargo out of it.
 - **Fuel you have to find**, parachutes and heat shields for worlds with
@@ -327,7 +339,8 @@ trade.cpp, with materials named by role and resolved per system by
 `Trade::systemOf`; the generator guarantee is in system_gen.cpp (bare-rock
 planets nearest home turned into missing kinds); the jump saves the next
 seed and reloads the page into it. `?notitle` in the URL skips the title
-into a fresh game (the capture rig uses it).
+into a fresh game and drops in at the ranch (-90 degrees, by the herd) every
+time; the capture rig and the tests use it.
 
 ## Open
 

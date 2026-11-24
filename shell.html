@@ -328,29 +328,22 @@
         .title-box { max-width: 620px; text-align: center; }
         .title-name { font-size: clamp(44px, 9vw, 86px); font-weight: 800; letter-spacing: 0.32em; margin-right: -0.32em; color: #fff; }
         .title-tag { margin: 10px auto 26px; max-width: 470px; font-size: 15px; line-height: 1.5; color: rgba(232, 238, 245, 0.82); }
-        .title-buttons { display: flex; gap: 12px; justify-content: center; }
-        .title-buttons button {
-            font: inherit; font-size: 15px; font-weight: 700; padding: 11px 26px; border-radius: 9px; cursor: pointer;
-            border: 1px solid rgba(120, 255, 220, 0.45); background: rgba(120, 255, 220, 0.14); color: #eafff8;
-        }
-        .title-buttons button:hover, .title-buttons button:focus-visible { background: rgba(120, 255, 220, 0.28); outline: none; }
-        #title-new { border-color: rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.07); }
         .title-note { min-height: 18px; margin-top: 10px; font-size: 12px; color: #ffd66e; }
         .title-keys { margin-top: 22px; font-size: 12px; line-height: 1.7; color: rgba(159, 179, 200, 0.9); }
         .title-keys b { color: #cfe3f5; font-weight: 700; margin-right: 4px; }
 
-        .title-online { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
-        .title-online input {
-            font: inherit; font-size: 14px; width: 170px; padding: 9px 12px; border-radius: 9px;
+        .title-play { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+        .title-play input {
+            font: inherit; font-size: 15px; width: 190px; padding: 11px 14px; border-radius: 9px;
             border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.07); color: #fff;
         }
-        .title-online input:focus { outline: none; border-color: rgba(120, 255, 220, 0.55); }
-        .title-online button {
-            font: inherit; font-size: 14px; font-weight: 700; padding: 9px 18px; border-radius: 9px; cursor: pointer;
-            border: 1px solid rgba(160, 180, 255, 0.45); background: rgba(140, 160, 255, 0.14); color: #eef0ff;
+        .title-play input:focus { outline: none; border-color: rgba(120, 255, 220, 0.55); }
+        .title-play button {
+            font: inherit; font-size: 15px; font-weight: 700; padding: 11px 30px; border-radius: 9px; cursor: pointer;
+            border: 1px solid rgba(120, 255, 220, 0.45); background: rgba(120, 255, 220, 0.14); color: #eafff8;
         }
-        .title-online button:hover { background: rgba(140, 160, 255, 0.28); }
-        .title-online button[disabled] { opacity: 0.5; cursor: default; }
+        .title-play button:hover, .title-play button:focus-visible { background: rgba(120, 255, 220, 0.28); outline: none; }
+        .title-play button[disabled] { opacity: 0.5; cursor: default; }
         /* Other players' name tags (placed from C++). */
         #peer-labels { position: fixed; inset: 0; z-index: 41; pointer-events: none; overflow: hidden; }
         #peer-labels .tag {
@@ -590,13 +583,9 @@
         <div class="title-box">
             <div class="title-name">VISITOR</div>
             <div class="title-tag">You are stranded in a star system that is not yours. Its worlds hold what you need to build a star drive. Land, explore, trade with the locals, upgrade, and leave.</div>
-            <div class="title-buttons">
-                <button id="title-continue" type="button">Continue</button>
-                <button id="title-new" type="button">New game</button>
-            </div>
-            <div class="title-online">
+            <div class="title-play">
                 <input id="title-name" type="text" maxlength="20" placeholder="Your name" aria-label="Your name">
-                <button id="title-online" type="button">Play online</button>
+                <button id="title-play" type="button">Play</button>
             </div>
             <div class="title-note" id="title-note"></div>
             <div class="title-keys">
@@ -630,12 +619,15 @@
 
     <script>
         // Which star system to generate. One seed builds the whole system
-        // (star, planets, moons, looks, names — see src/world/system_gen.cpp):
-        //   ?seed=1234 in the URL wins; otherwise the seed remembered from last
-        //   time (so reloading returns you to the same system); otherwise a
-        //   fresh random one. The debug panel's "New random system" rolls again.
+        // (star, planets, moons, looks, names — see src/world/system_gen.cpp).
+        // Everyone shares one universe: it starts at UNIVERSE_SEED, and each
+        // star-drive jump leads on to the same next system for everyone
+        // (main.cpp: finishJump).
+        //   ?seed=1234 in the URL wins (a system apart, or a test); otherwise
+        //   the system your saved game is in; otherwise the universe's first.
+        //   The debug panel's "New random system" goes to a random one.
+        window.UNIVERSE_SEED = 1;
         (function () {
-            var KEY = 'rocket:seed';
             var seed = 0;
             try {
                 var q = new URLSearchParams(window.location.search).get('seed');
@@ -648,15 +640,11 @@
                 if (Array.isArray(sv) && sv[1] > 0) window.SAVE_SEED = sv[1] >>> 0;
             } catch (e) {}
             if (!seed) seed = window.SAVE_SEED;
-            if (!seed) { try { seed = parseInt(localStorage.getItem(KEY) || '0', 10) || 0; } catch (e) {} }
-            if (!seed) seed = 1 + Math.floor(Math.random() * 999998);
-            try { localStorage.setItem(KEY, String(seed)); } catch (e) {}
+            if (!seed) seed = window.UNIVERSE_SEED;
             window.GAME_SEED = seed;
             window.newRandomSystem = function () {
-                var next = 1 + Math.floor(Math.random() * 999998);
-                try { localStorage.setItem(KEY, String(next)); } catch (e) {}
                 var url = new URL(window.location.href);
-                url.searchParams.delete('seed');
+                url.searchParams.set('seed', String(1 + Math.floor(Math.random() * 999998)));
                 window.location.href = url.toString();
             };
         })();
@@ -1354,16 +1342,14 @@
             window.showTitle = function (hasSave) {
                 var M = window.Module;
                 var q = new URLSearchParams(window.location.search);
-                var carryOn = false, wasOnline = false;
+                var carryOn = false;
                 try {
                     carryOn = sessionStorage.getItem('visitor:continue') === '1';
-                    wasOnline = sessionStorage.getItem('visitor:online') === '1';
                     sessionStorage.removeItem('visitor:continue');
                 } catch (e) {}
-                // Arriving through a jump: carry on (online again if you were).
+                // Arriving through a jump: carry on, online again.
                 if (carryOn) {
-                    if (wasOnline) window.net.connect(window.net.defaultName(), function (ok) { M._gameStart(hasSave ? 1 : 0); });
-                    else setTimeout(function () { M._gameStart(hasSave ? 1 : 0); }, 0);
+                    window.net.connect(window.net.defaultName(), function (ok) { M._gameStart(hasSave ? 1 : 0); });
                     return;
                 }
                 // The capture rig and tests skip it into a fresh game;
@@ -1376,50 +1362,32 @@
                 titleOpen = true;
                 var el = document.getElementById('title');
                 el.classList.add('open');
-                var cont = document.getElementById('title-continue');
-                var fresh = document.getElementById('title-new');
                 var note = document.getElementById('title-note');
-                var savedElsewhere = !hasSave && window.SAVE_SEED && window.SAVE_SEED !== window.GAME_SEED;
-                cont.style.display = hasSave || savedElsewhere ? '' : 'none';
-                note.textContent = savedElsewhere ? 'Your saved game is in another star system (this link names system ' + window.GAME_SEED + ').' : '';
-                function close() { titleOpen = false; el.classList.remove('open'); document.getElementById('canvas').focus(); }
-                cont.onclick = function () {
-                    if (savedElsewhere) {
-                        var url = new URL(window.location.href);
-                        url.searchParams.delete('seed');
-                        window.location.href = url.toString();
-                        return;
-                    }
-                    close();
-                    M._gameStart(1);
-                };
-                fresh.onclick = function () {
-                    if ((hasSave || savedElsewhere) && !window.confirm('Start a new game? Your saved game will be lost.')) return;
-                    close();
-                    M._gameStart(0);
-                };
-                // Online: the same system (this seed) with whoever else is in it.
                 var nameEl = document.getElementById('title-name');
-                var online = document.getElementById('title-online');
+                var play = document.getElementById('title-play');
+                // A link to another system than your saved game's: playing it
+                // starts over there.
+                var savedElsewhere = !hasSave && window.SAVE_SEED && window.SAVE_SEED !== window.GAME_SEED;
+                note.textContent = savedElsewhere ? 'Your saved game is in another star system: playing this one starts over.' : '';
+                function close() { titleOpen = false; el.classList.remove('open'); document.getElementById('canvas').focus(); }
                 nameEl.value = window.net.defaultName();
-                nameEl.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') online.click(); });
+                nameEl.addEventListener('keydown', function (e) { e.stopPropagation(); if (e.key === 'Enter') play.click(); });
                 nameEl.addEventListener('keyup', function (e) { e.stopPropagation(); });
-                online.onclick = function () {
-                    online.disabled = true;
-                    online.textContent = 'Connecting\u2026';
+                // Play is online: your saved game (if any) in the shared
+                // universe, with whoever else is there. If the server cannot be
+                // reached you play alone.
+                play.onclick = function () {
+                    if (savedElsewhere && !window.confirm('Start over in this star system? Your saved game will be lost.')) return;
+                    play.disabled = true;
+                    play.textContent = 'Connecting\u2026';
                     note.textContent = '';
                     window.net.connect(nameEl.value, function (ok, why) {
-                        if (!ok) {
-                            online.disabled = false;
-                            online.textContent = 'Play online';
-                            note.textContent = why || 'Could not reach the server.';
-                            return;
-                        }
                         close();
                         M._gameStart(hasSave ? 1 : 0);
+                        if (!ok && window.showNotice) window.showNotice('Could not reach the server: playing alone');
                     });
                 };
-                (hasSave ? cont : fresh).focus();
+                (nameEl.value ? play : nameEl).focus();
             };
 
             // "E  Trade with Zuvi": what the interact key does where you stand ('' = nothing).
@@ -1722,7 +1690,6 @@
                             ready = false;
                             window.Module._netLost();
                             if (window.showNotice) window.showNotice('Lost the server: playing alone');
-                            try { sessionStorage.removeItem('visitor:online'); } catch (e) {}
                             showRoster();
                         }
                     };
@@ -1736,7 +1703,6 @@
                             myId = m.id;
                             offset = m.clock - now();
                             ready = true;
-                            try { sessionStorage.setItem('visitor:online', '1'); } catch (e) {}
                             M._netWelcome(m.id, api.clockMs());
                             for (var i = 0; i < m.ops.length; i++) op(m.ops[i]);
                             // The rest of the world log may follow, in batches.

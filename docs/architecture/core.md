@@ -140,7 +140,9 @@ flowchart TD
   localStorage (`visitor:save`), written on landing, trades, boarding,
   crashes and blackouts; `parkShip` puts you back where you were parked.
   The **title screen** holds the simulation still (`titleOpen`) until the
-  page calls `gameStart(carryOn)`. **The suit meter** (`updateSuit`,
+  page calls `gameStart(carryOn)`. It has a name and one button, Play: online
+  by default, carrying on from the save, alone if the server does not answer.
+  Starting over and playing offline on purpose are left out for now. **The suit meter** (`updateSuit`,
   `hazardRate`): drains by the kind of world (no air, cold, heat, toxic
   air), the sun at the player's spot and shelter underground, divided by
   Seals; refills in the ship and at a trader's stall; F burns 5 carbon for
@@ -148,7 +150,11 @@ flowchart TD
   `drawScan`, from `Deposits::scan`), **time warp** (T: 4 or 16 simulation
   steps a frame in open space, out of the air; steering cancels it), **the
   jump** (J with a star drive, clear of every world: `tryJump` /
-  `finishJump` save the next seed and reload the page into it), and the
+  `finishJump` save the next seed, a hash of this one alone so the universe
+  is the same for everyone, and reload the page into it), the **drop-in**
+  (`dropSpot`: a random trading post of the home world, 400 to 750 units to
+  one side, which also becomes the rescue post; `?notitle` keeps the ranch
+  at -90), and the
   **herd** grows back one cow at a time out of sight (`updateHerd`).
   The mining laser's walls are in `updateLaser` (`canTake`): it takes
   nothing into a full pack, and gold (ore and the caves' veins) needs

@@ -114,8 +114,10 @@ own flow:
   A/D walk (and steer in the air), W jump, Space jetpack, hold the mouse
   button to fire the hand tool at the cursor, Q to switch it between mining
   laser and terrain cutter (once bought), F breathe carbon into the suit, C
-  scan for ore, Tab (or I) for the pack and the hold. A title screen offers
-  Continue / New game / Play online; the game saves itself (localStorage).
+  scan for ore, Tab (or I) for the pack and the hold. The title screen asks
+  for a name and has one button, Play, which goes online (alone if the
+  server cannot be reached) and carries on from the save; the game saves
+  itself (localStorage).
 - **Multiplayer** — [server/](../server/) is a uWebSockets.js room server:
   one room per seed, a shared clock for the orbits, and an ordered log of
   every change to the world. See [core](architecture/core.md) (Multiplayer).

@@ -1439,12 +1439,46 @@ static void spawnCows() {
 
 static void updateActiveField();   // defined below (lazy destructible fields)
 
+// Where the ship drops in. Everyone shares one universe, so new arrivals are
+// spread out: over one of the home world's trading posts, picked at random, a
+// short walk to one side of it (past the stall and the folk wandering about
+// it), on the levellest dry ground a few looks turn up. Rescues come back to
+// the same post until you trade somewhere else. The home world only: the
+// stock suit and tank are tuned for starting there. The herd stays at the
+// ranch (-90 degrees), beside the home world's first post. The capture rig
+// and the tests (?notitle) drop in at the ranch every time.
+static float dropSpot(int& post) {
+    post = -1;
+    const Planet& p = homePlanet();
+    bool fixed = EM_ASM_INT({ return new URLSearchParams(window.location.search).has('notitle') ? 1 : 0; }) != 0;
+    if (fixed || p.outposts.empty()) return -90.0f;
+    const float perDeg = p.baseRadius * DEG2RAD;
+    post = std::min((int)(emscripten_random() * p.outposts.size()), (int)p.outposts.size() - 1);
+    float post0 = p.outposts[post].angle;
+    float best = 1e30f, bestA = post0 + 420.0f / perDeg;
+    for (int tries = 0; tries < 16; tries++) {
+        float side = emscripten_random() < 0.5f ? -1.0f : 1.0f;
+        float a = post0 + side * (400.0f + emscripten_random() * 350.0f) / perDeg;
+        if (p.overWater(a)) continue;
+        float lo = 1e30f, hi = -1e30f;              // how uneven a ship's width of ground is
+        for (float x = -60.0f; x <= 60.0f; x += 20.0f) {
+            float r = p.surfaceRadius(a + x / perDeg);
+            lo = std::fmin(lo, r); hi = std::fmax(hi, r);
+        }
+        if (hi - lo < best) { best = hi - lo; bestA = a; }
+    }
+    return bestA;
+}
+
 // The ship drops in over the home world, as at the very start: a new game,
 // or arriving in a new system after a jump. Moves things; owns nothing.
 static void startRun() {
     app.lander.reset();
     app.lander.fuel = maxFuel();
-    app.lander.spawnOnPlanet(homePlanet());
+    int post;
+    float drop = dropSpot(post);
+    app.lander.spawnOnPlanet(homePlanet(), drop);
+    if (post >= 0) { app.lastPostPlanet = app.homeIdx; app.lastPostIdx = post; }
     // Bring the home field back before anything (the cows) reads the home
     // surface, so they stand on the gridded ground rather than the analytic
     // silhouette.
@@ -2701,9 +2735,11 @@ static void tryJump() {
 
 // The drive has spooled up: the next system. Everything you own comes with
 // you except the drive itself, which burns out; the page reloads into the new
-// seed and drops you in over its home world.
+// seed and drops you in over its home world. The next system depends only on
+// this one, so the universe is the same for everyone: whoever jumps from here
+// arrives in the same place.
 static void finishJump() {
-    unsigned int h = app.system.seed * 2654435761u + 0x9e3779b9u * (unsigned int)(app.jumps + 1);
+    unsigned int h = app.system.seed * 2654435761u + 0x9e3779b9u;
     h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
     unsigned int next = 1 + h % 999998u;
     app.jumps++;
@@ -2714,7 +2750,6 @@ static void finishJump() {
     EM_ASM({
         try {
             localStorage.setItem('visitor:save', UTF8ToString($0));
-            localStorage.setItem('rocket:seed', String($1));
             sessionStorage.setItem('visitor:continue', '1');
         } catch (e) {}
         var url = new URL(window.location.href);
@@ -2779,7 +2814,7 @@ static void updateHerd(float dt) {
 // Multiplayer (server/server.mjs; the page's window.net does the WebSocket).
 //
 // The seed builds the same system on every client, so only two things
-// travel: where each player is (to the players at the same world, ~15 times
+// travel: where each player is (to the players at the same world, 10 times
 // a second), and every change to the world, in the order the server got it
 // (so a late joiner replays the log and sees everyone's tunnels). The orbits
 // run from the server's clock (Planet::advanceTo), so everyone has the same

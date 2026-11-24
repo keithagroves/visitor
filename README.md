@@ -57,8 +57,9 @@ trading posts, buy upgrades, and fly on to chart the next planet.
 
 ### URL options
 
-- `?seed=1234` plays a specific solar system. Without it you return to your
-  last system, and on your first visit you get a random one.
+- `?seed=1234` plays a specific solar system, away from everyone else.
+  Without it you return to your saved game's system, or start where
+  everyone starts: the first system of the shared universe.
 - `?server=ws://host:9001` picks the multiplayer server (see below). By
   default a page on your own machine uses port 9001 on the same host, and
   the published page uses the hosted server.
@@ -104,9 +105,13 @@ own progress (credits, equipment, what you carry) stays in your browser.
 cd server && npm install && npm start      # ws://localhost:9001
 ```
 
-Then press **Play online** on the title screen. To play with friends, share
-a link with the same seed (`game.html?seed=1234`) and point everyone at the
-same server with `?server=ws://your-host:9001`. A page served over HTTPS
+**Play** on the title screen goes online, carrying on from your saved game
+if you have one; if the server cannot be reached you play alone. Everyone shares one
+universe: a new game starts in the same first system, near one of its home
+world's trading posts, and a jump leads on to the same next system for
+everyone. For a system of your own, share a link with a seed
+(`game.html?seed=1234`). For your own server, point everyone at it with
+`?server=ws://your-host:9001`. A page served over HTTPS
 (like GitHub Pages) needs a `wss://` server behind TLS. This server keeps
 rooms in memory: restarting it starts every system's world afresh.
 

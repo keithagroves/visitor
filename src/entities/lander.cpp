@@ -15,10 +15,9 @@ void Lander::reset() {
     anim = 0.0f;
 }
 
-void Lander::spawnOnPlanet(const Planet& planet) {
+void Lander::spawnOnPlanet(const Planet& planet, float angle) {
     // Drop in just above the surface; orient the ship's "top" radially outward
     // so W thrusts away from the planet (rotation = angle + 90, per lander.js).
-    float angle = -90.0f; // start over the "north" pole-ish point
     float surf = planet.surfaceRadius(angle);
     float r = surf + 2000.0f;  // drop in high enough to fly the descent
     pos = Vec2(planet.center.x + r * cosd(angle),

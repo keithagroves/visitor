@@ -26,7 +26,7 @@ public:
     static constexpr float FLOAT_DRAFT = 3.0f;
 
     void reset();
-    void spawnOnPlanet(const Planet& planet);
+    void spawnOnPlanet(const Planet& planet, float angle = -90.0f);
 
     void rotate(float direction);     // direction * 15 deg onto targetRotation
     void setThrust(float power);      // 0..1; ignored when out of fuel
