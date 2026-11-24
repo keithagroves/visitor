@@ -6466,10 +6466,10 @@ static void mainLoop() {
         }
     }
 
-    // The other players: move them along, tell them where I am, and catch up
-    // on cave formations they mined before this world's caves were built here.
+    // The other players: move them along, and catch up on cave formations
+    // they mined before this world's caves were built here. (Telling them
+    // where I am waits for the laser, below.)
     Net::update(timeScale);
-    Net::sendState(dt);
     if (app.online) Net::applyPending();
 
     // The suit, the scanner's clock, the herd, the jump.
@@ -6497,6 +6497,10 @@ static void mainLoop() {
     // and the world moves ~60 units a frame along its orbit — aiming through
     // last frame's view would put the beam that far off target.
     updateLaser(dt, (float)(now - app.startTime) * 3.0f);
+    // Where I am, to the others: after the laser, so the beam's end and the
+    // arm's aim point are this frame's. Sent before it, they were last
+    // frame's points against this frame's planet: off by a frame of orbit.
+    Net::sendState(dt);
     NearField::update(dominantPlanet(), dt, app.laserTarget);
     CaveField::update(dominantPlanet(), dt, app.laserProp);
     Deposits::update(dominantPlanet(), dt, app.burnOre);
