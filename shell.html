@@ -348,7 +348,7 @@
         #peer-labels { position: fixed; inset: 0; z-index: 41; pointer-events: none; overflow: hidden; }
         #peer-labels .tag {
             position: absolute; transform: translate(-50%, -100%); padding: 2px 7px; border-radius: 6px;
-            background: rgba(9, 13, 21, 0.62); color: #dfe6ff; white-space: nowrap;
+            background: rgba(9, 13, 21, 0.62); color: #dfe6ff; white-space: nowrap; border-left: 4px solid transparent;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; font-weight: 600;
         }
 
@@ -627,6 +627,18 @@
         //   the system your saved game is in; otherwise the universe's first.
         //   The debug panel's "New random system" goes to a random one.
         window.UNIVERSE_SEED = 1;
+        // This browser's colour (a hue, 0-359) for the ship and the suit,
+        // picked at random on the first visit. Online, the server may hand
+        // out another for the session if someone nearby in hue is already on.
+        window.myHue = function () {
+            var h = -1;
+            try { h = parseInt(localStorage.getItem('visitor:hue'), 10); } catch (e) {}
+            if (!(h >= 0 && h < 360)) {
+                h = Math.floor(Math.random() * 360);
+                try { localStorage.setItem('visitor:hue', String(h)); } catch (e) {}
+            }
+            return h;
+        };
         (function () {
             var seed = 0;
             try {
@@ -1617,7 +1629,9 @@
         var HOSTED_SERVER = 'wss://visitor-server.team-channel.workers.dev';   // worker/, on Cloudflare
         window.net = (function () {
             var ws = null, ready = false, myId = -1, offset = 0, bestRtt = 1e9, pingTimer = null, pings = 0;
-            var names = {}, roster = [], myPlanet = -1;
+            var names = {}, hues = {}, roster = [], myPlanet = -1;
+            // A player's colour, as the server handed it out (roster).
+            function hueOf(id) { return typeof hues[id] === 'number' ? hues[id] : Math.round(id * 137.5) % 360; }
             var queue = [], queueTimer = null, lastState = null, lastPlanet = -1, lastSent = 0, logsLeft = 0;
             // The state's position fields (see Net::sendState in main.cpp).
             var POS = {}; [1, 2, 8, 9, 17, 18, 24, 25].forEach(function (k) { POS[k] = 1; });
@@ -1678,7 +1692,7 @@
                     try { ws = new WebSocket(url()); } catch (e) { finish(false, 'Bad server address.'); return; }
                     var timeout = setTimeout(function () { finish(false, 'No answer from ' + url() + '.'); try { ws.close(); } catch (e) {} }, 6000);
                     ws.onopen = function () {
-                        ws.send(JSON.stringify({ t: 'join', seed: window.GAME_SEED, name: name }));
+                        ws.send(JSON.stringify({ t: 'join', seed: window.GAME_SEED, name: name, hue: window.myHue() }));
                     };
                     ws.onerror = function () { clearTimeout(timeout); finish(false, 'Could not reach ' + url() + '.'); };
                     ws.onclose = function () {
@@ -1704,6 +1718,7 @@
                             offset = m.clock - now();
                             ready = true;
                             M._netWelcome(m.id, api.clockMs());
+                            if (typeof m.hue === 'number') M._netMyHue(m.hue);   // mine, this session
                             for (var i = 0; i < m.ops.length; i++) op(m.ops[i]);
                             // The rest of the world log may follow, in batches.
                             logsLeft = m.logs | 0;
@@ -1724,7 +1739,7 @@
                         }
                         case 's':
                             for (var k = 0; k < m.d.length; k++) M._netPeerSet(k, +m.d[k] || 0);
-                            M._netPeerCommit(m.id, m.p | 0);
+                            M._netPeerCommit(m.id, m.p | 0, hueOf(m.id));
                             break;
                         case 'op':
                             if (m.id !== myId) op(m.o);
@@ -1736,7 +1751,7 @@
                             var was = names;
                             names = {};
                             roster = m.players || [];
-                            roster.forEach(function (r) { names[r.id] = r.name; });
+                            roster.forEach(function (r) { names[r.id] = r.name; if (typeof r.hue === 'number') hues[r.id] = r.hue; });
                             if (ready) roster.forEach(function (r) {
                                 if (r.id !== myId && !was[r.id] && window.showNotice) window.showNotice(r.name + ' is here, in this system');
                             });
@@ -1769,7 +1784,8 @@
                     queue.push([kind, a, b, c, d, e]);
                     if (!queueTimer) queueTimer = setTimeout(flushOps, 250);
                 },
-                name: function (id) { return names[id] || 'Visitor'; }
+                name: function (id) { return names[id] || 'Visitor'; },
+                hue: hueOf
             };
             // Name tags: "id,x,y;" from main.cpp each time they move.
             var tags = {};
@@ -1782,6 +1798,7 @@
                     var id = f[0], el = tags[id];
                     if (!el) { el = tags[id] = document.createElement('div'); el.className = 'tag'; layer.appendChild(el); }
                     el.textContent = api.name(+id);
+                    el.style.borderLeftColor = 'hsl(' + api.hue(+id) + ', 85%, 62%)';   // their colour
                     el.style.left = f[1] + 'px';
                     el.style.top = f[2] + 'px';
                     seen[id] = true;

@@ -1470,6 +1470,12 @@ static float dropSpot(int& post) {
     return bestA;
 }
 
+// My colour (livery.h): the ship's lights and the suit's trim match.
+static void setMyHue(int hue) {
+    app.lander.livery.set((float)hue);
+    app.astronaut.livery = app.lander.livery;
+}
+
 // The ship drops in over the home world, as at the very start: a new game,
 // or arriving in a new system after a jump. Moves things; owns nothing.
 static void startRun() {
@@ -3037,7 +3043,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE void netLost() {
 extern "C" EMSCRIPTEN_KEEPALIVE void netPeerSet(int i, float v) {
     if (i >= 0 && i < Net::STATE) Net::incoming[i] = v;
 }
-extern "C" EMSCRIPTEN_KEEPALIVE void netPeerCommit(int id, int planet) {
+// My colour, for the ship and the suit together.
+extern "C" EMSCRIPTEN_KEEPALIVE void netMyHue(int hue) { setMyHue(hue); }
+extern "C" EMSCRIPTEN_KEEPALIVE void netPeerCommit(int id, int planet, int hue) {
     if (id == app.netId || planet < 0 || planet >= (int)app.planets.size()) return;
     Net::Peer* q = nullptr;
     for (Net::Peer& p : Net::peers) if (p.id == id) q = &p;
@@ -3050,6 +3058,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE void netPeerCommit(int id, int planet) {
     }
     if (q->planet != planet) q->placed = false;
     q->planet = planet;
+    if (hue >= 0 && (int)q->lander.livery.hue != hue % 360) {
+        q->lander.livery.set((float)hue);
+        q->walker.livery = q->lander.livery;
+    }
     for (int i = 0; i < Net::STATE; i++) q->d[i] = Net::incoming[i];
     q->seen = Net::nowSec();
 }
@@ -4325,6 +4337,10 @@ static void init() {
     // game to carry on (the page's title buttons call gameStart).
     newGame();
     app.hasSave = readSave();
+    // My colour (livery.h): the one this browser keeps (the page picks it at
+    // random on a first visit). Online, the server may hand out another, so
+    // that nobody in the system shares it (netMyHue).
+    setMyHue(EM_ASM_INT({ return window.myHue ? window.myHue() : 171; }));
     app.titleOpen = true;
     EM_ASM({ if (window.showTitle) window.showTitle($0); }, app.hasSave ? 1 : 0);
 

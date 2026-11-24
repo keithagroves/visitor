@@ -579,8 +579,8 @@ void Lander::draw(Renderer2D& r) {
     const Vec2 wingL[] = {{-8, -2}, {-34, 17}, {-30, 21}, {-11, 14}};
     const Vec2 wingR[] = {{8, -2}, {34, 17}, {30, 21}, {11, 14}};
 
-    // Dark alien metal.
-    r.fill(12.0f / 255.0f * 0.8f, 24.0f / 255.0f * 0.8f, 32.0f / 255.0f * 0.8f, 1.0f);
+    // Dark alien metal; the wings and the bevel carry the player's colour.
+    r.fill(livery.wing[0], livery.wing[1], livery.wing[2], 1.0f);
     r.convexPolygon(wingL, 4);
     r.convexPolygon(wingR, 4);
 
@@ -590,19 +590,21 @@ void Lander::draw(Renderer2D& r) {
 
     // Beveled crown highlight down the lit side.
     const Vec2 crown[] = {{0, -34}, {-6, -18}, {-7, -4}, {-6, 10}, {-2, 13}, {0, -6}};
-    r.fill(36.0f / 255.0f, 62.0f / 255.0f, 78.0f / 255.0f, 1.0f);
+    r.fill(livery.crown[0], livery.crown[1], livery.crown[2], 1.0f);
     r.convexPolygon(crown, 6);
 
-    // Glowing accents (additive): energy core, cockpit, engine glow.
+    // Glowing accents (additive): energy core, cockpit, engine glow. The
+    // core and cockpit are in the player's colour (livery.h).
     r.setBlend(Renderer2D::Blend::Additive);
     float pulse = 0.5f + 0.12f * sind(anim * 300.0f);
-    r.fill(77.0f / 255.0f, 1.0f, 230.0f / 255.0f, 0.55f * pulse);
+    const Livery& lv = livery;
+    r.fill(lv.glow[0], lv.glow[1], lv.glow[2], 0.55f * pulse);
     r.circle(0, -4, 9);
-    r.fill(0.78f, 1.0f, 0.94f, 0.85f);
+    r.fill(lv.hot[0], lv.hot[1], lv.hot[2], 0.85f);
     r.circle(0, -4, 2.5f);
-    r.fill(140.0f / 255.0f, 1.0f, 217.0f / 255.0f, 0.7f);
+    r.fill(lv.bright[0], lv.bright[1], lv.bright[2], 0.7f);
     r.circle(0, -21, 4);
-    r.fill(0.82f, 1.0f, 0.92f, 0.8f);
+    r.fill(lv.hot[0], lv.hot[1], lv.hot[2], 0.8f);
     r.circle(0, -21, 1.8f);
     if (thrustLevel > 0.01f) {
         r.fill(0.5f, 0.8f, 1.0f, 0.5f * thrustLevel);

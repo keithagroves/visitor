@@ -223,6 +223,14 @@ computed sky.**
      hut's window keep their color at any hour and have one smooth halo
      each, faint by day and bright at night. The lantern's halo never
      shrinks below a few pixels, so it is what marks a post from the air.
+   - **Every player wears one colour** (`Livery`, src/entities/livery.h):
+     a single hue for the suit's cloth (a pale tint), its trim (a strong
+     tone), the chest light and visor glint, and the ship's wings, hull
+     bevel and lights (dark metal with the hue in it). The helmet stays
+     white and the hull's body stays dark, so every player still reads as
+     the same kind of astronaut and ship. Beams keep their tool's colours.
+     Online the server hands out hues at least 30 degrees apart among the
+     players on at once; name tags carry the colour as a stripe.
    - **The scanner draws over everything, briefly.** A thin pale-teal ring
      sweeps out from the player, and each clump of ore it passes shows as a
      flat diamond in the ore's own color with one white facet, never less

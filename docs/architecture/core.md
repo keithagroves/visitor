@@ -168,7 +168,12 @@ flowchart TD
   world you are at) go to the uWS topic of that world only, so you hear
   about the players in your vicinity; `Net::update` eases the others toward
   them and `Net::draw` draws them with their own `Lander` / `Astronaut`,
-  name tags via `setPeerLabels`. Fields nobody draws are sent as 0 (the
+  name tags via `setPeerLabels`. Each player has a colour (`Livery`: the
+  ship and the suit match): the browser keeps a favourite hue
+  (`visitor:hue`), sends it with the join, and the server's `pickHue` grants
+  it unless someone on is within 30 degrees, else the hue furthest from
+  everyone's; `welcome.hue` is mine, `roster[].hue` theirs (`netMyHue`,
+  `netPeerCommit`'s hue). Fields nobody draws are sent as 0 (the
   astronaut while aboard, idle animation counters), and the page skips a
   state that has not changed except once a second, so a player standing
   still costs one message a second. **World changes** go to everyone in the

@@ -3,6 +3,7 @@
 #include "../math/vecmath.h"
 #include "../graphics/renderer2d.h"
 #include "../world/planet.h"
+#include "livery.h"
 
 // The player on foot: walks the surface, jumps, jetpacks, digs. Simulated in
 // the co-moving frame of the body it stands on (the caller carries it along
@@ -78,6 +79,7 @@ public:
     bool  active      = false;
     bool  aiming      = false;   // set by the caller while the tool (laser / cutter) fires
     Vec2  aimWorld;              // what the laser is pointed at (world space)
+    Livery livery;               // the player's colour: the suit's trim and lights
     // Tip of the mining laser in world space, as last drawn — the caller
     // starts the beam here so it leaves the gun whatever the pose.
     mutable Vec2 muzzleWorld;

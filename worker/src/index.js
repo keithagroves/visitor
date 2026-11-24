@@ -29,6 +29,23 @@ const MAX_IN = 256 * 1024;   // largest message accepted
 const FLUSH_MS = 3000;       // how long a change may wait before it is written
 const BATCH = 2000;          // most changes in one row (~80 KB of text)
 
+// A colour for a player joining (a hue for their ship and suit): the one
+// they asked for if nobody on now is within MIN_HUE of it, else the hue
+// furthest from everyone's (the nearest to the one asked for, among equals).
+const MIN_HUE = 30;
+function pickHue(want, taken) {
+    want = Number.isFinite(+want) ? ((Math.round(+want) % 360) + 360) % 360 : Math.floor(Math.random() * 360);
+    const gap = (a, b) => { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); };
+    const room = (h) => taken.reduce((m, t) => Math.min(m, gap(h, t)), 360);
+    if (room(want) >= MIN_HUE) return want;
+    let best = want, bestRoom = -1, bestGap = 0;
+    for (let h = 0; h < 360; h++) {
+        const r = room(h), g = gap(h, want);
+        if (r > bestRoom || (r === bestRoom && g < bestGap)) { best = h; bestRoom = r; bestGap = g; }
+    }
+    return best;
+}
+
 export default {
     async fetch(request, env) {
         if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
@@ -95,7 +112,7 @@ export class Room extends DurableObject {
         return out;
     }
     roster(list = this.players()) {
-        return JSON.stringify({ t: 'roster', players: list.map(({ u }) => ({ id: u.id, name: u.name, p: u.planet })) });
+        return JSON.stringify({ t: 'roster', players: list.map(({ u }) => ({ id: u.id, name: u.name, p: u.planet, hue: u.hue })) });
     }
     static send(ws, text) { try { ws.send(text); } catch (e) { /* closing */ } }
 
@@ -116,14 +133,15 @@ export class Room extends DurableObject {
         const u = ws.deserializeAttachment();
         if (m.t === 'join') {
             if (u.joined) return;
-            u.joined = true;
             u.name = String(m.name || 'Visitor').replace(/[^\w .'-]/g, '').slice(0, MAX_NAME) || 'Visitor';
+            u.hue = pickHue(m.hue, this.players().map((q) => q.u.hue));
+            u.joined = true;
             ws.serializeAttachment(u);
             // The log goes out as it is stored: the welcome says how many
             // batches follow, then one message per batch.
             this.load();
             const logs = this.batches.length + (this.pending.length ? 1 : 0);
-            Room.send(ws, JSON.stringify({ t: 'welcome', id: u.id, clock: this.clock(), ops: [], logs }));
+            Room.send(ws, JSON.stringify({ t: 'welcome', id: u.id, hue: u.hue, clock: this.clock(), ops: [], logs }));
             for (const text of this.batches) Room.send(ws, '{"t":"log","ops":' + text + '}');
             if (this.pending.length) Room.send(ws, JSON.stringify({ t: 'log', ops: this.pending }));
             const list = this.players();

@@ -14,13 +14,10 @@ struct Rgb { float r, g, b; };
 // figure is never mistaken for a cow or a snow patch at a distance. The visor
 // carries the same teal as the ship's cockpit glow.
 const Rgb SUIT      {0.92f, 0.93f, 0.95f};
-const Rgb SUIT_SHADE{0.70f, 0.74f, 0.82f};
 const Rgb DARK      {0.15f, 0.18f, 0.27f};
 const Rgb PACK      {0.44f, 0.48f, 0.58f};
 const Rgb PACK_DARK {0.30f, 0.34f, 0.44f};
-const Rgb ACCENT    {0.96f, 0.56f, 0.20f};
 const Rgb VISOR     {0.06f, 0.09f, 0.17f};
-const Rgb TEAL      {0.30f, 0.90f, 0.84f};
 
 // Body plan, in local units (drawn at Astronaut::SCALE, so 2 units = 1 world
 // unit). +x is the way the figure faces, +y is down toward the planet.
@@ -47,6 +44,7 @@ Pose mix(const Pose& a, const Pose& b, float t) {
 Vec2 dirDown(float deg) { return Vec2(sind(deg), cosd(deg)); }
 
 void fillc(Renderer2D& r, const Rgb& c, float a = 1.0f) { r.fill(c.r, c.g, c.b, a); }
+void fillc(Renderer2D& r, const float* c, float a = 1.0f) { r.fill(c[0], c[1], c[2], a); }
 
 // A limb segment with round ends.
 void capsule(Renderer2D& r, Vec2 a, Vec2 b, float w) {
@@ -423,7 +421,7 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     };
 
     // ---- Far leg (shade tone: it is on the far side of the body) -----------
-    fillc(r, SUIT_SHADE);
+    fillc(r, livery.suitShade);
     capsule(r, hipF, kneeF, LEG_W);
     capsule(r, kneeF, footF, LEG_W * 0.92f);
     boot(footF);
@@ -438,7 +436,7 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     Vec2 elbowN = shoulder + dirDown(pose.armN) * UPPER, handN = elbowN + dirDown(pose.foreN) * FORE;
 
     // Far arm.
-    fillc(r, SUIT_SHADE);
+    fillc(r, livery.suitShade);
     capsule(r, shoulder, elbowF, ARM_W);
     capsule(r, elbowF, handF, ARM_W * 0.9f);
     fillc(r, DARK);
@@ -449,29 +447,29 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     roundBox(r, -18.0f, -15.0f, -5.0f, 11.0f, 3.5f);
     fillc(r, PACK);
     roundBox(r, -18.0f, -15.0f, -8.0f, 6.0f, 3.5f);
-    fillc(r, ACCENT);
+    fillc(r, livery.dye);
     r.quad(-18.0f, -9.5f, -8.0f, -9.5f, -8.0f, -6.5f, -18.0f, -6.5f);
     fillc(r, PACK_DARK);
     r.quad(-14.5f, 10.0f, -9.5f, 10.0f, -8.5f, 14.0f, -15.5f, 14.0f);   // nozzle
 
     // Torso.
-    fillc(r, SUIT);
+    fillc(r, livery.suit);
     r.ellipse(0.0f, -1.0f, 10.5f, 14.5f, 26);
-    fillc(r, SUIT_SHADE);
+    fillc(r, livery.suitShade);
     r.ellipse(0.0f, 9.5f, 9.2f, 4.2f, 18);                               // hip shadow
     // Chest unit with a status light.
     fillc(r, PACK);
     roundBox(r, 2.5f, -6.5f, 9.5f, 1.5f, 1.8f);
-    fillc(r, TEAL);
+    fillc(r, livery.glow);
     r.circle(6.0f, -2.5f, 1.6f, 10);
 
     r.popMatrix();
 
     // ---- Near leg (drawn over the torso's lower edge) -----------------------
-    fillc(r, SUIT);
+    fillc(r, livery.suit);
     capsule(r, hipN, kneeN, LEG_W);
     capsule(r, kneeN, footN, LEG_W * 0.92f);
-    fillc(r, ACCENT);
+    fillc(r, livery.dye);
     r.circle(kneeN.x, kneeN.y, LEG_W * 0.5f, 14);                        // knee pad
     boot(footN);
 
@@ -483,26 +481,26 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
 
     // Neck ring, then the helmet: a big round dome with a dark visor set
     // toward the facing side.
-    fillc(r, SUIT_SHADE);
+    fillc(r, livery.suitShade);
     r.ellipse(0.5f, -14.0f, 8.5f, 3.4f, 16);
     float look = sway * 0.7f * (1.0f - stride);     // idle: glance about a little
-    fillc(r, SUIT);
+    fillc(r, SUIT);                                                     // the helmet stays white
     r.circle(1.0f, -28.0f, 15.0f, 32);
     fillc(r, PACK);
     r.circle(-9.5f, -26.0f, 3.0f, 12);                                   // comms pod
     fillc(r, VISOR);
     r.ellipse(5.6f + look, -28.0f, 9.6f, 9.2f, 26);
     // Reflection: a teal band low on the glass and a small bright glint.
-    fillc(r, TEAL, 0.55f);
+    fillc(r, livery.glow, 0.55f);
     r.ellipse(6.0f + look, -22.6f, 5.6f, 1.7f, 14);
     r.fill(1.0f, 1.0f, 1.0f, 0.85f);
     r.ellipse(9.6f + look, -32.4f, 3.0f, 1.9f, 12);
 
     // Near arm, over everything.
-    fillc(r, SUIT);
+    fillc(r, livery.suit);
     capsule(r, shoulder, elbowN, ARM_W);
     capsule(r, elbowN, handN, ARM_W * 0.9f);
-    fillc(r, ACCENT);
+    fillc(r, livery.dye);
     r.line(shoulder.x - 3.0f, shoulder.y + 2.2f, shoulder.x + 3.0f, shoulder.y + 2.2f, 2.4f);   // shoulder stripe
     fillc(r, DARK);
     r.circle(handN.x, handN.y, 3.4f, 12);
@@ -519,7 +517,7 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
             fillc(r, DARK, aim);
             r.line(back.x, back.y, tip.x, tip.y, 5.0f);
             r.line(handN.x, handN.y, handN.x + n.x * 4.5f, handN.y + n.y * 4.5f, 3.0f);
-            fillc(r, ACCENT, aim);
+            fillc(r, livery.dye, aim);
             r.line(handN.x + d.x * 3.0f, handN.y + d.y * 3.0f, handN.x + d.x * 5.5f, handN.y + d.y * 5.5f, 5.0f);
             r.fill(1.0f, 0.72f, 0.45f, aim);
             r.circle(tip.x, tip.y, 2.2f, 10);                            // emitter

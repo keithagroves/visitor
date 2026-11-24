@@ -5,6 +5,7 @@
 #include "../graphics/renderer2d.h"
 #include "../world/planet.h"
 #include "../core/debug.h"
+#include "livery.h"
 
 // The player ship. Physics (1/r^2 gravity, thrust along the ship's local "up",
 // multiplicative atmospheric drag with substepping, velocity clamp) are ported
@@ -100,6 +101,7 @@ public:
     bool crashed = false;
     float altitude = 0.0f;      // distance from ship center to terrain (HUD)
     float anim = 0.0f;          // animation timer for flame flicker
+    Livery livery;              // the player's colour: the ship's lights
 
     // Tractor beam state (recomputed each frame by updateBeam).
     bool abducting = false;     // player is holding the beam key
