@@ -65,6 +65,13 @@ em++ $SOURCES \
     --shell-file shell.html \
     -O2
 
+# Stamp the page with a fingerprint of the game code, and ask for game.js and
+# game.wasm with it (shell.html: BUILD_VERSION, Module.locateFile): a browser
+# holding an older cached copy then cannot pair it with a newer page.
+VERSION=$(cat "$BUILD_DIR/game.js" "$BUILD_DIR/game.wasm" | cksum | cut -d' ' -f1)
+sed -e "s/__BUILD_VERSION__/$VERSION/" -e "s/src=game\.js>/src=game.js?v=$VERSION>/" \
+    "$BUILD_DIR/game.html" > "$BUILD_DIR/game.html.tmp" && mv "$BUILD_DIR/game.html.tmp" "$BUILD_DIR/game.html"
+
 # Create index.html redirect for GitHub Pages
 cat > "$BUILD_DIR/index.html" << 'EOF'
 <!DOCTYPE html>

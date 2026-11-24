@@ -1657,7 +1657,9 @@
             function op(o) {
                 // [time, kind, planet, a, b, c, d]
                 var M = window.Module, age = Math.max(0, (api.clockMs() - o[0]) / 1000);
-                M._netOp(o[1] | 0, o[2] | 0, +o[3] || 0, +o[4] || 0, +o[5] || 0, +o[6] || 0, age);
+                // One change that cannot be applied must not stop the rest.
+                try { M._netOp(o[1] | 0, o[2] | 0, +o[3] || 0, +o[4] || 0, +o[5] || 0, +o[6] || 0, age); }
+                catch (e) { console.warn('skipped a world change', o, e); }
             }
             function showRoster() {
                 var row = document.getElementById('hud-online-row');
@@ -1681,6 +1683,7 @@
                     // The world is all here: start playing, and keep the clock in step
                     // (every 2 s at first, every 10 s once it has settled).
                     function welcomed() {
+                        clearTimeout(timeout);
                         function ping() {
                             if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'ping', c: now() }));
                             pingTimer = setTimeout(ping, ++pings < 10 ? 2000 : 10000);
@@ -1713,12 +1716,16 @@
                         var M = window.Module;
                         switch (m.t) {
                         case 'welcome':
+                            // (The join's timer runs on until the log is all in: if
+                            // anything goes wrong on the way, you play alone rather
+                            // than wait for ever. A long log gets longer.)
                             clearTimeout(timeout);
+                            timeout = setTimeout(function () { finish(false, 'The server stopped answering.'); try { ws.close(); } catch (e) {} }, 20000);
                             myId = m.id;
                             offset = m.clock - now();
                             ready = true;
                             M._netWelcome(m.id, api.clockMs());
-                            if (typeof m.hue === 'number') M._netMyHue(m.hue);   // mine, this session
+                            if (typeof m.hue === 'number' && M._netMyHue) M._netMyHue(m.hue);   // mine, this session
                             for (var i = 0; i < m.ops.length; i++) op(m.ops[i]);
                             // The rest of the world log may follow, in batches.
                             logsLeft = m.logs | 0;
@@ -1824,8 +1831,15 @@
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
+        // The build's fingerprint (build.sh stamps it in). game.js and
+        // game.wasm are asked for with it, so a browser holding an older
+        // cached copy cannot pair it with this page.
+        var BUILD_VERSION = '__BUILD_VERSION__';
         var Module = {
             canvas: document.getElementById('canvas'),
+            locateFile: function (path) {
+                return BUILD_VERSION.charAt(0) === '_' ? path : path + '?v=' + BUILD_VERSION;
+            },
 
             onRuntimeInitialized: function() {
                 document.getElementById('status').style.display = 'none';
