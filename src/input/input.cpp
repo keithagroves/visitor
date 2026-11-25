@@ -9,6 +9,9 @@ static bool keys[256] = {false};
 static double wheelDelta = 0;
 static float mouseX = -1.0f, mouseY = -1.0f;
 static bool mouseDown = false;
+static bool clicked = false;     // pressed since the game last asked (the light sword's swing)
+static bool rightDown = false;   // the secondary button: reserved for interacting (chests, later)
+static bool rightClicked = false; // ...pressed since the game last asked
 
 static EM_BOOL mouseMoveCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
     mouseX = (float)e->targetX;
@@ -21,6 +24,12 @@ static EM_BOOL mouseDownCallback(int eventType, const EmscriptenMouseEvent* e, v
         mouseX = (float)e->targetX;
         mouseY = (float)e->targetY;
         mouseDown = true;
+        clicked = true;
+    } else if (e->button == 2) {
+        mouseX = (float)e->targetX;
+        mouseY = (float)e->targetY;
+        rightDown = true;
+        rightClicked = true;
     }
     return EM_FALSE;
 }
@@ -29,6 +38,7 @@ static EM_BOOL mouseDownCallback(int eventType, const EmscriptenMouseEvent* e, v
 // (over the HUD, off the page) can't leave the button stuck down.
 static EM_BOOL mouseUpCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
     if (e->button == 0) mouseDown = false;
+    if (e->button == 2) rightDown = false;
     return EM_FALSE;
 }
 
@@ -86,6 +96,9 @@ void resetMouseDelta() {}
 float getMouseX() { return mouseX; }
 float getMouseY() { return mouseY; }
 bool isMouseDown() { return mouseDown; }
+bool takeClick() { bool c = clicked; clicked = false; return c; }
+bool isRightMouseDown() { return rightDown; }
+bool takeRightClick() { bool c = rightClicked; rightClicked = false; return c; }
 
 float getWheelDelta() { return (float)wheelDelta; }
 void resetWheelDelta() { wheelDelta = 0; }

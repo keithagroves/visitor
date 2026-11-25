@@ -23,6 +23,8 @@ set(SOURCES
     src/entities/lander.cpp
     src/entities/cow.cpp
     src/entities/astronaut.cpp
+    src/entities/crawler.cpp
+    src/entities/bat.cpp
     src/input/input.cpp
 )
 

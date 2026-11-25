@@ -78,6 +78,21 @@ public:
     bool  active      = false;
     bool  aiming      = false;   // set by the caller while the tool (laser / cutter) fires
     Vec2  aimWorld;              // what the laser is pointed at (world space)
+    // The light sword (main.cpp, updateSword). swordOut: it is the tool in
+    // hand (held lit at a guard; put away, the hilt hangs at the hip).
+    // swing: how far through a swing we are, in units of the cut — 0..1 the
+    // cut across the line to `swingAim` (a world point), 1..1+SWORD_BACK the
+    // arm coming back to the guard; < 0 = not swinging.
+    static constexpr float SWORD_BACK = 0.6f;
+    bool  swordOut    = false;
+    // How far the blade is out of the hilt: 0 = off .. 1 = full length. Eased
+    // in update(): it shoots out when the sword is drawn (SWORD_IGNITE
+    // seconds) and slides back in when it is put away (SWORD_RETRACT).
+    static constexpr float SWORD_IGNITE  = 0.22f;
+    static constexpr float SWORD_RETRACT = 0.15f;
+    float blade       = 0.0f;
+    float swing       = -1.0f;
+    Vec2  swingAim;
     Livery livery;               // the player's colour: the suit's trim and lights
     // Tip of the mining laser in world space, as last drawn — the caller
     // starts the beam here so it leaves the gun whatever the pose.

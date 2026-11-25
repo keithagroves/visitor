@@ -248,7 +248,11 @@ flowchart TD
   (`Planet::Alien`). `Outposts::update` is their day: wanderers amble to a
   spot on their stretch, stand, pick another; anyone you walk right up to
   stops and turns to look; the trader faces you from further off and waves
-  when you first arrive. `Outposts::draw` draws it all in the hour's light
+  when you first arrive. It also opens and shuts each post with the sun
+  over it (`closed` below `CLOSE_SUN`; `shut` eases for the drawing): at
+  night the trader and the wanderers are indoors and a shutter of planks and
+  a moon sign close the stall — the core loop refuses to trade there.
+  `Outposts::draw` draws it all in the hour's light
   (each piece rooted at its own angle, on the lowest ground under it, no
   parallax); `nearest` / `inReach` are what the HUD pointer and the E key
   ask; `blocksDig` keeps the cutter `NO_DIG` units away, because a post

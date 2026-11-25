@@ -378,6 +378,11 @@ public:
         float hail = 0;          // seconds of waving left (the trader has just seen you)
         bool  near = false;      // the visitor is close by (edge detector for the wave)
         bool  met = false;       // the player has traded here
+        // Shut for the night (Outposts::update, from the sun over the post):
+        // `closed` is the rule (no trading), `shut` eases 0 open .. 1 shut
+        // for the drawing (the shutter comes down, the trader goes in).
+        bool  closed = false;
+        float shut = 0;
     };
     Folk folk;
     std::vector<Outpost> outposts;

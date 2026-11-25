@@ -43,6 +43,8 @@ SOURCES="
     $SRC_DIR/entities/lander.cpp
     $SRC_DIR/entities/cow.cpp
     $SRC_DIR/entities/astronaut.cpp
+    $SRC_DIR/entities/crawler.cpp
+    $SRC_DIR/entities/bat.cpp
     $SRC_DIR/input/input.cpp
 "
 

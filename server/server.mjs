@@ -38,6 +38,16 @@
 // hosted server (worker/, a Cloudflare Durable Object per system) routes; this
 // one goes by the join message.
 //
+// TRANSMISSIONS (global chat) are a second socket, to /chat: one channel for
+// everyone on the server, whatever system they are in. Text only, cleaned and
+// capped, one message per CHAT_GAP per socket; the last CHAT_KEEP are handed
+// to whoever connects.
+//   client -> server   {t:'hello'}                       send me the recent ones
+//                      {t:'say', name, hue, from, text}  (from: the sender's star)
+//   server -> client   {t:'hist', msgs:[msg, ...]}
+//                      {t:'msg', name, hue, from, text, at}
+//                      {t:'slow'}                        too fast: not sent
+//
 // Run: cd server && npm install && npm start   (PORT=9001 by default)
 import uWS from 'uWebSockets.js';
 
@@ -45,7 +55,12 @@ const PORT = +(process.env.PORT || 9001);
 const MAX_OPS = 500000;          // per room: a few hours of hard digging
 const MAX_NAME = 20;
 
+const CHAT_MAX = 200;            // characters in a transmission
+const CHAT_KEEP = 50;            // recent ones handed to a newcomer
+const CHAT_GAP = 1200;           // ms between one sender's messages
+
 const rooms = new Map();         // seed -> room
+const chatLog = [];
 let nextId = 1;
 
 function room(seed) {
@@ -98,7 +113,46 @@ function changes(ws, u, r, list) {
     }
 }
 
+// A transmission, cleaned: no control or invisible/direction characters, one
+// line, capped. Null if there is nothing left to send.
+function chatMessage(m) {
+    const text = String(m.text || '')
+        .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ')
+        .replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+    if (!text) return null;
+    const name = String(m.name || 'Visitor').replace(/[^\w .'-]/g, '').slice(0, MAX_NAME) || 'Visitor';
+    const from = String(m.from || '').replace(/[^\w .'-]/g, '').slice(0, 24);
+    const hue = Number.isFinite(+m.hue) ? ((Math.round(+m.hue) % 360) + 360) % 360 : null;
+    return { t: 'msg', name, hue, from, text, at: Date.now() };
+}
+
 const app = uWS.App();
+app.ws('/chat', {
+    maxPayloadLength: 4 * 1024,
+    idleTimeout: 120,
+    sendPingsAutomatically: true,
+    upgrade: (res, req, context) => {
+        res.upgrade({ last: 0 }, req.getHeader('sec-websocket-key'), req.getHeader('sec-websocket-protocol'),
+            req.getHeader('sec-websocket-extensions'), context);
+    },
+    open: (ws) => { ws.subscribe('chat'); },
+    message: (ws, data) => {
+        let m;
+        try { m = JSON.parse(Buffer.from(data).toString()); } catch (e) { return; }
+        if (!m || typeof m !== 'object') return;
+        if (m.t === 'hello') { ws.send(JSON.stringify({ t: 'hist', msgs: chatLog })); return; }
+        if (m.t !== 'say') return;
+        const u = ws.getUserData();
+        if (Date.now() - u.last < CHAT_GAP) { ws.send(JSON.stringify({ t: 'slow' })); return; }
+        const msg = chatMessage(m);
+        if (!msg) return;
+        u.last = msg.at;
+        chatLog.push(msg);
+        if (chatLog.length > CHAT_KEEP) chatLog.shift();
+        app.publish('chat', JSON.stringify(msg));
+        console.log(`[chat] ${msg.name}: ${msg.text}`);
+    },
+});
 app.ws('/*', {
     compression: uWS.SHARED_COMPRESSOR,
     maxPayloadLength: 256 * 1024,

@@ -129,9 +129,21 @@ not how well you fly.
 always says the next rung ("Sell something at the trading post", "Bring
 back moon crystal"). No dialogue trees, no quest log, no story.
 
-**15. No combat, no building, in the first version.** Nothing shoots at you
-and you place nothing in the world. Both are real directions (see *Parked*)
-and both would double the size of the game before the loop is proven.
+**15. No building in the first version; combat is two creatures and one
+weapon.** You place nothing in the world. *Revised 2026-11-25* (the user:
+"We should add a light sword for attacking hostile creatures. It slashes in
+any direction your mouse is pointing. We would have to add some hostile
+creatures that come out at night."): the night has **crawlers**, the caves
+have **bats** day and night, and you have a **light sword** to fight them
+with (see *Night*). 2026-11-25, the user again: "I think the sword should be
+the same button as the laser. You have to equip it when enemies are near.
+Right click can be for opening chests or something. In the caves there
+should be some enemies in the day. e.g. flying bats. I'm kind of going for
+hallow knight vibes here." So the sword is the hand tool's third mode, and
+the right mouse button is kept free for interacting with things. That is all the
+combat there is: nothing shoots, there is no health bar (a bite comes off
+the suit meter, decision 5), and whether players can hurt each other is
+still undecided. Building is still a real direction (see *Parked*).
 
 ## Worlds: why you cannot just walk around
 
@@ -157,6 +169,87 @@ Two rules make this more than a timer:
   and cold drain at half rate. Digging in is a way to stay longer. (It does
   nothing for no air or bad air.)
 
+## Night (and the caves)
+
+Worlds do not spin, so night is a place (see *Heat follows the sun*): the
+half of a world facing away from the star, and the line creeps round as the
+world orbits. On every world with life on it — not the airless moons —
+**crawlers** come up out of the ground there after dark, and the natural
+caves have **bats** whatever the hour. Built 2026-11-25; the rules below
+are first passes. The user's: crawlers at night, bats in the caves by day,
+a sword that cuts toward the mouse on the laser's button and has to be
+drawn, right-click left for interacting, the Hollow Knight feel. The rest
+is my call, not yet confirmed.
+
+- **They come to you.** While you are out on foot where the sun is well
+  down, one comes up every five to nine seconds, 430 to 650 units off to
+  one side (out of shot at the ground zoom), up to two at a time at dusk
+  and four in the dead of night. They stalk you along the ground a little
+  slower than you run, crouch when they are close — low, jaw open: the tell
+  — and pounce.
+- **A bite comes off the suit meter.** 12% of a full bar per bite (about
+  eight from full), with a moment after each in which another can't land.
+  No health bar: the suit meter is the one bar, so a bite on a hostile
+  world is worse, and running out is the same blackout (decision 7: the
+  pack is gone, equipment is not).
+- **Bats** hang beside about a third of the stalactites in the natural
+  caves (not on the airless moons). Come down into their cave within about
+  200 of one and it drops off the ceiling, circles above and to one side
+  of you, holds still with its wings high and its eyes flaring — the tell —
+  and dives straight at where you were. A bite is two thirds of a
+  crawler's. One cut kills it; its roost stays empty for three minutes.
+  Bats never fly out into the open air. Seen from the front: dark wings
+  and a pale mask with dark eye holes, which is what reads in an unlit cave.
+- **The light sword** is everyone's from the start (a new player can land
+  at night). It is the hand tool's third mode: **Q** cycles laser → cutter
+  (once bought) → sword, and **1 / 2 / 3** pick one, so you **draw it**
+  when something comes for you (the game says so, at most every 25 s, when
+  something is coming and the sword is not out). Drawn, it is always out:
+  held lit at a guard in your hand (the user: "When your light sword is out
+  it should be always out and should be brighter when it swings"). Drawing
+  it ignites it like a light saber (the user: "it should extend out like a
+  light saber"): the blade shoots out of the hilt in 0.22 s; putting it
+  away slides it back in. Each
+  click of the mouse button is one cut across the line to the cursor, any
+  direction, flaring bright: 0.17 s across the arc, then 0.1 s back to the
+  guard. A click during the return cuts again at once; a click during the
+  cut is kept and cuts again the moment it ends (no dead time after a
+  swing — the user saw a delay there). It reaches about 46 units past your
+  chest and catches anything within 80 degrees either side of the aim. A
+  cut knocks a crawler back; the second kills it.
+- **The Hollow Knight feel.** A hit freezes the fight for an instant
+  (0.06 s: you, the crawlers and the bats; the world goes on) and pushes you
+  back off what you hit. Cutting **down** onto something while you are in
+  the air bounces you up off it — a pogo — about as high as a jump.
+- **A kill leaves carbon** — 2 from a crawler, 1 from a bat. Carbon is air
+  (decision 5): fighting pays back a little of what it costs.
+- **Shelter.** None come up near a trading post (450 along the ground),
+  and none come nearer to its lantern than 320: a post is safe ground at
+  night. None come up while you are underground (they will follow you into
+  a hole they can drop into). They stop at the water's edge. In the ship
+  you are out of reach; they give up after a few seconds.
+- **Dawn.** When the sun reaches a crawler it digs back in.
+- **They are yours alone.** Online, other players do not see your crawlers,
+  your bats or your sword: not shared yet.
+
+Tunable on the debug panel: *Night crawlers* (0 = none, 1 = as above),
+*Cave bats* (0 = none, 1 = a third of the stalactites) and *bite*.
+
+**The posts shut at night** (the user, 2026-11-25: "make the towns closed at
+night so you can't buy stuff at the shop"). A post closes when the sun at it
+is a little below the horizon (`Outposts::CLOSE_SUN`) and opens at dawn: the
+shutter comes down over the stall, a sign with a moon on it goes up, the
+trader goes into the hut and the others go home. No trading at all — not
+buying, not selling, not from the hold; a trade open at nightfall is closed
+("... is shutting up for the night"), and E at the stall says so. Since a
+world's day is its year (twenty-odd minutes at home), a night is a long
+wait: the way round it is a post on the day side. My calls, unconfirmed:
+the lantern stays lit and the post is still safe from crawlers; the suit
+still refills at a shut stall (closing a shop should not strand anyone on
+a hostile world); a new player is dropped by a post in daylight, so the
+first sale is never blocked by the hour; the HUD's trader line says
+"shut".
+
 ## Equipment
 
 Everything you can own, and nothing else:
@@ -172,6 +265,7 @@ Everything you can own, and nothing else:
 | **Tool** | Terrain cutter | 3 | the cutter itself (dig, Q); then +35% / +75% cutting speed |
 | | Mining laser | 2 | you start with I; II mines **gold** and works 40% faster; III twice as fast |
 | | Scanner | unlock | a pulse that shows buried ore nearby for a few seconds |
+| | Light sword | owned | the tool's third mode (Q, or 3): a click is a cut toward the cursor (see *Night*); not upgraded yet |
 
 ## The ladder
 
@@ -246,8 +340,9 @@ Borrowed, and what each one is here:
 | Fuel as a range limit, landing as the risk | Kerbal Space Program | built |
 
 Left behind on purpose: crafting grids and part trees, base building,
-placing blocks, hunger, monsters and combat, space fights, creature
-cataloguing, story missions.
+placing blocks, hunger, space fights, creature cataloguing, story
+missions. (Monsters and combat were on this list until 2026-11-25: see
+*Night*.)
 
 ## Parked
 
@@ -274,7 +369,14 @@ Good ideas that wait until the loop above is fun. Parked, not dropped:
   the stock suit and tank are tuned for it. Online is the default (the
   user: "play online should be the default. We can add the other options
   later if we want them"): the title is a name and Play, with no New game
-  and no offline choice for now.
+  and no offline choice for now. **Transmissions** (built 2026-11-25; the
+  user: "send transmissions to other players. For now it could be a global
+  chat for anyone on the server"): Enter opens a box bottom left; a line
+  goes to everyone on the server, whatever system they are in, tagged with
+  the sender's star when it is not yours. New lines show for twelve seconds
+  and fade; opening the box shows the last fifty (a newcomer gets them too).
+  Text only, 200 characters, one line every 1.2 s each. No accounts, so
+  names can be borrowed, and no word filter yet.
 - **Salvaging your wreck** — fly back to where you crashed and beam the
   cargo out of it.
 - **Fuel you have to find**, parachutes and heat shields for worlds with
@@ -286,8 +388,11 @@ Good ideas that wait until the loop above is fun. Parked, not dropped:
 Ship: W thrust, A/D turn, Space tractor beam, E step out, M map, **T time
 warp** (open space only), **J jump** (star drive, clear of every world), **R
 rescue** (after a crash, or adrift with an empty tank). On foot: A/D walk,
-W jump, Space jetpack, mouse fires the tool, Q laser / cutter, **F breathe
-carbon**, **C scan**, E trade / board, Tab pack and hold.
+W jump, Space jetpack, mouse fires the tool (with the sword out, each click
+is a cut), **Q laser / cutter / sword, or 1 / 2 / 3**, **F breathe carbon**,
+**C scan**, E trade / board, Tab pack and hold. The right mouse button is
+kept for interacting with things (chests, later). Online: **Enter
+transmits** (global chat).
 
 ## Tuning: what is measured and what is not
 

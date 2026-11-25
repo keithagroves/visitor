@@ -53,7 +53,9 @@ sequenceDiagram
     Loop->>A: updateSuit() — the suit meter drains or refills; F breathes carbon, C scans, J jumps, the herd regrows
     Loop->>P: updateDiscovery() — chart worlds on approach
     Loop->>V: updateZoom() + updateView() — framing, follow, auto-roll, map
-    Loop->>A: updateLaser() — aim at the cursor: harvest, or cut terrain (after the camera)
+    Loop->>A: updateSword() — sword out: a click is a cut toward the cursor; what it hits, hit-stop, pogo (after the camera)
+    Loop->>A: updateLaser() — aim at the cursor: harvest, or cut terrain (held off mid-swing)
+    Loop->>P: updateEnemies() — crawlers after dark, bats in the caves: move, pounce / dive; a bite comes off the suit
     Loop->>P: NearField::update() — regrowth; updateWaterFx() — splashes, spray, bubbles, the floating ship; updateParticles()
 ```
 
@@ -75,14 +77,14 @@ flowchart LR
     Mask --> Cows["2b. Cast + blob shadows, cows,<br/>harvestables behind the walking line,<br/>trading posts and the locals,<br/>uncovered ore, cave props"]
     Cows --> Atmo["3. Face fill<br/>atmosphere mode 1 (from space)"]
     Atmo --> Nav["3b. Nav overlay<br/>orbit rings · markers · labels"]
-    Nav --> Ship["3c. Ship + astronaut<br/>+ trajectory/beacon aids"]
+    Nav --> Ship["3c. Ship, crawlers, bats, astronaut<br/>+ trajectory/beacon aids"]
     Ship --> WaterF["3c-. Water in front of the walker<br/>+ in flooded holes (water pass, mode 1)"]
     WaterF --> Veil["3c0. Front-ground veil<br/>over dug holes (body pass, veil mode)"]
     Veil --> WaterB["3c0'. Water over the bed in front<br/>(water pass, mode 2)"]
     WaterB --> Near["3c1. Harvestables in front<br/>+ mining laser, sparks, chips, spray"]
     Near --> Fg["3d. Foreground band<br/>(screen-anchored)<br/>+ scanner marks over it"]
     Fg --> Clouds["4. Clouds<br/>FBM band"]
-    Clouds --> Top["5. Motes + vignette"]
+    Clouds --> Top["5. Motes + vignette<br/>+ red edges after a bite"]
     Top --> HUD["updateHUD() / updateNav() → DOM overlay"]
 
     click Stars call navigate("../../src/core/main.cpp")

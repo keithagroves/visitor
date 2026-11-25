@@ -1,4 +1,5 @@
 #include "astronaut.h"
+#include <algorithm>
 #include <cmath>
 
 // The astronaut is drawn as flat vector shapes through Renderer2D, like the
@@ -89,6 +90,8 @@ void Astronaut::spawn(Vec2 position) {
     swimGo        = 0.0f;
     stroking      = false;
     muzzleWorld   = position;
+    swing         = -1.0f;
+    blade         = 0.0f;           // stepping out with the sword drawn, it lights up
 }
 
 void Astronaut::update(const Planet& planet, float timeScale) {
@@ -219,6 +222,11 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     ease(stride, walking ? 1.0f : 0.0f, 0.30f);
     ease(air, grounded ? 0.0f : 1.0f, 0.28f);
     ease(aim, aiming ? 1.0f : 0.0f, 0.40f);
+    // The light sword's blade: out when it is drawn, in when it is put away
+    // (at once if the laser is already firing: that hand is busy).
+    if (swordOut || swing >= 0.0f) blade = std::min(1.0f, blade + timeScale / (60.0f * SWORD_IGNITE));
+    else if (aiming) blade = 0.0f;
+    else blade = std::max(0.0f, blade - timeScale / (60.0f * SWORD_RETRACT));
     // Swimming: off the bottom and in over the waist. The stroke runs faster
     // the harder we are going, and the body lies forward only while it is
     // actually travelling along.
@@ -385,6 +393,58 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
         pose.lean *= 1.0f - aim;
     }
 
+    // The light sword. Drawn (swordOut), it is held lit in the near hand at
+    // a guard: arm forward, blade up and forward. A swing is a chop across
+    // the line from the shoulder to where it was swung, from well above it
+    // to well below (SWING_HALF either side), fast at first and easing out
+    // (swing 0..1, the arm and blade in one line, the far arm coming across,
+    // the body leaning in); then straight back to the guard (1..1+SWORD_BACK).
+    // The blade flares while it cuts and settles back to its held glow.
+    const float SWING_HALF = 75.0f, BLADE = 40.0f;
+    const float GUARD_ARM = 30.0f, GUARD_FORE = 80.0f, GUARD_BLADE = 150.0f;
+    bool swinging = swing >= 0.0f;
+    bool bladeOut = swordOut || swinging || blade > 0.0f;
+    // Lit, the blade shoots out of the hilt fast and slows to its full
+    // length; put away, it slides back in. Coming out, it burns bright.
+    float ext = swordOut || swinging ? 1.0f - (1.0f - blade) * (1.0f - blade) * (1.0f - blade)
+                                     : blade * blade;     // going in: from the first frame
+    float bladeLen = BLADE * ext;
+    float ignite = swordOut && blade < 1.0f ? 1.0f - blade : 0.0f;
+    float swingAt = 90.0f;                 // the line to the target (from straight down, + forward)
+    auto sweep = [&](float k) {
+        float e = 1.0f - (1.0f - k) * (1.0f - k);
+        return swingAt + SWING_HALF - 2.0f * SWING_HALF * e;
+    };
+    auto towards = [](float from, float to, float k) {   // angles, the short way round
+        float d = fmodf(to - from + 540.0f, 360.0f) - 180.0f;
+        return from + d * k;
+    };
+    float bladeDeg = GUARD_BLADE;          // which way the blade points
+    float flare = 0.0f;                    // 0 held .. 1 cutting: how bright it burns
+    float back = 0.0f;                     // 0..1 through the return to the guard
+    if (bladeOut) {
+        pose.armN = GUARD_ARM;
+        pose.foreN = GUARD_FORE;
+    }
+    if (swinging) {
+        Vec2 v = swingAim - pos;
+        float ca = cosd(-standAngle), sa = sind(-standAngle);
+        Vec2 local((v.x * ca - v.y * sa) / SCALE * (float)facing, (v.x * sa + v.y * ca) / SCALE - drop);
+        swingAt = atan2d(local.x - shoulder.x, local.y - shoulder.y);
+        float cutDeg = sweep(swing < 1.0f ? swing : 1.0f);
+        back = swing > 1.0f ? std::min(1.0f, (swing - 1.0f) / SWORD_BACK) : 0.0f;
+        float e = back * back * (3.0f - 2.0f * back);
+        pose.armN = towards(cutDeg, GUARD_ARM, e);
+        pose.foreN = towards(cutDeg, GUARD_FORE, e);
+        bladeDeg = towards(cutDeg, GUARD_BLADE, e);
+        float w = 1.0f - e;
+        pose.armF += (cutDeg - 25.0f - pose.armF) * 0.7f * w;
+        pose.foreF += (cutDeg - 5.0f - pose.foreF) * 0.7f * w;
+        pose.lean += (8.0f - pose.lean) * w;
+        flare = 1.0f - e;
+    }
+    flare = std::max(flare, ignite * 0.8f);
+
     r.pushMatrix();
     r.translate(pos.x, pos.y);
     r.rotate(standAngle);
@@ -465,6 +525,16 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
 
     r.popMatrix();
 
+    // The light sword's hilt, hanging at the hip while it is put away.
+    if (!bladeOut) {
+        fillc(r, DARK);
+        capsule(r, Vec2(-3.0f, 5.0f), Vec2(-7.5f, 15.0f), 3.4f);
+        fillc(r, livery.dye);
+        r.line(-3.6f, 6.4f, -4.5f, 8.4f, 4.4f);
+        fillc(r, livery.glow, 0.8f);
+        r.circle(-2.6f, 4.2f, 1.5f, 8);                                 // the emitter, dark until drawn
+    }
+
     // ---- Near leg (drawn over the torso's lower edge) -----------------------
     fillc(r, livery.suit);
     capsule(r, hipN, kneeN, LEG_W);
@@ -504,6 +574,64 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     r.line(shoulder.x - 3.0f, shoulder.y + 2.2f, shoulder.x + 3.0f, shoulder.y + 2.2f, 2.4f);   // shoulder stripe
     fillc(r, DARK);
     r.circle(handN.x, handN.y, 3.4f, 12);
+
+    // The light sword in the near hand: the cut's afterglow (a fading fan
+    // across the arc just swept), then the blade — one smooth halo in the
+    // player's colour and a core — then the hilt over the fist. Held, it
+    // burns low: a faint halo, the core tinted. Cutting, it flares: a wide
+    // bright halo, a white-hot core, a bloom at the tip.
+    if (bladeOut) {
+        const float armLen = UPPER + FORE;
+        r.setBlend(Renderer2D::Blend::Additive);
+        if (swinging) {
+            float k1 = swing < 1.0f ? swing : 1.0f;
+            float k0 = k1 - 0.6f > 0.0f ? k1 - 0.6f : 0.0f;
+            float fade = 1.0f - back * 1.6f;               // the trail goes as the arm comes back
+            if (fade < 0.0f) fade = 0.0f;
+            const int SEG = 10;
+            for (int i = 0; i < SEG && fade > 0.0f; i++) {
+                float ka = k0 + (k1 - k0) * (float)i / SEG, kb = k0 + (k1 - k0) * (float)(i + 1) / SEG;
+                Vec2 da = dirDown(sweep(ka)), db = dirDown(sweep(kb));
+                float aA = 0.6f * fade * (float)i / SEG, aB = 0.6f * fade * (float)(i + 1) / SEG;
+                Renderer2D::Color ca{livery.glow[0], livery.glow[1], livery.glow[2], aA};
+                Renderer2D::Color cb{livery.glow[0], livery.glow[1], livery.glow[2], aB};
+                Renderer2D::Color c0{livery.glow[0], livery.glow[1], livery.glow[2], 0.0f};
+                Vec2 ia = shoulder + da * (armLen + 4.0f), oa = shoulder + da * (armLen + bladeLen);
+                Vec2 ib = shoulder + db * (armLen + 4.0f), ob = shoulder + db * (armLen + bladeLen);
+                r.triangleV(ia, c0, oa, ca, ob, cb);
+                r.triangleV(ia, c0, ob, cb, ib, c0);
+            }
+        }
+        Vec2 d = dirDown(bladeDeg);
+        Vec2 base = handN + d * 3.0f, tip = handN + d * (bladeLen > 3.0f ? bladeLen : 3.0f);
+        bool lit = bladeLen > 3.0f;
+        if (lit) {
+            fillc(r, livery.glow, 0.16f + 0.40f * flare);
+            r.line(base.x, base.y, tip.x, tip.y, 7.0f + 6.0f * flare);
+            r.circle(tip.x, tip.y, 3.5f + 3.5f * flare, 12);
+            if (flare > 0.0f) {
+                r.fill(1.0f, 1.0f, 1.0f, 0.30f * flare);       // the white heat of the cut
+                r.line(base.x, base.y, tip.x, tip.y, 5.0f);
+            }
+            if (ignite > 0.0f) {
+                // Igniting: a burst at the emitter, and the tip running out
+                // ahead of the blade's glow.
+                fillc(r, livery.glow, 0.5f * ignite);
+                r.circle(base.x, base.y, 6.0f + 6.0f * ignite, 14);
+                r.fill(1.0f, 1.0f, 1.0f, 0.7f * ignite);
+                r.circle(tip.x, tip.y, 3.0f, 10);
+            }
+        }
+        r.setBlend(Renderer2D::Blend::Normal);
+        float tint = 0.45f * (1.0f - flare);                    // held: the core takes the colour
+        r.fill(1.0f + (livery.glow[0] - 1.0f) * tint, 1.0f + (livery.glow[1] - 1.0f) * tint,
+               1.0f + (livery.glow[2] - 1.0f) * tint, 1.0f);
+        if (lit) capsule(r, base, tip, 2.6f + 0.8f * flare);
+        fillc(r, DARK);
+        capsule(r, handN - d * 4.0f, handN + d * 3.0f, 4.2f);
+        fillc(r, livery.dye);
+        r.circle(handN.x + d.x * 3.0f, handN.y + d.y * 3.0f, 2.6f, 10);
+    }
 
     // Mining laser: a stubby gun in the near hand, along the aim line.
     {

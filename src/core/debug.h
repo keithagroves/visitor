@@ -102,6 +102,16 @@ struct Debug {
     // (0 = clear as air, 1 = hidden).
     float waterLevel = 0.0f;
     float waterTint = 0.42f;
+    // Enemies (main.cpp, "Night crawlers, cave bats and the light sword").
+    // `crawlers` scales how many come up at night at once and how often (1 =
+    // two to four on screen, one every five to nine seconds; 0 = none).
+    // `bats` scales how many of the caves' stalactites have a bat beside them
+    // (1 = about a third; 0 = none). `bite` is the share of a full suit meter
+    // a crawler's bite takes (0.12: about eight bites from full); a bat's is
+    // two thirds of that.
+    float crawlers = 1.0f;
+    float bats = 1.0f;
+    float bite = 0.12f;
     // Sun-angle override for tuning time-of-day looks: -5 = auto day cycle;
     // 0..360 pins the sun's orbit angle (270 = noon over the spawn point,
     // ~350 = sunset there).

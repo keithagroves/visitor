@@ -112,9 +112,11 @@ own flow:
   ship (and, on foot beside a trader's stall, trade), M system map, T time
   warp in open space, J jump (with a star drive), R rescue after a crash, wheel or +/- zoom, R restart after a crash. On foot:
   A/D walk (and steer in the air), W jump, Space jetpack, hold the mouse
-  button to fire the hand tool at the cursor, Q to switch it between mining
-  laser and terrain cutter (once bought), F breathe carbon into the suit, C
-  scan for ore, Tab (or I) for the pack and the hold. The title screen asks
+  button to use the hand tool at the cursor, Q (or 1/2/3) to switch it
+  between mining laser, terrain cutter (once bought) and light sword (each
+  click a cut: crawlers come up after dark, bats wait in the caves), F breathe carbon into the suit, C
+  scan for ore, Tab (or I) for the pack and the hold; online, Enter opens
+  the transmissions box (a global chat for everyone on the server). The title screen asks
   for a name and has one button, Play, which goes online (alone if the
   server cannot be reached) and carries on from the save; the game saves
   itself (localStorage).

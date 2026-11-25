@@ -7,9 +7,15 @@
     "main": "src/index.js",
     "compatibility_date": "2025-11-01",
     "durable_objects": {
-        "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+        "bindings": [
+            { "name": "ROOMS", "class_name": "Room" },
+            { "name": "CHAT", "class_name": "Chat" }      // transmissions: one for everyone
+        ]
     },
     // new_sqlite_classes: the SQLite storage backend, the one the free plan has.
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["Room"] },
+        { "tag": "v2", "new_sqlite_classes": ["Chat"] }
+    ],
     "observability": { "enabled": true }
 }

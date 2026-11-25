@@ -1,12 +1,12 @@
 ---
 name: entities
-description: The interactive bodies — the player Lander (gravity/thrust/drag physics, tractor beam, trajectory prediction), the abductable Cow (ground→carried→falling→stowed state machine), and the spacewalking Astronaut (walk/jump/jetpack, digs the crust).
-tags: [entities, lander, cow, astronaut, physics]
+description: The interactive bodies — the player Lander (gravity/thrust/drag physics, tractor beam, trajectory prediction), the abductable Cow (ground→carried→falling→stowed state machine), the spacewalking Astronaut (walk/jump/jetpack, digs the crust, swings the light sword), the hostile night Crawler (comes up after dark, stalks, pounces, bites the suit) and the cave Bat (roosts in the natural caves, dives).
+tags: [entities, lander, cow, astronaut, crawler, bat, combat, physics]
 ---
 
 # Entities
 
-The three gameplay actors. All live in planet world-space, read gravity and the
+The five gameplay actors. All live in planet world-space, read gravity and the
 surface silhouette from the [Planet](world.md), and draw themselves through the
 [Renderer2D](graphics.md). They are forward-simulated by the
 [core loop](core.md) each frame.
@@ -15,7 +15,9 @@ surface silhouette from the [Planet](world.md), and draw themselves through the
 flowchart TD
     Lander["Lander<br/>player ship"]
     Cow["Cow<br/>abductable, state machine"]
-    Astronaut["Astronaut<br/>spacewalk, jetpack, hand tool"]
+    Astronaut["Astronaut<br/>spacewalk, jetpack, hand tool, light sword"]
+    Crawler["Crawler<br/>night creature, stalk / pounce"]
+    Bat["Bat<br/>cave flyer, hover / dive"]
     Planet["Planet<br/>gravity · surface · rockAt() · dig()"]
     Renderer["Renderer2D"]
 
@@ -25,11 +27,20 @@ flowchart TD
     Lander --> Renderer
     Cow --> Renderer
     Astronaut --> Renderer
+    Crawler -->|collide with rock| Planet
+    Crawler --> Renderer
+    Bat -->|bounce off rock| Planet
+    Bat --> Renderer
+    Bat -. bites .-> Astronaut
     Lander -. beam catches .-> Cow
+    Crawler -. bites .-> Astronaut
+    Astronaut -. sword cuts .-> Crawler
 
     click Lander call navigate("../../src/entities/lander.cpp")
     click Cow call navigate("../../src/entities/cow.cpp")
     click Astronaut call navigate("../../src/entities/astronaut.cpp")
+    click Crawler call navigate("../../src/entities/crawler.cpp")
+    click Bat call navigate("../../src/entities/bat.cpp")
     click Planet call navigate("world.md")
     click Renderer call navigate("graphics.md")
 ```
@@ -84,7 +95,21 @@ flowchart TD
   (tucked jump, or legs trailing under thrust with the flame out of the
   pack), `aim` (both arms swing onto the line to `aimWorld` and a stubby tool
   appears in the near hand; `draw()` publishes the emitter's world position
-  as `muzzleWorld` for the beam).
+  as `muzzleWorld` for the beam), and `swing` (0–1 through a cut of the
+  **light sword** at `swingAim`: the near arm carries a glowing blade
+  across the line to the target, from 75° above it to 75° below, easing
+  out, leaving a fading fan in the player's colour, then straight back to a
+  guard). With the sword the tool in hand (`swordOut`) the blade is always
+  out, held lit at the guard (arm forward, blade up and forward, the core
+  tinted the player's colour); it flares — wider, brighter halo, white-hot
+  core, a bloom at the tip — while it cuts, and settles as the arm comes
+  back. Drawn, it ignites like a light saber (`blade` 0 → 1 over
+  `SWORD_IGNITE`, 0.22 s): a burst at the emitter, the blade shooting out
+  fast and slowing to full length with a bright tip running ahead, burning
+  bright until it is all the way out; put away, it slides back into the
+  hilt (`SWORD_RETRACT`, 0.15 s) before the hilt goes back to the hip. The sword is the hand tool's third mode; the
+  swing's timing, what it hits, the hit-stop and the pogo are the core
+  loop's (`updateSword`).
   **In water** (`Planet::waterDepth`, measured at the feet: `wet` 0–1)
   the suit is heavy, so it sinks, slowly: the water carries most of its
   weight (`SWIM_BUOYANCY`) and slows everything (`SWIM_DRAG`). It walks
@@ -99,6 +124,46 @@ flowchart TD
   shade tone, dark boots/gloves/visor, one orange accent, the ship's teal in
   the visor.
 
+- **Crawler** — the hostile night creature ([docs/gameplay.md](../gameplay.md),
+  *Night*). Comes up out of the ground (`Emerging`, grows up from its feet
+  with clods of earth), then `Prowling` toward the player along the
+  ground, a little slower than you run, hopping up steps it can't walk;
+  close enough it goes `Crouching` (0.42 s, low with its jaw open: the
+  tell) and then `Leaping` — a hop that peaks 20 units up and comes down
+  where you were, on any world's gravity. While in the air it can bite
+  (`update()` returns true; the core loop tests the bite). Then
+  `Recovering` (0.55 s standing there: the opening), back to prowling.
+  A sword hit knocks it back (`Staggered`); the second kills it (`Dying`).
+  It holds back at the edge of a trading post's lantern light
+  (`POST_KEEPOUT`, 320 along the ground) and at the water's edge, and digs
+  back in (`Burrowing` → `Gone`) when the sun reaches it, when it has had
+  nobody to hunt for five seconds, or when you are 1800 away. Physics is
+  the astronaut's recipe — gravity, the rock itself (`rockAt`), a step down
+  — with one body circle, but kept **planet-local** (`local` = feet
+  relative to the planet center), so it rides the orbit with no carrying
+  and keeps float precision. Drawn on the walking line like the astronaut:
+  four legs on a gait clock, a low hunched back with two to four spines, a
+  tail, the head with a dropping jaw; the world's dark ground-clutter tone
+  pulled toward night violet, and the one accent, ember eyes with a small
+  halo, which is what you see of it in the dark.
+
+- **Bat** — the cave flyer. Spawned by the core loop beside some of the
+  natural caves' stalactites (`roostBats`), hanging upside down wrapped in
+  its wings (`Roosting`). Someone underground within 210 wakes it
+  (`Waking`: drops off the ceiling), then `Flying`: steers to a point above
+  and to one side of the player with a bob; after a second or two of that,
+  close enough, `Windup` (0.38 s holding still, wings high, eyes flaring:
+  the tell) and `Diving` straight at where the chest was, at 5.2 a frame,
+  until it bites, hits rock or 0.6 s pass (`update()` returns true while
+  it can bite); `Retreating` up and back, round again. One sword cut:
+  `Dying` (falls, tumbling); nobody to hunt for three seconds: `Leaving`
+  (back toward its roost, fading). No gravity while alive; it bounces off
+  the rock (`rockAt`) and turns back short of the ground's outline, so it
+  never leaves the caves. Planet-local like the crawler. Drawn from the
+  front: dark body, scalloped wings that beat, ears, and a pale mask with
+  dark eye holes (the Hollow Knight look the user asked for); faded by how
+  far the player is down a hole, so it never shows through the ground.
+
 ## Source
 
 - [src/entities/lander.h](../../src/entities/lander.h) ·
@@ -109,6 +174,14 @@ flowchart TD
 - [src/entities/astronaut.h](../../src/entities/astronaut.h) ·
   [astronaut.cpp](../../src/entities/astronaut.cpp) — spacewalk movement,
   jetpack, rock collision, and the posed vector figure.
+- [src/entities/crawler.h](../../src/entities/crawler.h) ·
+  [crawler.cpp](../../src/entities/crawler.cpp) — the night crawler's state
+  machine, physics and drawing. Spawning, the bite and the sword are in
+  [main.cpp](../../src/core/main.cpp) ("Night crawlers, cave bats and the
+  light sword").
+- [src/entities/bat.h](../../src/entities/bat.h) ·
+  [bat.cpp](../../src/entities/bat.cpp) — the cave bat's state machine,
+  flight and drawing.
 
 ## Related
 

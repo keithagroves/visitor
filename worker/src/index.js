@@ -16,6 +16,10 @@
 //   - There is no pub/sub here: "everyone at world p" is a walk over the
 //     room's sockets.
 //
+// TRANSMISSIONS (global chat, see server/server.mjs) go to /chat: ONE more
+// Durable Object (Chat, named 'global') for everyone on the server, whatever
+// system they are in. It keeps the last CHAT_KEEP in its storage.
+//
 // Free-plan budget (Durable Objects on the SQLite backend): 100,000 requests a
 // day, where a WebSocket connect is one and incoming messages count 20 to one
 // (outgoing are free); 13,000 GB-s of time awake a day (a busy room is awake,
@@ -28,6 +32,22 @@ const MAX_NAME = 20;
 const MAX_IN = 256 * 1024;   // largest message accepted
 const FLUSH_MS = 3000;       // how long a change may wait before it is written
 const BATCH = 2000;          // most changes in one row (~80 KB of text)
+const CHAT_MAX = 200;        // characters in a transmission
+const CHAT_KEEP = 50;        // recent ones kept and handed to a newcomer
+const CHAT_GAP = 1200;       // ms between one sender's messages
+
+// A transmission, cleaned: no control or invisible/direction characters, one
+// line, capped. Null if there is nothing left to send.
+function chatMessage(m) {
+    const text = String(m.text || '')
+        .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, ' ')
+        .replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+    if (!text) return null;
+    const name = String(m.name || 'Visitor').replace(/[^\w .'-]/g, '').slice(0, MAX_NAME) || 'Visitor';
+    const from = String(m.from || '').replace(/[^\w .'-]/g, '').slice(0, 24);
+    const hue = Number.isFinite(+m.hue) ? ((Math.round(+m.hue) % 360) + 360) % 360 : null;
+    return { t: 'msg', name, hue, from, text, at: Date.now() };
+}
 
 // A colour for a player joining (a hue for their ship and suit): the one
 // they asked for if nobody on now is within MIN_HUE of it, else the hue
@@ -50,6 +70,8 @@ export default {
     async fetch(request, env) {
         if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
             return new Response('Visitor multiplayer server: connect with a WebSocket.\n');
+        if (new URL(request.url).pathname === '/chat')
+            return env.CHAT.get(env.CHAT.idFromName('global')).fetch(request);
         const seed = Number(new URL(request.url).searchParams.get('seed')) >>> 0;
         if (!seed) return new Response('Which system? Connect to /?seed=N.\n', { status: 400 });
         return env.ROOMS.get(env.ROOMS.idFromName(String(seed))).fetch(request);
@@ -222,4 +244,47 @@ export class Room extends DurableObject {
         try { ws.close(code, reason); } catch (e) { /* already closed */ }
     }
     async webSocketError(ws) { this.left(ws); }
+}
+
+// Transmissions: one room for everyone. Hibernates like the systems' rooms;
+// each socket's attachment is when it last spoke (the rate limit).
+export class Chat extends DurableObject {
+    constructor(ctx, env) {
+        super(ctx, env);
+        this.sql = ctx.storage.sql;
+        this.sql.exec('CREATE TABLE IF NOT EXISTS msgs (json TEXT)');
+    }
+
+    async fetch(request) {
+        const [client, server] = Object.values(new WebSocketPair());
+        this.ctx.acceptWebSocket(server);
+        server.serializeAttachment({ last: 0 });
+        return new Response(null, { status: 101, webSocket: client });
+    }
+
+    recent() {
+        const rows = this.sql.exec('SELECT json FROM msgs ORDER BY rowid DESC LIMIT ?', CHAT_KEEP).toArray();
+        return rows.reverse().map((r) => JSON.parse(r.json));
+    }
+
+    async webSocketMessage(ws, data) {
+        if (typeof data !== 'string' || data.length > 4096) return;
+        let m;
+        try { m = JSON.parse(data); } catch (e) { return; }
+        if (!m || typeof m !== 'object') return;
+        if (m.t === 'hello') { Room.send(ws, JSON.stringify({ t: 'hist', msgs: this.recent() })); return; }
+        if (m.t !== 'say') return;
+        const u = ws.deserializeAttachment() || { last: 0 };
+        if (Date.now() - u.last < CHAT_GAP) { Room.send(ws, JSON.stringify({ t: 'slow' })); return; }
+        const msg = chatMessage(m);
+        if (!msg) return;
+        u.last = msg.at;
+        ws.serializeAttachment(u);
+        const text = JSON.stringify(msg);
+        this.sql.exec('INSERT INTO msgs (json) VALUES (?)', text);
+        this.sql.exec('DELETE FROM msgs WHERE rowid <= (SELECT MAX(rowid) FROM msgs) - ?', CHAT_KEEP);
+        for (const q of this.ctx.getWebSockets()) if (q.readyState === 1) Room.send(q, text);
+    }
+    async webSocketClose(ws, code, reason) { try { ws.close(code, reason); } catch (e) { /* already closed */ } }
+    async webSocketError(ws) {}
 }

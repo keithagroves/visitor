@@ -20,6 +20,8 @@
 #include "../entities/lander.h"
 #include "../entities/cow.h"
 #include "../entities/astronaut.h"
+#include "../entities/crawler.h"
+#include "../entities/bat.h"
 #include "../input/input.h"
 #include "debug.h"
 #include "../graphics/shader.h"
@@ -1173,14 +1175,17 @@ struct App {
         float life, maxLife, size;
         float r, g, b;
         int mode;                   // 0 spark, 1 harvested bit flying to the player, 2 ember (falls), 3 smoke (rises, spreads),
-                                    // 4 water droplet (falls), 5 bubble (rises to the surface), 6 ripple ring on the water
+                                    // 4 water droplet (falls), 5 bubble (rises to the surface), 6 ripple ring on the water,
+                                    // 7 clod of earth (falls; drawn solid, not glowing)
     };
     std::vector<Particle> particles;
-    // The hand tool has two modes (Q switches): the mining laser, which cuts
-    // plants / rocks / crystals, and the terrain cutter, which eats rock.
-    int toolMode = 0;               // 0 = mining laser, 1 = terrain cutter
+    // The hand tool has three modes (Q cycles, 1/2/3 pick): the mining laser,
+    // which cuts plants / rocks / crystals, the terrain cutter, which eats
+    // rock, and the light sword, for what attacks you. All on the mouse button.
+    int toolMode = 0;               // 0 = mining laser, 1 = terrain cutter, 2 = light sword
     // (The terrain cutter is bought: upgrades[Trade::Cutter] >= 1.)
     bool prevToolKey = false;
+    bool prevPickKey[3] = {false, false, false};   // 1 / 2 / 3: pick a tool
     bool laserCutting = false;      // this frame's beam is the cutter (for its color)
     float cutTimer = 0.0f;          // time banked toward the next bite
     int cutBites = 0;               // bites taken (paces the smoke)
@@ -1250,6 +1255,29 @@ struct App {
     Vec2 scanFrom;                  // planet-local: where the pulse went out from
     bool prevScanKey = false;
     float herdTimer = 0.0f;         // the home herd grows back, one cow at a time
+    // Night crawlers (the hostile creatures that come out after dark), the
+    // cave bats (in the natural caves, day or night) and the light sword you
+    // fight them with. They belong to one world (crawlerPlanet) and are
+    // dropped when you leave it. They are this player's own: other players do
+    // not see them (not shared online).
+    std::vector<Crawler> crawlers;
+    std::vector<Bat> bats;
+    // Roosts whose bat was killed, by roost key (planet * 1e6 + cave prop),
+    // and the clock (seconds, worldFrames / 60) when one roosts there again.
+    std::unordered_map<int, double> batGone;
+    int crawlerPlanet = -1;
+    float crawlerSpawnIn = 2.5f;    // seconds until the next one may come up
+    bool crawlersMet = false;       // the first one has been announced (this session)
+    bool bittenOnce = false;        // ...and the first bite
+    bool batsMet = false;           // ...and the first bat waking
+    float swordT = -1.0f;           // seconds into the current swing (< 0 = not swinging)
+    bool swordQueued = false;       // clicked mid-cut: swing again as soon as it ends
+    int swingId = 0;                // numbers each swing: a crawler is hit at most once per swing
+    Vec2 swordLocal;                // planet-local point the swing was aimed at
+    float biteCooldown = 0.0f;      // a moment after a bite in which another can't land
+    float hurtFlash = 0.0f;         // 1 -> 0: red at the screen's edges after a bite
+    float hitStop = 0.0f;           // seconds the fight freezes on a sword hit (the world goes on)
+    float equipHintIn = 0.0f;       // seconds before "equip the sword" may be said again
     // The front door: the simulation waits while the title screen is up.
     bool titleOpen = true;
     bool hasSave = false;           // a save for this system was found at start
@@ -1371,6 +1399,7 @@ static constexpr int KEY_M = 77;
 static constexpr int KEY_F = 70;   // on foot: breathe carbon into the suit
 static constexpr int KEY_T = 84;   // in open space: time warp
 static constexpr int KEY_C = 67;   // on foot: scanner pulse
+static constexpr int KEY_1 = 49;   // on foot: 1 laser, 2 cutter, 3 light sword
 static constexpr int KEY_J = 74;   // with a star drive, clear of every world: jump
 static constexpr float LANDING_MAX_SLOPE = 40.0f; // degrees off the local tangent
 static constexpr int NUM_COWS = 5;
@@ -1393,7 +1422,10 @@ static int holdRoom() { return std::max(0, holdSize() - itemTotal(app.hold)); }
 // The upgrades that live in other objects' fields.
 static void applyUpgrades() {
     app.astronaut.jetpackMax = Astronaut::JETPACK_MAX_FUEL * Trade::jetpackScale(app.upgrades[Trade::Jetpack]);
-    if (!hasCutter()) app.toolMode = 0;
+    if (!hasCutter() && app.toolMode == 1) {
+        app.toolMode = 0;
+        EM_ASM({ if (window.setTool) window.setTool(0); });
+    }
 }
 static void closeTrade();   // defined with the trading code
 // Tell the other players about a change to the world (defined with the
@@ -1438,6 +1470,7 @@ static void spawnCows() {
 }
 
 static void updateActiveField();   // defined below (lazy destructible fields)
+static Vec2 sunWorldPos();          // defined with the shader passes
 
 // Where the ship drops in. Everyone shares one universe, so new arrivals are
 // spread out: over one of the home world's trading posts, picked at random, a
@@ -1453,7 +1486,16 @@ static float dropSpot(int& post) {
     bool fixed = EM_ASM_INT({ return new URLSearchParams(window.location.search).has('notitle') ? 1 : 0; }) != 0;
     if (fixed || p.outposts.empty()) return -90.0f;
     const float perDeg = p.baseRadius * DEG2RAD;
-    post = std::min((int)(emscripten_random() * p.outposts.size()), (int)p.outposts.size() - 1);
+    // One of the posts in daylight, if any are (they shut at night: a new
+    // player's first job is to sell something there).
+    std::vector<int> open;
+    Vec2 toSun = (sunWorldPos() - p.center).normalize();
+    for (int i = 0; i < (int)p.outposts.size(); i++) {
+        float a = p.outposts[i].angle;
+        if (cosd(a) * toSun.x + sind(a) * toSun.y > 0.25f) open.push_back(i);
+    }
+    if (open.empty()) for (int i = 0; i < (int)p.outposts.size(); i++) open.push_back(i);
+    post = open[std::min((int)(emscripten_random() * open.size()), (int)open.size() - 1)];
     float post0 = p.outposts[post].angle;
     float best = 1e30f, bestA = post0 + 420.0f / perDeg;
     for (int tries = 0; tries < 16; tries++) {
@@ -1495,6 +1537,9 @@ static void startRun() {
     app.warp = 1;
     app.camAlt = 2000.0f;
     app.particles.clear();
+    app.crawlers.clear();
+    app.bats.clear();
+    app.crawlerPlanet = -1;
     app.laserOn = false;
     app.laserTarget = app.hoverTarget = -1;
     app.laserProp = app.hoverProp = -1;
@@ -2455,6 +2500,8 @@ static void parkShip(int idx, float angle) {
     app.mapMode = false;
     app.camAlt = 0.0f;
     app.particles.clear();
+    app.crawlers.clear();
+    app.bats.clear();
     app.suit = 1.0f;
     app.view.focusX = app.lander.pos.x;
     app.view.focusY = app.lander.pos.y;
@@ -2638,6 +2685,413 @@ static void updateSuit(float dt) {
         showEvent("Suit at 10%", "When it runs out you lose everything you are carrying.");
     }
     if (app.suit <= 0.0f) blackout();
+}
+
+// ============================================================================
+// Night crawlers, cave bats and the light sword. After dark, on any world with
+// life on it (not the airless moons), crawlers come up out of the ground some
+// way off and hunt the player on foot: stalk, crouch (the tell), pounce. In
+// the natural caves, day or night, bats hang beside the stalactites; come
+// down into their cave and they wake, circle, flare their eyes (the tell) and
+// dive. A bite is a piece of the suit meter — the one bar (decision 5): no
+// health bar. The light sword is the hand tool's third mode (Q, or 3): each
+// click is a cut across the line to the cursor, any direction. A hit freezes
+// the fight for an instant and pushes you back; cutting DOWN onto one in
+// mid-air bounces you off it (a pogo). Two cuts kill a crawler, one a bat;
+// each leaves a little carbon — air for the suit. Crawlers will not come near
+// a trading post's lantern, don't come up under you when you are
+// underground, and dig back in when the sun reaches them.
+// ============================================================================
+static constexpr float NIGHT_SPAWN = -0.12f;        // sun height (dot) below which they come up
+static constexpr float SWORD_CUT = 0.17f;           // seconds the blade takes across the arc
+// ...then the arm comes back to the guard in Astronaut::SWORD_BACK of that.
+// A click during the return starts the next cut at once; one during the cut
+// is kept and starts the next as soon as it ends.
+static constexpr float SWORD_DONE = SWORD_CUT * (1.0f + Astronaut::SWORD_BACK);
+static constexpr float SWORD_REACH = 46.0f;         // from the chest to a target's edge
+static constexpr float SWORD_HALF = 80.0f;          // degrees either side of the aim it catches
+static constexpr float HIT_STOP = 0.06f;            // seconds the fight freezes on a hit
+static constexpr float CRAWLER_POST_CLEAR = 450.0f; // none come up this near a post (along the ground)
+static constexpr int CRAWLER_CARBON = 2;            // what one leaves
+static constexpr int BAT_CARBON = 1;
+static constexpr float BAT_BITE = 0.67f;            // a bat's bite, as a share of a crawler's
+static constexpr float BAT_ROOST_RANGE = 520.0f;    // roosts this near someone underground get a bat
+static constexpr float BAT_BACK = 180.0f;           // seconds before a killed bat's roost has another
+static constexpr int TOOL_SWORD = 2;
+
+// The hand tool's mode, and the HUD's word for it.
+static void setToolMode(int mode) {
+    app.toolMode = mode;
+    EM_ASM({ if (window.setTool) window.setTool($0); }, mode);
+}
+
+// How high the sun stands at a point on a world (-1..1: the dot of "up" there
+// with the way to the sun; < 0 is night).
+static float sunHeight(const Planet& p, Vec2 local) {
+    Vec2 toSun = (sunWorldPos() - p.center).normalize();
+    return local.normalize().dot(toSun);
+}
+
+static bool crawlersLive(const Planet& p) { return p.archetype != 6 && gDebug.crawlers > 0.0f; }
+
+// Their tones on a world: its dark ground-clutter color pulled toward a
+// night violet, and a shade of that.
+static void crawlerTones(const Planet& p, float body[3], float shade[3]) {
+    static const float NIGHT[3] = {0.22f, 0.16f, 0.27f};
+    for (int i = 0; i < 3; i++) {
+        body[i] = p.look.fgTint[i] * 0.5f + NIGHT[i] * 0.5f;
+        shade[i] = body[i] * 0.62f;
+    }
+}
+
+// Clods of earth around a point on the ground (a crawler coming up or going
+// down).
+static void crawlerDirt(const Planet& p, Vec2 local, int n) {
+    Vec2 up = local.normalize(), side(-up.y, up.x);
+    float body[3], shade[3];
+    crawlerTones(p, body, shade);
+    float dirt[3] = {shade[0] * 0.9f + 0.06f, shade[1] * 0.9f + 0.05f, shade[2] * 0.9f + 0.03f};
+    Vec2 at = p.center + local - up * NearField::WALK_DROP;
+    for (int i = 0; i < n; i++) {
+        Vec2 v = up * (0.8f + 1.4f * fxRand()) + side * ((fxRand() - 0.5f) * 2.4f);
+        spawnParticle(at + side * ((fxRand() - 0.5f) * 16.0f), v, 0.5f + 0.4f * fxRand(), 1.2f + 1.3f * fxRand(), dirt, 7);
+    }
+}
+
+// Try to bring one up somewhere off to one side of the player, out of sight:
+// on dry, dark ground, clear of the posts.
+static bool spawnCrawler(const Planet& p, Vec2 playerLocal) {
+    float pr = playerLocal.length();
+    if (pr < 1.0f) return false;
+    float pa = atan2d(playerLocal.y, playerLocal.x);
+    for (int tries = 0; tries < 4; tries++) {
+        float side = fxRand() < 0.5f ? -1.0f : 1.0f;
+        float along = 430.0f + 220.0f * fxRand();
+        float a = pa + side * along / pr * RAD2DEG;
+        if (p.overWater(a)) continue;
+        Vec2 up(cosd(a), sind(a));
+        if (sunHeight(p, up) > NIGHT_SPAWN * 0.5f) continue;
+        float toPost = 0.0f;
+        if (Outposts::nearest(p, p.center + up * p.surfaceRadius(a), &toPost) >= 0 &&
+            fabsf(toPost) < CRAWLER_POST_CLEAR)
+            continue;
+        // Feet on the rock: come down from above the outline to the first
+        // solid ground.
+        float r = p.surfaceRadius(a) + 30.0f;
+        int k = 0;
+        while (k < 120 && p.rockAt(p.center + up * r) < -Crawler::FOOT_R) { r -= 2.0f; k++; }
+        if (k >= 120) continue;
+        Crawler c;
+        c.spawn(up * r, (unsigned int)(fxRand() * 1e6f) + 1u, 1.15f + 0.3f * fxRand());
+        app.crawlers.push_back(c);
+        crawlerDirt(p, c.local, 10);
+        return true;
+    }
+    return false;
+}
+
+// The light sword (the hand tool's third mode): a click swings it at the
+// cursor.
+static void updateSword(float dt, bool live) {
+    Astronaut& a = app.astronaut;
+    bool click = Input::takeClick();     // (taken every frame: a click made with the laser out is not saved up)
+    a.swordOut = app.spacewalking && app.toolMode == TOOL_SWORD;
+    if (!a.swordOut) app.swordQueued = false;
+    if (!app.spacewalking) { app.swordT = -1.0f; a.swing = -1.0f; return; }
+    const Planet& p = dominantPlanet();
+    if (app.swordT >= 0.0f) {
+        app.swordT += dt;
+        if (app.swordT >= SWORD_DONE) app.swordT = -1.0f;
+    }
+    float mx = Input::getMouseX(), my = Input::getMouseY();
+    bool ready = app.swordT < 0.0f || app.swordT >= SWORD_CUT;
+    bool can = live && a.swordOut && mx >= 0.0f && !app.mapMode && app.tradePost < 0;
+    if (click && can && !ready) app.swordQueued = true;
+    if ((click || app.swordQueued) && can && ready) {
+        app.swordQueued = false;
+        app.swordT = 0.0f;
+        app.swingId++;
+        app.swordLocal = screenToWorld(mx, my) - p.center;
+        // Turn to face the cut.
+        Vec2 up = (a.pos - p.center).normalize(), tangent(-up.y, up.x);
+        float side = (app.swordLocal - (a.pos - p.center)).dot(tangent);
+        if (fabsf(side) > 3.0f) a.facing = side > 0.0f ? 1 : -1;
+    }
+    if (app.swordT < 0.0f) { a.swing = -1.0f; return; }
+    a.swing = app.swordT / SWORD_CUT;
+    a.swingAim = p.center + app.swordLocal;         // (the world moved: re-place it)
+    if (app.swordT > SWORD_CUT * 0.85f) return;      // the blade has gone past
+
+    // What the blade catches: within reach of the chest, inside the arc.
+    // The cursor is a drawn point; physically it is WALK_DROP above that.
+    Vec2 up = (a.pos - p.center).normalize();
+    Vec2 tangent(-up.y, up.x);
+    Vec2 chest = a.pos - p.center + up * Astronaut::BODY_UP;
+    Vec2 aim = app.swordLocal + up * NearField::WALK_DROP - chest;
+    if (aim.length() < 1.0f) aim = tangent * (float)a.facing;
+    aim = aim.normalize();
+    // Does the blade reach a target with this center and radius? (The push
+    // it gets, out of `push`.)
+    auto reaches = [&](Vec2 center, float radius, Vec2& push) {
+        Vec2 rel = center - chest;
+        float d = rel.length();
+        if (d > SWORD_REACH + radius) return false;
+        if (d > 14.0f && acosf(std::clamp(rel.dot(aim) / d, -1.0f, 1.0f)) * RAD2DEG > SWORD_HALF) return false;
+        push = d > 1.0f ? rel * (1.0f / d) : aim;
+        return true;
+    };
+    static const float EYE[3] = {1.0f, 0.42f, 0.18f};
+    float body[3], shade[3];
+    crawlerTones(p, body, shade);
+    // Where a hit is drawn (things on the walking line are drawn that far
+    // down), its sparks, and on a kill a puff of it, the last of the eyes'
+    // glow and the carbon it leaves.
+    auto struck = [&](Vec2 center, Vec2 push, bool killed, int carbon, float puff) {
+        Vec2 at = p.center + center - center.normalize() * NearField::WALK_DROP;
+        for (int i = 0; i < 9; i++) {
+            Vec2 v = push * (1.0f + 2.0f * fxRand()) + Vec2(fxRand() - 0.5f, fxRand() - 0.5f) * 2.5f;
+            spawnParticle(at, v, 0.25f + 0.2f * fxRand(), 1.6f, a.livery.glow, 0);
+        }
+        if (!killed) return;
+        for (int i = 0; i < 10; i++)
+            spawnParticle(at, Vec2(fxRand() - 0.5f, fxRand() - 0.5f) * 1.6f, 0.9f + 0.5f * fxRand(),
+                          (5.0f + 4.0f * fxRand()) * puff, body, 3);
+        for (int i = 0; i < 6; i++)
+            spawnParticle(at, Vec2(fxRand() - 0.5f, fxRand() - 0.2f) * 2.0f, 0.5f + 0.3f * fxRand(), 1.4f, EYE, 2);
+        int got = addItem(Trade::CARBON, carbon);
+        for (int i = 0; i < got * 2; i++)
+            spawnParticle(at, Vec2(fxRand() - 0.5f, fxRand() - 0.5f) * 3.0f, 2.0f, 2.2f, p.look.flora, 1);
+    };
+    bool landed = false;
+    for (Crawler& c : app.crawlers) {
+        Vec2 push;
+        if (!c.hittable() || c.swingHit == app.swingId || !reaches(c.bodyCenter(), c.radius(), push)) continue;
+        c.swingHit = app.swingId;
+        struck(c.bodyCenter(), push, c.hit(push), CRAWLER_CARBON, 1.0f);
+        landed = true;
+    }
+    for (Bat& b : app.bats) {
+        Vec2 push;
+        if (!b.hittable() || b.swingHit == app.swingId || !reaches(b.local, b.radius(), push)) continue;
+        b.swingHit = app.swingId;
+        bool killed = b.hit(push);
+        if (killed) app.batGone[app.dominantIdx * 1000000 + b.roostId] = app.worldFrames / 60.0 + BAT_BACK;
+        struck(b.local, push, killed, BAT_CARBON, 0.6f);
+        landed = true;
+    }
+    if (!landed) return;
+    // The feel of a hit: the fight stops dead for an instant, and you are
+    // pushed back off what you hit — unless you cut down onto it from the
+    // air, which bounces you up off it.
+    app.hitStop = HIT_STOP;
+    float vUp = a.vel.dot(up);
+    if (!a.grounded && aim.dot(up) < -0.55f) {
+        float bounce = gDebug.jumpSpeed * 1.05f;
+        a.vel = a.vel + up * (bounce - vUp);
+        a.jumpGrace = 8.0f;
+    } else {
+        float along = aim.dot(tangent);
+        a.vel = a.vel - tangent * (along * 1.4f);
+    }
+}
+
+// A bite (from a crawler or a bat whose body is at `from`): a piece of the
+// suit meter, a red flash, and a shove away from it.
+static void takeBite(Vec2 from, float share) {
+    Astronaut& a = app.astronaut;
+    const Planet& p = dominantPlanet();
+    Vec2 me = a.pos - p.center, up = me.normalize();
+    Vec2 rel = me + up * Astronaut::BODY_UP - from;
+    float d = rel.length();
+    app.biteCooldown = 0.9f;
+    app.hurtFlash = 1.0f;
+    app.suit = std::max(0.0f, app.suit - share);
+    Vec2 away = d > 1.0f ? rel * (1.0f / d) : up;
+    a.vel = a.vel + away * 2.2f + up * 1.2f;
+    a.jumpGrace = 6.0f;
+    a.grounded = false;
+    if (!app.bittenOnce) {
+        app.bittenOnce = true;
+        notice("Bitten! Each bite takes a piece of the suit meter: watch for the tell, then cut");
+    }
+}
+
+static float roostHash(unsigned int n) {
+    n = (n ^ 61u) ^ (n >> 16);
+    n *= 9u;
+    n ^= n >> 4;
+    n *= 0x27d4eb2du;
+    n ^= n >> 15;
+    return (n & 0xffffffu) * (1.0f / 16777216.0f);
+}
+
+// Bats roost beside some of the stalactites of the natural caves: hang one
+// at each such roost near someone underground (unless its bat was killed
+// lately), and let roosting ones far from anyone go.
+static void roostBats(const Planet& p, Vec2 me) {
+    double now = app.worldFrames / 60.0;
+    for (size_t i = 0; i < app.bats.size();) {
+        const Bat& b = app.bats[i];
+        if (b.state == Bat::State::Roosting && (b.local - me).length() > BAT_ROOST_RANGE + 200.0f) {
+            app.bats[i] = app.bats.back();
+            app.bats.pop_back();
+        } else {
+            i++;
+        }
+    }
+    if (app.bats.size() >= 6) return;
+    float share = std::min(1.0f, 0.34f * gDebug.bats);
+    for (int i = 0; i < (int)p.caveProps.size() && app.bats.size() < 6; i++) {
+        const Planet::CaveProp& c = p.caveProps[i];
+        if (c.kind != Planet::CaveProp::Stalactite || !c.inside) continue;
+        if ((c.local - me).length() > BAT_ROOST_RANGE) continue;
+        unsigned int h = (unsigned int)i * 2654435761u ^ p.seed;
+        if (roostHash(h) >= share) continue;
+        bool there = false;
+        for (const Bat& b : app.bats) there = there || b.roostId == i;
+        if (there) continue;
+        auto gone = app.batGone.find(app.dominantIdx * 1000000 + i);
+        if (gone != app.batGone.end() && gone->second > now) continue;
+        // Beside the stalactite, up under the ceiling: from a little below
+        // its root, out to one side, rise until the rock is a body away.
+        Vec2 grow(cosd(c.dir), sind(c.dir));
+        Vec2 side(-grow.y, grow.x);
+        if (roostHash(h + 7u) < 0.5f) side = side * -1.0f;
+        Vec2 at = c.local + grow * 14.0f + side * 13.0f;
+        if (p.rockAt(p.center + at) > -Bat::RADIUS) continue;
+        int k = 0;
+        while (k < 60 && p.rockAt(p.center + at - grow) < -Bat::RADIUS - 1.0f) { at = at - grow; k++; }
+        Bat b;
+        b.spawn(at, (unsigned int)(roostHash(h + 13u) * 1e6f) + 1u, i);
+        app.bats.push_back(b);
+    }
+}
+
+// Bring them out — crawlers after dark, bats in the caves — move them, and
+// let them bite.
+static void updateEnemies(float dt, float timeScale, bool live) {
+    Planet& p = dominantPlanet();
+    if (app.crawlerPlanet != app.dominantIdx) {
+        app.crawlers.clear();
+        app.bats.clear();
+        app.crawlerPlanet = app.dominantIdx;
+        app.crawlerSpawnIn = 2.5f;
+    }
+    app.biteCooldown = std::max(0.0f, app.biteCooldown - dt);
+    app.hurtFlash = std::max(0.0f, app.hurtFlash - dt / 0.6f);
+    app.equipHintIn = std::max(0.0f, app.equipHintIn - dt);
+    if (!live) return;
+    // A sword hit has the fight frozen for an instant.
+    if (app.hitStop > 0.0f) { app.hitStop -= dt; return; }
+    Astronaut& a = app.astronaut;
+    Vec2 me = a.pos - p.center;
+    Vec2 up = me.normalize();
+    Vec2 chest = me + up * Astronaut::BODY_UP;
+    bool underground = app.spacewalking && app.inHole > 0.5f;
+
+    // Crawlers come up only while you are out on the surface at night.
+    if (app.spacewalking && crawlersLive(p) && !underground) {
+        float sun = sunHeight(p, me);
+        float toPost = 0.0f;
+        bool nearPost = Outposts::nearest(p, a.pos, &toPost) >= 0 && fabsf(toPost) < CRAWLER_POST_CLEAR - 100.0f;
+        if (sun < NIGHT_SPAWN && !nearPost) {
+            float dark = smoothstepf(NIGHT_SPAWN, -0.6f, sun);
+            int cap = (int)lroundf(gDebug.crawlers * (2.0f + 2.0f * dark));
+            int alive = 0;
+            for (const Crawler& c : app.crawlers) alive += c.alive() ? 1 : 0;
+            app.crawlerSpawnIn -= dt;
+            if (app.crawlerSpawnIn <= 0.0f && alive < cap) {
+                if (spawnCrawler(p, me) && !app.crawlersMet) {
+                    app.crawlersMet = true;
+                    showEvent("Something is coming up out of the ground",
+                              "Night crawlers hunt after dark. Q (or 3) draws your light sword; click to cut. "
+                              "They keep away from the lanterns at a trading post.");
+                }
+                app.crawlerSpawnIn = (5.0f + 4.0f * fxRand()) / std::max(0.2f, gDebug.crawlers);
+            }
+        } else {
+            app.crawlerSpawnIn = std::max(app.crawlerSpawnIn, 2.5f);
+        }
+    }
+    // Bats wait in the caves, whatever the hour.
+    if (underground && gDebug.bats > 0.0f && p.archetype != 6) roostBats(p, me);
+
+    bool engaged = false;           // something is coming for you
+    Crawler::Senses s;
+    s.player = me;
+    s.hunting = app.spacewalking;
+    s.toSun = (sunWorldPos() - p.center).normalize();
+    s.speed = gDebug.walkSpeed * 0.85f;          // a little slower than you run
+    for (Crawler& c : app.crawlers) {
+        Crawler::State before = c.state;
+        bool pouncing = c.update(p, s, dt, timeScale);
+        if (before != Crawler::State::Burrowing && c.state == Crawler::State::Burrowing) crawlerDirt(p, c.local, 6);
+        if (c.alive() && c.state != Crawler::State::Burrowing && (c.local - me).length() < 380.0f) engaged = true;
+        if (!pouncing || !app.spacewalking || app.biteCooldown > 0.0f) continue;
+        if ((chest - c.bodyCenter()).length() > c.radius() + 11.0f) continue;
+        c.bit();
+        takeBite(c.bodyCenter(), gDebug.bite);
+    }
+    Bat::Senses bs;
+    bs.player = chest;
+    bs.hunting = underground;
+    for (Bat& b : app.bats) {
+        Bat::State before = b.state;
+        bool diving = b.update(p, bs, dt, timeScale);
+        if (before == Bat::State::Roosting && b.state == Bat::State::Waking && !app.batsMet) {
+            app.batsMet = true;
+            showEvent("Something stirs on the ceiling",
+                      "Cave bats wake when you come down into their cave. They hover, their eyes flare, "
+                      "then they dive: cut them as they come.");
+        }
+        if (b.awake()) engaged = true;
+        if (!diving || !app.spacewalking || app.biteCooldown > 0.0f) continue;
+        if ((chest - b.local).length() > b.radius() + 11.0f) continue;
+        b.bit();
+        takeBite(b.local, gDebug.bite * BAT_BITE);
+    }
+    app.crawlers.erase(std::remove_if(app.crawlers.begin(), app.crawlers.end(),
+                                      [](const Crawler& c) { return c.gone(); }),
+                       app.crawlers.end());
+    app.bats.erase(std::remove_if(app.bats.begin(), app.bats.end(), [](const Bat& b) { return b.gone(); }),
+                   app.bats.end());
+
+    // The sword is not out and something is coming: say how to draw it.
+    if (engaged && app.spacewalking && app.toolMode != TOOL_SWORD && app.equipHintIn <= 0.0f) {
+        notice("Something is coming for you: Q (or 3) draws the light sword");
+        app.equipHintIn = 25.0f;
+    }
+}
+
+static void drawEnemies(float time) {
+    if (app.crawlerPlanet != app.dominantIdx) return;
+    const Planet& p = dominantPlanet();
+    float body[3], shade[3];
+    crawlerTones(p, body, shade);
+    for (const Crawler& c : app.crawlers) c.draw(app.renderer, p, body, shade, time);
+    // The caves' bats only show to someone down there (from the surface a
+    // cave is only its mouth).
+    for (const Bat& b : app.bats) b.draw(app.renderer, p, body, shade, time, app.inHole);
+}
+
+// Red at the screen's edges for a moment after a bite.
+static void drawHurtFlash() {
+    float k = app.hurtFlash;
+    if (k <= 0.001f) return;
+    Renderer2D& r = app.renderer;
+    r.begin(Mat3(), app.width, app.height);
+    r.beginScreenSpace();
+    auto strip = [&](Vec2 e0, Vec2 e1, Vec2 i1, Vec2 i0, float a) {
+        Renderer2D::Color edge{0.75f, 0.06f, 0.04f, a * k}, in{0.75f, 0.06f, 0.04f, 0};
+        r.triangleV(e0, edge, e1, edge, i1, in);
+        r.triangleV(e0, edge, i1, in, i0, in);
+    };
+    strip(Vec2(-1, -1), Vec2(1, -1), Vec2(1, -0.70f), Vec2(-1, -0.70f), 0.40f);
+    strip(Vec2(-1, 1),  Vec2(1, 1),  Vec2(1, 0.70f),  Vec2(-1, 0.70f),  0.40f);
+    strip(Vec2(-1, -1), Vec2(-1, 1), Vec2(-0.78f, 1), Vec2(-0.78f, -1), 0.40f);
+    strip(Vec2(1, -1),  Vec2(1, 1),  Vec2(0.78f, 1),  Vec2(0.78f, -1),  0.40f);
+    r.endScreenSpace();
+    r.end();
 }
 
 // ============================================================================
@@ -3256,6 +3710,8 @@ static void updateLaser(float dt, float time) {
     app.hoverOre = -1;
     app.burnOre = -1;
     a.aiming = false;
+    // The sword is out (or still mid-swing): no laser, no target brackets.
+    if (app.toolMode == TOOL_SWORD || a.swing >= 0.0f) { app.cutTimer = 0.0f; return; }
     float mx = Input::getMouseX(), my = Input::getMouseY();
     // (Not while the trade panel is up: the mouse is busy with that.)
     if (!app.spacewalking || mx < 0.0f || app.mapMode || app.tradePost >= 0) return;
@@ -3613,8 +4069,8 @@ static void updateParticles(float dt, float timeScale) {
                 q.vel = q.vel * (1.0f - 0.08f * timeScale);
             }
             if (age > 0.16f && d < 9.0f) done = true;       // collected
-        } else if (q.mode == 2) {
-            // Ember: thrown out, then falls.
+        } else if (q.mode == 2 || q.mode == 7) {
+            // Ember (or a clod of earth): thrown out, then falls.
             Vec2 down = q.local.normalize() * -1.0f;
             q.vel = q.vel * (1.0f - 0.03f * timeScale) + down * (0.07f * timeScale);
         } else if (q.mode == 3) {
@@ -3867,6 +4323,14 @@ static void drawLaserFx(float time) {
     // you can see WHAT you just picked up as it flies to you: a facet lit
     // from above and a shaded one under it, like everything else cut from
     // the ground.
+    // ...clods of earth thrown up by a night crawler, solid...
+    for (const App::Particle& q : app.particles) {
+        if (q.mode != 7) continue;
+        float t = q.life / q.maxLife;
+        Vec2 w = p.center + q.local;
+        r.fill(q.r, q.g, q.b, t < 0.3f ? t / 0.3f : 1.0f);
+        r.circle(w.x, w.y, q.size, 8);
+    }
     for (const App::Particle& q : app.particles) {
         if (q.mode != 1) continue;
         Vec2 w = p.center + q.local;
@@ -5769,6 +6233,9 @@ static void syncDebugFromJS() {
     gDebug.walkSpeed        = EM_ASM_DOUBLE({ return window.DBG.walkSpeed !== undefined ? window.DBG.walkSpeed : $0; }, gDebug.walkSpeed);
     gDebug.jumpSpeed        = EM_ASM_DOUBLE({ return window.DBG.jumpSpeed !== undefined ? window.DBG.jumpSpeed : $0; }, gDebug.jumpSpeed);
     gDebug.jetpackThrust    = EM_ASM_DOUBLE({ return window.DBG.jetpackThrust !== undefined ? window.DBG.jetpackThrust : $0; }, gDebug.jetpackThrust);
+    gDebug.crawlers         = EM_ASM_DOUBLE({ return window.DBG.crawlers !== undefined ? window.DBG.crawlers : $0; }, gDebug.crawlers);
+    gDebug.bats             = EM_ASM_DOUBLE({ return window.DBG.bats !== undefined ? window.DBG.bats : $0; }, gDebug.bats);
+    gDebug.bite             = EM_ASM_DOUBLE({ return window.DBG.bite !== undefined ? window.DBG.bite : $0; }, gDebug.bite);
 
     // The gravity knob scales every body together (each keeps its own relative
     // density; the star keeps its mass ratio), then the orbit rates are
@@ -5957,6 +6424,26 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugUpgrade(int level) {
     applyUpgrades();
     if (app.tradePost >= 0) pushTrade();
 }
+// Dev hook: bring a night crawler up `along` units along the ground from the
+// astronaut (+ = screen right), whatever the hour. Returns how many there are.
+// Module._debugSpawnCrawler(along)
+extern "C" EMSCRIPTEN_KEEPALIVE int debugSpawnCrawler(float along) {
+    if (!app.spacewalking) return -1;
+    Planet& p = dominantPlanet();
+    if (app.crawlerPlanet != app.dominantIdx) { app.crawlers.clear(); app.crawlerPlanet = app.dominantIdx; }
+    Vec2 me = app.astronaut.pos - p.center;
+    float a = atan2d(me.y, me.x) + along / me.length() * RAD2DEG;
+    Vec2 up(cosd(a), sind(a));
+    float r = p.surfaceRadius(a) + 30.0f;
+    int k = 0;
+    while (k < 120 && p.rockAt(p.center + up * r) < -Crawler::FOOT_R) { r -= 2.0f; k++; }
+    Crawler c;
+    c.spawn(up * r, (unsigned int)(fxRand() * 1e6f) + 1u, 1.3f);
+    app.crawlers.push_back(c);
+    crawlerDirt(p, c.local, 10);
+    return (int)app.crawlers.size();
+}
+
 // Dev hook: set the progress flags (App::Flag bits) and the suit meter.
 // Module._debugProgress(flags, suit) — suit < 0 leaves it.
 extern "C" EMSCRIPTEN_KEEPALIVE void debugProgress(int flags, float suit) {
@@ -6113,6 +6600,44 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugDump() {
              std::to_string(app.online ? 1 : 0) + ",\"netId\":" + std::to_string(app.netId) + ",\"clock\":" +
              std::to_string(app.worldFrames) + ",\"lastPost\":[" +
              std::to_string(app.lastPostPlanet) + "," + std::to_string(app.lastPostIdx) + "]";
+    // Night crawlers: where each is on screen (canvas pixels, as drawn), its
+    // state (Crawler::State) and hits left, how high the sun is where you
+    // stand, and the sword's clock.
+    items += ",\"crawlers\":[";
+    {
+        const Planet& p = dominantPlanet();
+        Mat3 vm = app.view.matrix(app.width, app.height);
+        bool first = true;
+        for (const Crawler& c : app.crawlers) {
+            Vec2 w = p.center + c.bodyCenter() - c.local.normalize() * NearField::WALK_DROP;
+            Vec2 clip = vm.transform(w);
+            char buf[160];
+            snprintf(buf, sizeof(buf), "%s{\"x\":%.0f,\"y\":%.0f,\"state\":%d,\"hp\":%d}", first ? "" : ",",
+                     (clip.x * 0.5f + 0.5f) * app.width, (1.0f - (clip.y * 0.5f + 0.5f)) * app.height,
+                     (int)c.state, c.hp);
+            items += buf;
+            first = false;
+        }
+    }
+    items += "],\"bats\":[";
+    {
+        const Planet& p = dominantPlanet();
+        Mat3 vm = app.view.matrix(app.width, app.height);
+        bool first = true;
+        for (const Bat& b : app.bats) {
+            Vec2 w = p.center + b.local - b.local.normalize() * NearField::WALK_DROP;
+            Vec2 clip = vm.transform(w);
+            char buf[160];
+            snprintf(buf, sizeof(buf), "%s{\"x\":%.0f,\"y\":%.0f,\"state\":%d,\"roost\":%d}", first ? "" : ",",
+                     (clip.x * 0.5f + 0.5f) * app.width, (1.0f - (clip.y * 0.5f + 0.5f)) * app.height,
+                     (int)b.state, b.roostId);
+            items += buf;
+            first = false;
+        }
+    }
+    items += "],\"inHole\":" + std::to_string(app.inHole) + ",\"hitStop\":" + std::to_string(app.hitStop);
+    items += ",\"sunHere\":" + std::to_string(sunHeight(dominantPlanet(), playerPos() - dominantPlanet().center)) +
+             ",\"sword\":" + std::to_string(app.swordT);
     items += ",\"credits\":" + std::to_string(app.credits) + ",\"cargo\":" + std::to_string(app.cargo) +
              ",\"nearPost\":" + std::to_string(app.nearPost) + ",\"tradePost\":" + std::to_string(app.tradePost) +
              ",\"upgrades\":[";
@@ -6126,12 +6651,12 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugDump() {
         for (int i = 0; i < (int)p.outposts.size(); i++) {
             const Planet::Outpost& o = p.outposts[i];
             Vec2 clip = vm.transform(Outposts::ground(p, o));
-            char buf[200];
-            snprintf(buf, sizeof(buf), "%s{\"i\":%d,\"angle\":%.3f,\"along\":%.0f,\"x\":%.0f,\"y\":%.0f,\"keeper\":\"%s\",\"folk\":%d}",
+            char buf[256];
+            snprintf(buf, sizeof(buf), "%s{\"i\":%d,\"angle\":%.3f,\"along\":%.0f,\"x\":%.0f,\"y\":%.0f,\"keeper\":\"%s\",\"folk\":%d,\"closed\":%d}",
                      i ? "," : "", i, o.angle,
                      (std::fmod(o.angle - pa + 540.0f, 360.0f) - 180.0f) * p.baseRadius * DEG2RAD,
                      (clip.x * 0.5f + 0.5f) * app.width, (1.0f - (clip.y * 0.5f + 0.5f)) * app.height,
-                     o.keeper.c_str(), (int)o.folk.size());
+                     o.keeper.c_str(), (int)o.folk.size(), o.closed ? 1 : 0);
             items += buf;
         }
     }
@@ -6182,16 +6707,18 @@ static void updateTraderHud() {
                 (app.spacewalking || app.state != PLAYING || app.lander.altitude < 6000.0f);
     float along = 0.0f;
     int key = -1;
+    bool closed = false;
     if (show) {
         int i = Outposts::nearest(p, playerPos(), &along);
         float d = fabsf(along);
+        closed = i >= 0 && p.outposts[i].closed;
         // Steps of ten units close by, a hundred further off.
         int bucket = d < 1000.0f ? (int)(d / 10.0f) : 100 + (int)(d / 100.0f);
-        key = ((app.dominantIdx * 8 + i) * 4096 + bucket) * 2 + (along > 0.0f ? 1 : 0);
+        key = (((app.dominantIdx * 8 + i) * 4096 + bucket) * 2 + (along > 0.0f ? 1 : 0)) * 2 + (closed ? 1 : 0);
     }
     if (key == app.traderHudKey) return;
     app.traderHudKey = key;
-    EM_ASM({ if (window.setTraderHint) window.setTraderHint($0, $1); }, along, show ? 1 : 0);
+    EM_ASM({ if (window.setTraderHint) window.setTraderHint($0, $1, $2); }, along, show ? 1 : 0, closed ? 1 : 0);
 }
 
 static void mainLoop() {
@@ -6262,8 +6789,10 @@ static void mainLoop() {
             // Done trading.
             closeTrade();
         } else if (app.spacewalking && wouldTrade()) {
-            // At a trader's stall: E is "talk to them".
-            openTrade(app.nearPost);
+            // At a trader's stall: E is "talk to them" — by day.
+            const Planet::Outpost& o = dominantPlanet().outposts[app.nearPost];
+            if (o.closed) notice(o.keeper + " has shut up shop for the night. Posts on the day side are open");
+            else openTrade(app.nearPost);
         } else if (app.spacewalking) {
             float enterDist = dist(app.astronaut.pos.x, app.astronaut.pos.y,
                                    app.lander.pos.x,   app.lander.pos.y);
@@ -6437,21 +6966,29 @@ static void mainLoop() {
         // collision reads it.
         if (app.dominantIdx == app.activeFieldIdx && dominantPlanet().focusCarve(app.astronaut.pos))
             carveRefocused(dominantPlanet());
-        pollInputAstronaut(timeScale);
-        app.astronaut.update(dominantPlanet(), timeScale);
+        // (Held still for the instant a sword hit freezes the fight.)
+        if (app.hitStop <= 0.0f) {
+            pollInputAstronaut(timeScale);
+            app.astronaut.update(dominantPlanet(), timeScale);
+        }
 
-        // Q switches the hand tool between mining laser and terrain cutter —
-        // once you have bought the cutter.
+        // Q cycles the hand tool: mining laser, terrain cutter (once you
+        // have bought it), light sword. 1, 2 and 3 pick one directly.
         bool toolKey = live && Input::isKeyDown(Input::KEY_Q);
         if (toolKey && !app.prevToolKey) {
-            if (hasCutter()) {
-                app.toolMode ^= 1;
-                EM_ASM({ if (window.setTool) window.setTool($0); }, app.toolMode);
-            } else {
-                notice("No terrain cutter yet: a trader builds one (10 ferrite)");
-            }
+            int next = (app.toolMode + 1) % 3;
+            if (next == 1 && !hasCutter()) next = TOOL_SWORD;
+            setToolMode(next);
         }
         app.prevToolKey = toolKey;
+        for (int k = 0; k < 3; k++) {
+            bool down = live && Input::isKeyDown(KEY_1 + k);
+            if (down && !app.prevPickKey[k] && app.toolMode != k) {
+                if (k == 1 && !hasCutter()) notice("No terrain cutter yet: a trader builds one (10 ferrite)");
+                else setToolMode(k);
+            }
+            app.prevPickKey[k] = down;
+        }
         // F breathes carbon into the suit; C sends out a scanner pulse.
         bool airKey = live && Input::isKeyDown(KEY_F);
         if (airKey && !app.prevAirKey) useCarbon();
@@ -6470,13 +7007,21 @@ static void mainLoop() {
     // trader in reach? (Walking off, or boarding the ship, ends a trade.)
     {
         Planet& dp = dominantPlanet();
-        Outposts::update(dp, dt, playerPos(), app.spacewalking);
+        Outposts::update(dp, dt, playerPos(), app.spacewalking, (sunWorldPos() - dp.center).normalize());
         app.nearPost = app.spacewalking ? Outposts::inReach(dp, app.astronaut.pos) : -1;
         if (app.tradePost >= 0 && app.nearPost != app.tradePost) closeTrade();
+        // Night falls on a post while you trade: the trader packs up.
+        if (app.tradePost >= 0 && app.tradePost < (int)dp.outposts.size() && dp.outposts[app.tradePost].closed) {
+            std::string keeper = dp.outposts[app.tradePost].keeper;
+            closeTrade();
+            notice(keeper + " is shutting up for the night");
+        }
         if (app.nearPost >= 0) app.flags |= App::F_POST;
         // The page's hint for what E does here.
         std::string prompt;
-        if (app.tradePost < 0 && wouldTrade()) prompt = "Trade with " + dp.outposts[app.nearPost].keeper;
+        if (app.tradePost < 0 && wouldTrade())
+            prompt = dp.outposts[app.nearPost].closed ? "Closed for the night: opens at dawn"
+                                                      : "Trade with " + dp.outposts[app.nearPost].keeper;
         if (prompt != app.promptShown) {
             app.promptShown = prompt;
             EM_ASM({ if (window.setPrompt) window.setPrompt(UTF8ToString($0)); }, prompt.c_str());
@@ -6513,7 +7058,11 @@ static void mainLoop() {
     // the camera: the cursor is turned into a world point through the view,
     // and the world moves ~60 units a frame along its orbit — aiming through
     // last frame's view would put the beam that far off target.
+    // The light sword first (a swing holds the laser off), then the night
+    // crawlers and the bats, which it may have just cut.
+    updateSword(dt, live);
     updateLaser(dt, (float)(now - app.startTime) * 3.0f);
+    updateEnemies(dt, timeScale, live);
     // Where I am, to the others: after the laser, so the beam's end and the
     // arm's aim point are this frame's. Sent before it, they were last
     // frame's points against this frame's planet: off by a frame of orbit.
@@ -6660,6 +7209,8 @@ static void mainLoop() {
     Net::draw(app.renderer);
     app.lander.drawBeam(app.renderer);
     app.lander.draw(app.renderer);   // always draw the actual ship
+    // Night crawlers and cave bats, on the walking line: behind the astronaut.
+    drawEnemies(shaderTime);
     // The astronaut after the ship: stepping out (and walking past it) they
     // are in front of it, never hidden behind the hull.
     if (app.spacewalking) app.astronaut.draw(app.renderer, dominantPlanet());
@@ -6727,6 +7278,7 @@ static void mainLoop() {
     //    the topmost screen-space layers.
     drawMotes(shaderTime);
     drawVignette();
+    drawHurtFlash();
 
     // Push HUD state to the DOM overlay (defined in shell.html).
     EM_ASM({

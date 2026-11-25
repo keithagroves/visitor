@@ -345,6 +345,33 @@
         }
         .title-play button:hover, .title-play button:focus-visible { background: rgba(120, 255, 220, 0.28); outline: none; }
         .title-play button[disabled] { opacity: 0.5; cursor: default; }
+        /* ---- Transmissions (global chat): bottom left. New lines show for a
+           while and fade; Enter opens the box, with the recent history. ---- */
+        #chat {
+            position: fixed; left: 16px; bottom: 16px; z-index: 57; width: min(420px, calc(100vw - 32px));
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; color: #eef7ff;
+            display: none; pointer-events: none;
+        }
+        #chat.live { display: block; }
+        #chat-log { max-height: 34vh; overflow: hidden; display: flex; flex-direction: column; gap: 3px; }
+        #chat.open #chat-log { overflow-y: auto; pointer-events: auto; padding: 8px 10px; border-radius: 9px 9px 0 0;
+            background: rgba(9, 13, 21, 0.78); border: 1px solid rgba(255, 255, 255, 0.12); border-bottom: none; }
+        .chat-line { align-self: flex-start; max-width: 100%; padding: 3px 9px; border-radius: 7px; line-height: 1.35;
+            overflow-wrap: anywhere; background: rgba(9, 13, 21, 0.66); opacity: 0; transition: opacity 0.6s ease; }
+        .chat-line.fresh, #chat.open .chat-line { opacity: 1; }
+        #chat.open .chat-line { background: none; padding: 1px 0; }
+        .chat-line b { font-weight: 700; color: #9fe8ff; }
+        .chat-line .chat-from { font-size: 11px; color: rgba(190, 205, 222, 0.6); }
+        .chat-line.note { color: rgba(190, 205, 222, 0.75); font-style: italic; }
+        #chat-input {
+            display: none; width: 100%; box-sizing: border-box; pointer-events: auto; font: inherit; font-size: 13.5px;
+            padding: 8px 11px; color: #fff; background: rgba(9, 13, 21, 0.90);
+            border: 1px solid rgba(120, 255, 220, 0.40); border-radius: 0 0 9px 9px; outline: none;
+        }
+        #chat.open #chat-input { display: block; }
+        #chat:not(.open) .chat-hint { display: none; }
+        .chat-hint { font-size: 11px; color: rgba(159, 179, 200, 0.85); margin: 0 0 4px 2px; }
+
         /* Other players' name tags (placed from C++). */
         #peer-labels { position: fixed; inset: 0; z-index: 41; pointer-events: none; overflow: hidden; }
         #peer-labels .tag {
@@ -521,11 +548,16 @@
         <div class="row"><span class="label">Charted</span><span id="hud-charted">0/0</span></div>
         <div class="row" id="hud-trader-row" style="display:none"><span class="label">Trader</span><span id="hud-trader"></span></div>
         <div class="row" id="hud-online-row" style="display:none"><span class="label">Online</span><span id="hud-online"></span></div>
-        <div class="keys">M map &nbsp;&middot;&nbsp; Tab inventory &nbsp;&middot;&nbsp; T time warp &nbsp;&middot;&nbsp; wheel zoom</div>
+        <div class="keys">M map &nbsp;&middot;&nbsp; Tab inventory &nbsp;&middot;&nbsp; T time warp &nbsp;&middot;&nbsp; wheel zoom<span id="chat-key"> &nbsp;&middot;&nbsp; Enter transmit</span></div>
     </div>
 
     <div id="nav-labels"></div>
     <div id="peer-labels"></div>
+    <div id="chat">
+        <div id="chat-log"></div>
+        <input id="chat-input" maxlength="200" autocomplete="off" spellcheck="false"
+               placeholder="Transmit to everyone on the server (Enter sends, Esc closes)">
+    </div>
 
     <!-- Inventory: Tab / I opens it. Filled from C++ via window.setInventory. -->
     <div id="inventory" role="dialog" aria-label="Inventory">
@@ -590,8 +622,8 @@
             </div>
             <div class="title-note" id="title-note"></div>
             <div class="title-keys">
-                <div><b>Ship</b> W thrust &middot; A/D turn &middot; Space tractor beam &middot; E step out &middot; M map &middot; T time warp</div>
-                <div><b>On foot</b> A/D walk &middot; W jump &middot; Space jetpack &middot; mouse fires the tool &middot; Q laser / cutter &middot; F breathe carbon &middot; C scan &middot; E trade / board &middot; Tab inventory</div>
+                <div><b>Ship</b> W thrust &middot; A/D turn &middot; Space tractor beam &middot; E step out &middot; M map &middot; T time warp &middot; Enter transmit</div>
+                <div><b>On foot</b> A/D walk &middot; W jump &middot; Space jetpack &middot; mouse fires the tool &middot; Q (or 1/2/3) laser / cutter / sword &middot; F breathe carbon &middot; C scan &middot; E trade / board &middot; Tab inventory</div>
                 <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
             </div>
         </div>
@@ -698,6 +730,7 @@
                 nightDarkness: 0.16, nightSoftness: 0.30,
                 cameraGroundZoom: 1.8, cameraFraming: 0.4, cameraHorizon: 0.14, cameraSpeedLook: 2.2,
                 walkSpeed: 2.4, jumpSpeed: 3.0, jetpackThrust: 0.115,
+                crawlers: 1.0, bats: 1.0, bite: 0.12,
                 horizonHaze: 0.7, foreground: 1.0, vignette: 0.35, motes: 0, frontVeil: 0.45,
                 holeFloor: 0.34, holeDepth: 150, oreRichness: 1.0, oreBurn: 3.0,
                 waterLevel: 0, waterTint: 0.42,
@@ -731,6 +764,9 @@
                 { key: 'walkSpeed',        label: 'Walk Speed',           min: 0.5,   max: 18.0, step: 0.1 },
                 { key: 'jumpSpeed',        label: 'Jump Speed',           min: 0.5,   max: 10.0, step: 0.1 },
                 { key: 'jetpackThrust',    label: 'Jetpack Thrust (home gravity 0.1)', min: 0.0, max: 0.4, step: 0.005 },
+                { key: 'crawlers',         label: 'Night crawlers (0 = none, 1 = 2-4 at a time)', min: 0.0, max: 3.0, step: 0.1 },
+                { key: 'bats',             label: 'Cave bats (0 = none, 1 = beside a third of the stalactites)', min: 0.0, max: 3.0, step: 0.1 },
+                { key: 'bite',             label: 'Crawler bite, share of the suit meter (a bat: 2/3)', min: 0.0, max: 0.5, step: 0.01 },
                 { key: 'horizonHaze',      label: 'Horizon Haze',         min: 0.0,   max: 1.0,  step: 0.05 },
                 { key: 'foreground',       label: 'Foreground Band Height', min: 0.0, max: 1.6,  step: 0.05 },
                 { key: 'vignette',         label: 'Vignette',             min: 0.0,   max: 1.0,  step: 0.05 },
@@ -853,11 +889,12 @@
                 document.getElementById('hud-charted').textContent = found + '/' + total;
             };
 
-            // Hand tool mode (Q): 0 = mining laser, 1 = terrain cutter.
+            // Hand tool mode (Q cycles, 1/2/3 pick): 0 = mining laser,
+            // 1 = terrain cutter, 2 = light sword.
             window.setTool = function (mode) {
                 var el = document.getElementById('hud-tool');
-                el.textContent = mode === 1 ? 'Terrain cutter' : 'Mining laser';
-                el.style.color = mode === 1 ? '#8fffe0' : '#ffb27a';
+                el.textContent = ['Mining laser', 'Terrain cutter', 'Light sword'][mode] || 'Mining laser';
+                el.style.color = ['#ffb27a', '#8fffe0', '#e8f4ff'][mode] || '#ffb27a';
             };
 
             // ---- Inventory ------------------------------------------------
@@ -1412,13 +1449,15 @@
             };
             // HUD: the nearest trading post on this world, along the ground
             // (negative = to the left).
-            window.setTraderHint = function (along, show) {
+            window.setTraderHint = function (along, show, closed) {
                 document.getElementById('hud-trader-row').style.display = show ? 'flex' : 'none';
                 if (!show) return;
                 var dist = Math.abs(along);
                 var txt = dist < 1000 ? String(Math.round(dist / 10) * 10) : (dist / 1000).toFixed(1) + 'k';
-                document.getElementById('hud-trader').textContent =
-                    dist < 85 ? 'here' : (along < 0 ? '\u25c2 ' + txt : txt + ' \u25b8');
+                // Shut for the night: said, and dimmed.
+                var el = document.getElementById('hud-trader');
+                el.textContent = (dist < 85 ? 'here' : (along < 0 ? '\u25c2 ' + txt : txt + ' \u25b8')) + (closed ? ' \u00b7 shut' : '');
+                el.style.opacity = closed ? 0.55 : 1;
             };
 
             // Pickup feed: "+2 Lumenite" for a few seconds; repeats of the same
@@ -1568,7 +1607,7 @@
                     toastEl.style.display = 'none';
                 }
                 if (enteredSpacewalk && !spacewalkToastDismissed) {
-                    showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor; once you own a terrain cutter, Q switches to it. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.');
+                    showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor. Q switches the hand tool (or 1, 2, 3): mining laser, terrain cutter once you own one, and the light sword, which cuts toward the cursor with each click. Draw it when something comes for you: crawlers at night, bats in the caves. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.');
                 }
                 wasSpacewalking = !!spacewalking;
                 // On foot the pointer aims the hand tool, and the HUD says which mode it is in.
@@ -1692,6 +1731,7 @@
                         }
                         ping();
                         showRoster();
+                        if (window.chat) window.chat.start();
                         finish(true);
                     }
                     try { ws = new WebSocket(url()); } catch (e) { finish(false, 'Bad server address.'); return; }
@@ -1705,6 +1745,7 @@
                         clearTimeout(pingTimer);
                         clearTimeout(queueTimer); queueTimer = null; queue = [];
                         finish(false, 'The server closed the connection.');
+                        if (window.chat) window.chat.stop();
                         if (ready) {
                             ready = false;
                             window.Module._netLost();
@@ -1728,6 +1769,7 @@
                             ready = true;
                             M._netWelcome(m.id, api.clockMs());
                             if (typeof m.hue === 'number' && M._netMyHue) M._netMyHue(m.hue);   // mine, this session
+                            if (typeof m.hue === 'number' && window.chat) window.chat.setHue(m.hue);
                             for (var i = 0; i < m.ops.length; i++) op(m.ops[i]);
                             // The rest of the world log may follow, in batches.
                             logsLeft = m.logs | 0;
@@ -1794,7 +1836,9 @@
                     if (!queueTimer) queueTimer = setTimeout(flushOps, 250);
                 },
                 name: function (id) { return names[id] || 'Visitor'; },
-                hue: hueOf
+                hue: hueOf,
+                base: base,
+                myName: function () { return api.defaultName() || 'Visitor'; }
             };
             // Name tags: "id,x,y;" from main.cpp each time they move.
             var tags = {};
@@ -1816,6 +1860,115 @@
             };
             return api;
         })();
+
+        // Transmissions: a global chat for everyone on the server, whatever
+        // system they are in — a second socket, to <server>/chat (see
+        // server/server.mjs). Only while playing online. Enter opens the box
+        // (the game ignores keys while you type), Enter sends, Esc closes.
+        window.chat = (function () {
+            var ws = null, live = false, retry = null, myHue = null;
+            var box = document.getElementById('chat'), log = document.getElementById('chat-log');
+            var input = document.getElementById('chat-input'), keyHint = document.getElementById('chat-key');
+            keyHint.style.display = 'none';
+            function mySystem() { var el = document.getElementById('hud-system'); return el ? el.textContent : ''; }
+            function line(cls) {
+                var el = document.createElement('div');
+                el.className = 'chat-line' + (cls ? ' ' + cls : '');
+                log.appendChild(el);
+                while (log.children.length > 60) log.removeChild(log.firstChild);
+                return el;
+            }
+            function show(el, fresh) {
+                if (fresh) { el.classList.add('fresh'); setTimeout(function () { el.classList.remove('fresh'); }, 12000); }
+                log.scrollTop = log.scrollHeight;
+            }
+            function add(m, fresh) {
+                var el = line();
+                var who = document.createElement('b');
+                who.textContent = m.name;                          // text only: nothing anyone sends is markup
+                if (typeof m.hue === 'number') who.style.color = 'hsl(' + m.hue + ', 85%, 72%)';
+                el.appendChild(who);
+                if (m.from && m.from !== mySystem()) {
+                    var f = document.createElement('span');
+                    f.className = 'chat-from';
+                    f.textContent = ' \u00b7 ' + m.from;
+                    el.appendChild(f);
+                }
+                el.appendChild(document.createTextNode(': ' + m.text));
+                show(el, fresh);
+            }
+            function note(text) { var el = line('note'); el.textContent = text; show(el, true); }
+            function connect() {
+                clearTimeout(retry);
+                var u;
+                try { u = new URL(window.net.base()); u.pathname = '/chat'; u.search = ''; ws = new WebSocket(u.toString()); }
+                catch (e) { return; }
+                ws.onopen = function () { ws.send(JSON.stringify({ t: 'hello' })); };
+                ws.onmessage = function (ev) {
+                    var m;
+                    try { m = JSON.parse(ev.data); } catch (e) { return; }
+                    if (m.t === 'hist') { log.textContent = ''; (m.msgs || []).forEach(function (x) { add(x, false); }); }
+                    else if (m.t === 'msg') add(m, true);
+                    else if (m.t === 'slow') note('Too fast: wait a moment between transmissions');
+                };
+                // Dropped while still online: try again in a few seconds.
+                ws.onclose = function () { ws = null; if (live) retry = setTimeout(connect, 5000); };
+            }
+            var api = {
+                start: function () {
+                    if (live) return;
+                    live = true;
+                    box.classList.add('live');
+                    keyHint.style.display = '';
+                    connect();
+                },
+                stop: function () {
+                    live = false;
+                    clearTimeout(retry);
+                    api.hide();
+                    box.classList.remove('live');
+                    keyHint.style.display = 'none';
+                    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+                },
+                setHue: function (h) { myHue = h; },
+                show: function () {
+                    if (!live) return;
+                    box.classList.add('open');
+                    input.focus();
+                    log.scrollTop = log.scrollHeight;
+                },
+                hide: function () {
+                    box.classList.remove('open');
+                    input.value = '';
+                    if (document.activeElement === input) { input.blur(); document.getElementById('canvas').focus(); }
+                },
+                send: function () {
+                    var text = input.value.trim();
+                    if (!text) { api.hide(); return; }
+                    if (!ws || ws.readyState !== 1) { note('Not connected to the transmitter: trying again'); return; }
+                    ws.send(JSON.stringify({ t: 'say', name: window.net.myName(), hue: myHue, from: mySystem(), text: text }));
+                    api.hide();
+                }
+            };
+            // Typing goes to the box only: none of it reaches the game or the
+            // page's own keys (Tab / I inventory, Esc).
+            input.addEventListener('keydown', function (e) {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); api.send(); }
+                else if (e.key === 'Escape') { e.preventDefault(); api.hide(); }
+            });
+            input.addEventListener('keyup', function (e) { e.stopPropagation(); });
+            input.addEventListener('blur', function () { setTimeout(function () { if (document.activeElement !== input) api.hide(); }, 0); });
+            document.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter' || !live || e.repeat) return;
+                var a = document.activeElement;
+                if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'BUTTON')) return;
+                if (document.getElementById('title').classList.contains('open')) return;
+                e.preventDefault();
+                api.show();
+            });
+            return api;
+        })();
     </script>
 
     <div id="status">
@@ -1832,6 +1985,8 @@
 
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
+        // The right mouse button is the game's (kept for interacting with things): no context menu over it.
+        document.getElementById('canvas').addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
         // The build's fingerprint (build.sh stamps it in). game.js and
         // game.wasm are asked for with it, so a browser holding an older

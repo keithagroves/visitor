@@ -48,10 +48,17 @@ int inReach(const Planet& p, Vec2 world);
 // Would a cutter bite (a circle, world space) cut into a post's ground?
 bool blocksDig(const Planet& p, Vec2 world, float radius);
 
+// A post closes for the night: when the sun at it is this far below the
+// horizon (the dot of "up" there with the way to the sun), and opens again
+// when it comes back up past it.
+constexpr float CLOSE_SUN = -0.06f;
+
 // Per-frame life: the wanderers walk and stop, everyone turns to look at a
 // visitor who comes close, the trader waves once when they arrive. `visitor`
-// is the player on foot (`present` false = nobody to look at).
-void update(Planet& p, float dt, Vec2 visitor, bool present);
+// is the player on foot (`present` false = nobody to look at). `toSun` (unit,
+// from the planet's center) opens and shuts the posts with the day: at night
+// the trader and the others are indoors and the stall is shuttered.
+void update(Planet& p, float dt, Vec2 visitor, bool present, Vec2 toSun);
 
 // Draw every post in view. Inside an active world-space batch, after the
 // body pass and before the ship and the astronaut (they pass in front).

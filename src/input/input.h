@@ -40,5 +40,14 @@ void resetWheelDelta();
 float getMouseX();
 float getMouseY();
 bool isMouseDown();
+// Was the primary button pressed since the last call? (Clears it.) A quick
+// click that is down and up again between two frames still registers: the
+// light sword swings once per click.
+bool takeClick();
+// The secondary (right) button, pressed on the canvas — reserved for
+// interacting with things (opening chests, later); nothing uses it yet. The
+// page turns off the canvas's context menu so it reaches the game.
+bool isRightMouseDown();
+bool takeRightClick();
 
 } // namespace Input

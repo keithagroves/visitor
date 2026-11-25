@@ -556,8 +556,15 @@ bool blocksDig(const Planet& p, Vec2 world, float radius) {
     return false;
 }
 
-void update(Planet& p, float dt, Vec2 visitor, bool present) {
+void update(Planet& p, float dt, Vec2 visitor, bool present, Vec2 toSun) {
     if (p.outposts.empty()) return;
+    // Open by day, shut by night (whatever is happening, everywhere: the
+    // rule must hold for a post nobody is watching too).
+    for (Planet::Outpost& o : p.outposts) {
+        o.closed = cosd(o.angle) * toSun.x + sind(o.angle) * toSun.y < CLOSE_SUN;
+        float want = o.closed ? 1.0f : 0.0f, k = dt / 1.2f;
+        o.shut = std::fabs(want - o.shut) <= k ? want : o.shut + (want > o.shut ? k : -k);
+    }
     float perDeg = p.baseRadius * DEG2RAD;
     float va = atan2d(visitor.y - p.center.y, visitor.x - p.center.x);
     float vr = dist(visitor.x, visitor.y, p.center.x, p.center.y);
@@ -738,8 +745,8 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
         r.line(25.0f, 0, 25.0f, -AWNING + 5.0f, 2.6f);
         r.popMatrix();
 
-        // ---- The trader, behind the counter ------------------------------------
-        if (!o.folk.empty()) {
+        // ---- The trader, behind the counter (indoors once it is shut) --------
+        if (!o.folk.empty() && o.shut < 0.5f) {
             Vec2 b = basePoint(p, o, 0.0f, TRADER_DEPTH, 0.0f, &a);
             r.pushMatrix();
             r.translate(b.x, b.y);
@@ -787,6 +794,33 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
             paint.lit(mul(c, 0.80f));
             r.triangle(xf0, -AWNING + 9.0f, xf1, -AWNING + 9.0f, (xf0 + xf1) * 0.5f, -AWNING + 14.0f);
         }
+        // Shut for the night: a shutter of planks comes down from under the
+        // awning over the counter, and a sign with the moon on it hangs from
+        // the awning's edge.
+        if (o.shut > 0.0f) {
+            float top = -AWNING + 9.0f, bottom = -CT;
+            float low = top + (bottom - top) * o.shut;
+            paint.lit(timber);
+            r.quad(-24.0f, top, 24.0f, top, 24.0f, low, -24.0f, low);
+            paint.lit(plank);
+            for (float y = top + 5.0f; y < low - 1.0f; y += 6.0f) r.quad(-23.0f, y, 23.0f, y, 23.0f, y + 1.2f, -23.0f, y + 1.2f);
+            if (o.shut > 0.6f) {
+                float swing = sinf(t * 1.3f + o.angle) * 3.0f;
+                r.pushMatrix();
+                r.translate(0.0f, top + 1.0f);
+                r.rotate(swing);
+                paint.lit(ink);
+                r.line(-5.0f, 0.0f, -5.0f, 6.0f, 0.8f);
+                r.line(5.0f, 0.0f, 5.0f, 6.0f, 0.8f);
+                paint.lit(plank);
+                roundBox(r, -8.0f, 6.0f, 8.0f, 18.0f, 2.0f);
+                paint.lit(accent);                                   // a crescent moon: closed for the night
+                r.circle(0.0f, 12.0f, 4.0f, 16);
+                paint.lit(plank);
+                r.circle(1.8f, 10.8f, 3.4f, 16);
+                r.popMatrix();
+            }
+        }
         r.popMatrix();
 
         // ---- Crates and a pot beside it ---------------------------------------------
@@ -814,8 +848,8 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
             r.popMatrix();
         }
 
-        // ---- The others, out on the walking line ---------------------------------
-        for (size_t k = 1; k < o.folk.size(); k++) {
+        // ---- The others, out on the walking line (home for the night) ----------
+        for (size_t k = 1; k < o.folk.size() && o.shut < 0.5f; k++) {
             const Planet::Alien& w = o.folk[k];
             Vec2 b = basePoint(p, o, w.along, 0.0f, 0.0f, &a);
             r.pushMatrix();
@@ -826,7 +860,7 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
         }
 
         // ---- "Trade?": a speech bubble over the trader -------------------------
-        if (idx == active && !o.folk.empty()) {
+        if (idx == active && !o.folk.empty() && o.shut < 0.5f) {
             // (Over the awning, so it reads as said from the stall and never
             // sits on the stripes.)
             float bobY = sinf(t * 3.0f) * 1.2f;

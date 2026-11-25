@@ -31,8 +31,12 @@ flowchart TD
 - **Poll state** — `isKeyDown(code)` for held keys; `getWheelDelta` +
   `resetWheelDelta` feed the camera's manual zoom; `getMouseX/Y` (canvas
   pixels) and `isMouseDown` (primary button, pressed on the canvas; released
-  anywhere in the window) aim and fire the mining laser. The core loop reads
-  these each frame in `pollInput`, `pollInputAstronaut`, `updateZoom` and
+  anywhere in the window) aim and fire the mining laser; `takeClick`
+  (latched, so a click shorter than a frame still counts) swings the light
+  sword once per click. `isRightMouseDown` / `takeRightClick` track the
+  secondary button, kept for interacting with things (chests, later; unused
+  so far — the page turns off the canvas's context menu). The core loop reads these each frame
+  in `pollInput`, `pollInputAstronaut`, `updateZoom`, `updateSword` and
   `updateLaser`. (`getMouseDeltaX/Y` / `isPointerLocked` are stubs kept for
   API stability.)
 
