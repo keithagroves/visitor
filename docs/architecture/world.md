@@ -68,8 +68,12 @@ flowchart TD
   ladder needs two "far" crystals, kinds other than the home world's and
   the moons', so where the draw leaves fewer than two non-temperate,
   non-barren planets, the bare-rock planets nearest home are turned into
-  kinds the system lacks (checked over 500 seeds). The star's mass is derived from the home world's orbital speed
-  (54–62 units/frame → a home day of roughly ten minutes). Names come from a
+  kinds the system lacks (checked over 500 seeds). The whole lineup starts
+  400k (`STAR_CLEARANCE`) farther out than the gaps alone would put it, so
+  the home world orbits at 690k–890k and the star is a small sun in its sky
+  (about 6° across); the far edge stays under ~2.1M, where floats still step
+  1/8 unit. The star's mass is derived from the home world's orbital speed
+  (54–62 units/frame → a home day of roughly twenty minutes, 19–28). Names come from a
   syllable generator. The shaders handle 10 bodies including the star; moons
   are trimmed from the outside in if a lineup exceeds that.
 - **Seed** — chosen by the host page: `?seed=N` in the URL, else the seed

@@ -427,7 +427,13 @@ StarSystem generateSystem(unsigned int seed, std::vector<Planet>& planets) {
     // ---- Orbit radii --------------------------------------------------------
     std::vector<float> orbit(planetCount);
     float sunRadius = rng.range(36000.0f, 44000.0f);
-    orbit[0] = hasInner ? rng.range(170000.0f, 200000.0f) : rng.range(290000.0f, 330000.0f);
+    // The whole lineup sits STAR_CLEARANCE farther out than it first did, so
+    // the star is a small sun in the home sky (about 6 degrees across, not
+    // 11-17) while the gaps between neighbours, and so the trips, stay the
+    // same. Kept under ~2.1M at the far edge, where floats still step 1/8 unit.
+    const float STAR_CLEARANCE = 400000.0f;
+    orbit[0] = STAR_CLEARANCE +
+               (hasInner ? rng.range(170000.0f, 200000.0f) : rng.range(290000.0f, 330000.0f));
     for (int i = 1; i < planetCount; i++) {
         float gap = rng.range(210000.0f, 290000.0f);
         float need = specs[i - 1].reach + specs[i].reach + 50000.0f;
@@ -435,8 +441,9 @@ StarSystem generateSystem(unsigned int seed, std::vector<Planet>& planets) {
     }
 
     // Star mass from the home world's orbital speed: fast enough that the home
-    // day (= its year; planets don't spin) turns over in roughly ten minutes,
-    // slow enough that matching velocity with a neighbor is a short burn.
+    // day (= its year; planets don't spin) turns over in roughly twenty minutes
+    // (2*pi*r / v at r ~700-900k), slow enough that matching velocity with a
+    // neighbor is a short burn.
     float homeSpeed = rng.range(54.0f, 62.0f);                 // world units / frame
     float sunGM = homeSpeed * homeSpeed * orbit[homeSlot];     // v^2 r
 
