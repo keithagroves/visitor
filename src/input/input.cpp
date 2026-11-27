@@ -12,6 +12,11 @@ static bool mouseDown = false;
 static bool clicked = false;     // pressed since the game last asked (the light sword's swing)
 static bool rightDown = false;   // the secondary button: reserved for interacting (chests, later)
 static bool rightClicked = false; // ...pressed since the game last asked
+// The touch pad's sticks (inputStick / inputAim, below).
+static float moveX = 0.0f, moveY = 0.0f;
+static float aimDX = 0.0f, aimDY = 0.0f;
+static bool aimDown = false;
+static bool usedSticks = false;
 
 static EM_BOOL mouseMoveCallback(int eventType, const EmscriptenMouseEvent* e, void* userData) {
     mouseX = (float)e->targetX;
@@ -103,6 +108,20 @@ bool takeRightClick() { bool c = rightClicked; rightClicked = false; return c; }
 float getWheelDelta() { return (float)wheelDelta; }
 void resetWheelDelta() { wheelDelta = 0; }
 
+float stickX() { return moveX; }
+float stickY() { return moveY; }
+bool aimHeld() { return aimDown; }
+float aimX() { return aimDX; }
+float aimY() { return aimDY; }
+bool sticksUsed() { return usedSticks; }
+void setPointer(float x, float y, bool down) {
+    mouseX = x;
+    mouseY = y;
+    if (down && !mouseDown) clicked = true;
+    mouseDown = down;
+}
+void click() { clicked = true; }
+
 } // namespace Input
 
 // ---- Touch (the page's on-screen controls, shell.html) ----------------------
@@ -121,4 +140,19 @@ EMSCRIPTEN_KEEPALIVE void inputPointer(float x, float y, int phase) {
 }
 // Pinch and the zoom buttons: the same units as the mouse wheel (+ = out).
 EMSCRIPTEN_KEEPALIVE void inputWheel(float dy) { Input::wheelDelta += dy; }
+// The left stick: how far it is pushed, -1..1 across and -1..1 up (0, 0 when
+// let go). The page presses the movement keys for it as well.
+EMSCRIPTEN_KEEPALIVE void inputStick(float x, float y) {
+    Input::moveX = x < -1.0f ? -1.0f : (x > 1.0f ? 1.0f : x);
+    Input::moveY = y < -1.0f ? -1.0f : (y > 1.0f ? 1.0f : y);
+    Input::usedSticks = true;
+}
+// The right stick: which way it is pushed on screen (+y down), length 0..1,
+// and whether a thumb is on it.
+EMSCRIPTEN_KEEPALIVE void inputAim(float x, float y, int held) {
+    Input::aimDX = x;
+    Input::aimDY = y;
+    Input::aimDown = held != 0;
+    Input::usedSticks = true;
+}
 }

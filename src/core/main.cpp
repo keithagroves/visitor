@@ -1524,6 +1524,12 @@ struct App {
     std::vector<Flare> thrown;
     bool prevFlareKey = false;
     bool darkHinted = false;        // said once a session: it's dark, flares help
+    // The touch pad's two sticks (updateAimStick, pollInputAstronaut).
+    bool aimStick = false;          // the right stick is pointing the hand tool this frame
+    bool aimFiring = false;         // ...and is pushed far enough to fire it
+    Vec2 aimDir;                    // which way it points, in the world (unit length)
+    Vec2 aimMark;                   // where its mark is drawn: what the tool would reach (world)
+    float stickAir = 0.0f;          // frames the left stick has been held up off the ground (then: jetpack)
     GLuint caveDarkProgram = 0;
     float jetGlow = 0.0f;   // the jetpack's light underground, eased 0..1
     double plumeMs[3] = {0, 0, 0};  // dev: ms spent stepping it, ms drawing it, frames it was live (debugDump)
@@ -2155,6 +2161,13 @@ static Vec2 screenToWorld(float mx, float my) {
     float c = cosd(-app.view.rotation), s = sind(-app.view.rotation);
     return Vec2((c * cx - s * cy) / app.view.scale + app.view.focusX,
                 (s * cx + c * cy) / app.view.scale + app.view.focusY);
+}
+
+// ...and back: the canvas pixel a world point is drawn at.
+static Vec2 worldToScreen(Vec2 w) {
+    float dx = (w.x - app.view.focusX) * app.view.scale, dy = (w.y - app.view.focusY) * app.view.scale;
+    float c = cosd(-app.view.rotation), s = sind(-app.view.rotation);
+    return Vec2(c * dx + s * dy + app.width * 0.5f, -s * dx + c * dy + app.height * 0.5f);
 }
 
 // The slice of the near field that is on screen right now.
@@ -3981,6 +3994,9 @@ static void throwFlare() {
     Vec2 up = (a.pos - p.center).normalize();
     Vec2 from = a.pos + up * 10.0f;
     Vec2 aim = a.aimWorld - from;
+    // On the touch pad: the way the aim stick points, or with no thumb on it
+    // the way you are facing.
+    if (Input::sticksUsed()) aim = app.aimStick ? app.aimDir * 10.0f : Vec2(0.0f, 0.0f);
     if (aim.length() < 1.0f) aim = Vec2(-up.y, up.x) * (float)a.facing + up;
     aim = aim.normalize();
     // A lob: aimed a little above where you point.
@@ -4380,6 +4396,128 @@ static void burnOre(Planet& p, int idx, float dt, Vec2 tool) {
     app.burnOre = -1;
 }
 
+// What the mining laser would work at a point: something growing on the
+// ground strip, something growing in a cave, or ore the cutter has uncovered
+// (at most one of them: underground that is what you are aiming at, out on
+// the surface a plant comes first; ore is in the wall, behind anything
+// growing there).
+struct LaserPick {
+    int plant = -1, prop = -1, ore = -1;
+    bool any() const { return plant >= 0 || prop >= 0 || ore >= 0; }
+};
+static LaserPick laserPick(const Planet& p, const NearField::Frame& f, const CaveField::Frame& cf,
+                           Vec2 cursor, float slack) {
+    const Astronaut& a = app.astronaut;
+    LaserPick k;
+    k.plant = NearField::pick(p, f, cursor, a.pos, LASER_RANGE, slack);
+    Vec2 eye = a.pos + (a.pos - p.center).normalize() * 16.0f;
+    k.prop = CaveField::pick(p, cf, cursor, a.pos, eye, LASER_RANGE, slack);
+    k.ore = Deposits::pick(p, cf, cursor, a.pos, eye, LASER_RANGE, slack);
+    if (k.ore >= 0) k.prop = -1;
+    if ((k.prop >= 0 || k.ore >= 0) && k.plant >= 0) {
+        if (app.inHole < 0.5f) k.prop = k.ore = -1;
+        else k.plant = -1;
+    }
+    return k;
+}
+
+// ---- The touch pad's aim stick ----------------------------------------------
+// A phone's right thumb stick points the hand tool. Only its direction
+// counts: pushed a little it aims (a mark shows what the tool would reach),
+// pushed past AIM_FIRE it fires. Each frame that becomes a pointer of the
+// game's own — a point on the screen and a button, put where a mouse would
+// be — so the tools read one mouse whichever way they are aimed:
+//   sword   a cut that way as the stick goes over, and another as each ends;
+//   cutter  the beam at its full reach (a direction close to level or plumb
+//           is pulled onto it: a tunnel wants a level beam);
+//   laser   the nearest thing to mine along that line, the line a little
+//           wider the farther out it goes — or, with nothing there, the beam.
+static constexpr float AIM_DEAD = 0.14f;           // the stick's dead middle (of its travel)
+static constexpr float AIM_FIRE = 0.58f;           // pushed this far, the tool fires
+static constexpr float AIM_SNAP = 9.0f;            // degrees: the cutter's pull toward level and plumb
+static constexpr float AIM_IDLE = 110.0f;          // the laser's mark with nothing to aim at (world units out)
+
+static void updateAimStick(float time, bool live) {
+    Astronaut& a = app.astronaut;
+    float sx = Input::aimX(), sy = Input::aimY();
+    float m = sqrtf(sx * sx + sy * sy);
+    bool held = live && app.spacewalking && Input::aimHeld() && m > AIM_DEAD && !app.mapMode && app.tradePost < 0;
+    if (!held) {
+        // Let go: the pointer goes with it (no brackets left where it was).
+        if (app.aimStick) Input::setPointer(-1.0f, -1.0f, false);
+        app.aimStick = app.aimFiring = false;
+        return;
+    }
+    const Planet& p = dominantPlanet();
+    Vec2 up = (a.pos - p.center).normalize(), right(-up.y, up.x);
+    Vec2 drop = up * NearField::WALK_DROP;      // (the figure is drawn that far below where it stands)
+    // The stick's direction on screen, in the world.
+    Vec2 dir = (screenToWorld(sx / m * 100.0f, sy / m * 100.0f) - screenToWorld(0.0f, 0.0f)).normalize();
+    bool fire = m > (app.aimFiring ? AIM_FIRE - 0.12f : AIM_FIRE);
+
+    // Where the tool is, as drawn; where the pointer goes; where the mark goes.
+    Vec2 origin, cursor, mark;
+    if (app.toolMode == TOOL_SWORD) {
+        origin = a.pos + up * Astronaut::BODY_UP - drop;
+        cursor = mark = origin + dir * SWORD_REACH;
+        // Held over: cut again as each cut ends.
+        if (fire && app.aimFiring && app.swordT < 0.0f) Input::click();
+    } else if (app.toolMode == 1) {
+        float ang = atan2d(dir.dot(up), dir.dot(right));
+        float square = roundf(ang / 90.0f) * 90.0f;
+        if (fabsf(ang - square) < AIM_SNAP) dir = right * cosd(square) + up * sind(square);
+        Vec2 from = a.pos + up * (CUT_RADIUS - Astronaut::FOOT_R);      // (as updateLaser has it)
+        origin = from - drop;
+        cursor = mark = origin + dir * CUT_REACH;
+        // The mark: the first rock the beam would bite.
+        for (float t = 2.0f; t <= CUT_REACH; t += 2.0f) {
+            if (p.rockAt(from + dir * t) > -0.5f) { mark = origin + dir * t; break; }
+        }
+    } else {
+        // Underground the beam leaves the eye and stops at the first rock;
+        // on the surface it runs from where you stand (as updateLaser has it).
+        bool under = app.inHole >= 0.5f;
+        origin = under ? a.pos + up * 16.0f - drop : a.pos;
+        cursor = mark = origin + dir * AIM_IDLE;
+        NearField::Frame f = nearFrame(time);
+        CaveField::Frame cf = caveFrame(time);
+        float wall = -1.0f;
+        for (float t = 8.0f; t <= LASER_RANGE; t += 5.0f) {
+            Vec2 q = origin + dir * t;
+            Vec2 qs = worldToScreen(q);
+            if (qs.x < 0.0f || qs.y < 0.0f || qs.x > app.width || qs.y > app.height) break;   // out of sight
+            LaserPick k = laserPick(p, f, cf, q, 4.0f + 0.09f * t);
+            if (k.any()) {
+                cursor = mark = k.ore >= 0 ? Deposits::center(p, p.ores[k.ore])
+                              : k.prop >= 0 ? CaveField::center(p, p.caveProps[k.prop])
+                                            : NearField::center(p, p.harvest[k.plant]);
+                break;
+            }
+            // (A little way into the wall: ore sits in it.)
+            if (under && p.rockAt(q + drop) > 0.5f) {
+                if (wall < 0.0f) { wall = t; if (t < AIM_IDLE) mark = q; }
+                else if (t > wall + 16.0f) break;
+            }
+        }
+    }
+    // Keep the pointer on the screen (off it, it is no pointer at all): pull
+    // it back along the tool's line.
+    Vec2 os = worldToScreen(origin), cs = worldToScreen(cursor);
+    float keep = 1.0f;
+    auto fit = [&](float o, float c, float lo, float hi) {
+        if (c < lo && o > lo) keep = std::min(keep, (o - lo) / (o - c));
+        if (c > hi && o < hi) keep = std::min(keep, (hi - o) / (c - o));
+    };
+    fit(os.x, cs.x, 2.0f, app.width - 2.0f);
+    fit(os.y, cs.y, 2.0f, app.height - 2.0f);
+    cs = os + (cs - os) * keep;
+    Input::setPointer(std::max(0.0f, cs.x), std::max(0.0f, cs.y), fire);
+    app.aimStick = true;
+    app.aimFiring = fire;
+    app.aimDir = dir;
+    app.aimMark = mark;
+}
+
 // Aim, cut, harvest. Runs after the astronaut has moved this frame.
 static void updateLaser(float dt, float time) {
     Astronaut& a = app.astronaut;
@@ -4405,21 +4543,23 @@ static void updateLaser(float dt, float time) {
     bool cutter = app.toolMode == 1;
     app.laserCutting = cutter;
     if (!cutter) {
-        app.hoverTarget = NearField::pick(p, f, cursor, a.pos, LASER_RANGE, slack);
-        // What grows in the caves, and ore the cutter has uncovered.
-        // Underground that is what you are aiming at; out on the surface a
-        // plant under the cursor comes first.
-        Vec2 eye = a.pos + (a.pos - p.center).normalize() * 16.0f;
-        CaveField::Frame cf = caveFrame(time);
-        app.hoverProp = CaveField::pick(p, cf, cursor, a.pos, eye, LASER_RANGE, slack);
-        app.hoverOre = Deposits::pick(p, cf, cursor, a.pos, eye, LASER_RANGE, slack);
-        if (app.hoverOre >= 0) app.hoverProp = -1;     // (ore is in the wall, behind anything growing there)
-        if ((app.hoverProp >= 0 || app.hoverOre >= 0) && app.hoverTarget >= 0) {
-            if (app.inHole < 0.5f) app.hoverProp = app.hoverOre = -1;
-            else app.hoverTarget = -1;
-        }
+        LaserPick k = laserPick(p, f, caveFrame(time), cursor, slack);
+        app.hoverTarget = k.plant;
+        app.hoverProp = k.prop;
+        app.hoverOre = k.ore;
     }
-    if (!Input::isMouseDown()) { app.cutTimer = 0.0f; return; }
+    if (!Input::isMouseDown()) {
+        app.cutTimer = 0.0f;
+        // The aim stick, pushed only a little: the tool comes up and points.
+        if (app.aimStick) {
+            Vec2 upv = (a.pos - p.center).normalize();
+            a.aiming = true;
+            a.aimWorld = app.aimMark;
+            float side = (app.aimMark - a.pos).dot(Vec2(-upv.y, upv.x));
+            if (fabsf(side) > 3.0f) a.facing = side > 0.0f ? 1 : -1;
+        }
+        return;
+    }
 
     app.laserOn = true;
     a.aiming = true;
@@ -4916,6 +5056,35 @@ static void drawLaserFx(float time) {
                 Vec2 a1 = corner - right * (arm * sx), a2 = corner - up * (arm * sy);
                 r.line(corner.x, corner.y, a1.x, a1.y, w);
                 r.line(corner.x, corner.y, a2.x, a2.y, w);
+            }
+        }
+    }
+
+    // The aim stick's mark, until the beam itself says where: a ring on what
+    // the tool would reach (the brackets do it for something to mine), and a
+    // faint line out to it from the tool.
+    if (app.spacewalking && app.aimStick && !app.laserOn) {
+        Vec2 c = app.aimMark;
+        bool sword = app.toolMode == TOOL_SWORD;
+        float alpha = app.aimFiring ? 0.9f : 0.6f;
+        if (!sword) {
+            Vec2 from = app.astronaut.muzzleWorld, d = c - from;
+            float len = d.length();
+            r.fill(1.0f, 1.0f, 1.0f, 0.22f);
+            // Dashes, so it does not read as a beam.
+            for (float t = 10.0f * px; t + 4.0f * px < len - 8.0f * px; t += 9.0f * px) {
+                Vec2 q0 = from + d * (t / len), q1 = from + d * ((t + 4.0f * px) / len);
+                r.line(q0.x, q0.y, q1.x, q1.y, 1.5f * px);
+            }
+        }
+        if (sword || !(overPlant || overProp || overOre)) {
+            float rad = (sword ? 3.5f : 6.0f) * px;
+            r.fill(1.0f, 1.0f, 1.0f, alpha);
+            Vec2 prev = c + Vec2(rad, 0.0f);
+            for (int i = 1; i <= 18; i++) {
+                Vec2 q = c + Vec2(cosd(i * 20.0f), sind(i * 20.0f)) * rad;
+                r.line(prev.x, prev.y, q.x, q.y, 1.5f * px);
+                prev = q;
             }
         }
     }
@@ -5512,8 +5681,11 @@ static void pollInput(float timeScale) {
 
     bool left  = Input::isKeyDown(Input::KEY_A) || Input::isKeyDown(Input::KEY_LEFT);
     bool right = Input::isKeyDown(Input::KEY_D) || Input::isKeyDown(Input::KEY_RIGHT);
-    if (left)  l.rotate(-0.2f * timeScale);
-    if (right) l.rotate(0.2f * timeScale);
+    // A key turns the ship at one rate; the touch pad's stick turns it as far
+    // as it is pushed, so a small push is a slow turn (lining up a landing).
+    float turn = (right ? 1.0f : 0.0f) - (left ? 1.0f : 0.0f);
+    if (Input::stickX() != 0.0f) turn = Input::stickX();
+    if (turn != 0.0f) l.rotate(0.2f * turn * timeScale);
 
     bool thrust = Input::isKeyDown(Input::KEY_W) || Input::isKeyDown(Input::KEY_UP);
     l.setThrust(thrust && l.fuel > 0 ? 1.0f : 0.0f);
@@ -5521,6 +5693,10 @@ static void pollInput(float timeScale) {
     // Tractor beam fires straight down the ship's local axis while space is held.
     l.abducting = Input::isKeyDown(Input::KEY_SPACE);
 }
+
+// Frames the stick is held up, off the ground, before the jetpack lights (dry / in the water).
+static constexpr float STICK_JET_AFTER = 10.0f;
+static constexpr float STICK_JET_WET = 36.0f;
 
 static void pollInputAstronaut(float timeScale) {
     Astronaut& a = app.astronaut;
@@ -5539,7 +5715,14 @@ static void pollInputAstronaut(float timeScale) {
     if (Input::isKeyDown(Input::KEY_S) || Input::isKeyDown(Input::KEY_DOWN)) a.swim(p, timeScale, -1);
 
     a.jetting = false;
-    if (Input::isKeyDown(Input::KEY_SPACE)) a.jetpack(p, timeScale);
+    // On the touch pad's stick up is the jump, and held on once you are off
+    // the ground it is the jetpack as well — after a beat, so a flick is only
+    // a jump. (Swimming, that waits for your head to be out, and longer: up
+    // there treads water first.)
+    bool stickUp = jumpKey && Input::stickY() > 0.3f && !a.grounded && (a.wet <= 0.0f || a.chestDepth < 4.0f);
+    app.stickAir = stickUp ? app.stickAir + timeScale : 0.0f;
+    bool stickJet = app.stickAir > (a.wet > 0.0f ? STICK_JET_WET : STICK_JET_AFTER);
+    if (Input::isKeyDown(Input::KEY_SPACE) || stickJet) a.jetpack(p, timeScale);
 
 }
 
@@ -7795,6 +7978,7 @@ static void mainLoop() {
     // last frame's view would put the beam that far off target.
     // The light sword first (a swing holds the laser off), then the night
     // crawlers and the bats, which it may have just cut.
+    updateAimStick((float)(now - app.startTime) * 3.0f, live);
     updateSword(dt, live);
     updateLaser(dt, (float)(now - app.startTime) * 3.0f);
     updateEnemies(dt, timeScale, live);

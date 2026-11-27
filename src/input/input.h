@@ -50,4 +50,26 @@ bool takeClick();
 bool isRightMouseDown();
 bool takeRightClick();
 
+// ---- The two thumb sticks of the touch controls (shell.html) ---------------
+// The left stick moves: it presses the same keys a keyboard would (A/D, W,
+// S), and this is how far it is pushed — across (-1 left .. +1 right) and up
+// (-1 down .. +1 up), each 0 when it is let go, and always 0 on a keyboard.
+// The ship turns by it (a little push, a slow turn), and on foot holding it
+// up once you are off the ground is the jetpack.
+float stickX();
+float stickY();
+// The right stick points the hand tool: is a thumb on it, and which way it is
+// pushed on screen (+x right, +y down; its length 0..1 is how far). The game
+// turns that into a pointer of its own (setPointer), so the tools read one
+// mouse whichever way it is aimed.
+bool aimHeld();
+float aimX();
+float aimY();
+// Has either stick been used this session (the player is on the touch pad)?
+bool sticksUsed();
+// Place the pointer and its primary button from the game (the aim stick).
+// Going from up to down counts as a click; click() adds one more.
+void setPointer(float x, float y, bool down);
+void click();
+
 } // namespace Input

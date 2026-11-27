@@ -632,8 +632,10 @@
 
         /* ---- Phones and tablets (body.touch, set by the touch script) ----
            Played sideways: upright, a full-screen card asks you to turn the
-           phone. On-screen buttons press the game's keys; a finger on the
-           world is the mouse (aim and fire), two fingers pinch to zoom. */
+           phone. The controls are laid out like a gamepad: a move stick under
+           the left thumb, an aim stick under the right with the buttons in an
+           arc around it, and the menu keys in a row along the top. A finger
+           on the world is still the mouse, and two pinch to zoom. */
         #rotate, #touch { display: none; }
         body.touch, body.touch #canvas { touch-action: none; -webkit-user-select: none; user-select: none;
             -webkit-touch-callout: none; overscroll-behavior: none; }
@@ -648,7 +650,10 @@
         @media (orientation: portrait) { body.touch #rotate { display: flex; } }
 
         body.touch.playing #touch { display: block; }
-        #touch { position: fixed; inset: 0; z-index: 75; pointer-events: none; }
+        /* --lift: how far the sticks' rings rest above the bottom edge (less on a short screen, to clear the HUD). */
+        #touch { position: fixed; inset: 0; z-index: 75; pointer-events: none; --lift: 38px;
+                 --sl: env(safe-area-inset-left, 0px); --sr: env(safe-area-inset-right, 0px); --sb: env(safe-area-inset-bottom, 0px); }
+        @media (max-height: 350px) { #touch { --lift: 22px; } }
         #touch button {
             position: absolute; pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent;
             display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
@@ -661,15 +666,47 @@
                            color: rgba(159, 179, 200, 0.85); }
         #touch button.down { background: rgba(120, 255, 220, 0.30); border-color: rgba(120, 255, 220, 0.75); }
         #touch button svg { width: 26px; height: 26px; }
-        /* Steering, bottom left. */
-        #t-left, #t-right { width: 68px; height: 68px; bottom: calc(18px + env(safe-area-inset-bottom)); }
-        #t-left  { left: calc(18px + env(safe-area-inset-left)); }
-        #t-right { left: calc(96px + env(safe-area-inset-left)); }
-        /* Thrust / jump, jetpack / beam and the act key, bottom right. */
-        #t-up    { width: 78px; height: 78px; right: calc(18px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom)); }
-        #t-space { width: 62px; height: 62px; right: calc(108px + env(safe-area-inset-right)); bottom: calc(14px + env(safe-area-inset-bottom)); }
-        #t-e     { width: 54px; height: 54px; right: calc(30px + env(safe-area-inset-right)); bottom: calc(108px + env(safe-area-inset-bottom)); }
+        /* A stick is a patch of the screen the thumb can come down anywhere
+           in: its ring moves to the thumb (as far as the patch lets it) and
+           the knob follows from there. The ring rests 96px in from the
+           corner (the script moves it with --bx/--by, the knob with --kx/--ky). */
+        .t-stick { position: absolute; bottom: 0; pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent;
+                   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+        #t-move { left: 0; width: min(38vw, 320px); height: 66vh; }
+        #t-aim  { right: 0; width: calc(196px + var(--sr)); height: calc(196px + var(--sb)); }
+        .t-base {
+            position: absolute; bottom: calc(var(--lift) + var(--sb)); width: 116px; height: 116px; box-sizing: border-box; border-radius: 50%;
+            border: 1.5px solid rgba(255, 255, 255, 0.24); background: rgba(9, 13, 21, 0.30);
+            -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+            transform: translate(var(--bx, 0px), var(--by, 0px));
+        }
+        #t-move .t-base { left: calc(38px + var(--sl)); }
+        #t-aim .t-base  { right: calc(38px + var(--sr)); }
+        .t-knob {
+            position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; box-sizing: border-box; border-radius: 50%;
+            border: 1.5px solid rgba(255, 255, 255, 0.55); background: rgba(238, 247, 255, 0.20);
+            transform: translate(var(--kx, 0px), var(--ky, 0px));
+        }
+        .t-stick.on .t-base { border-color: rgba(255, 255, 255, 0.42); }
+        .t-stick.on .t-knob { background: rgba(238, 247, 255, 0.34); }
+        /* What pushing it up does (lit while it does); the aim stick lights when it is far enough over to fire. */
+        .t-tick { position: absolute; left: 0; right: 0; top: 8px; text-align: center; pointer-events: none;
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 9.5px; font-weight: 700;
+                  letter-spacing: 0.09em; text-transform: uppercase; color: rgba(190, 205, 222, 0.72); }
+        .t-stick.up .t-tick, .t-stick.fire .t-tick { color: #8fffe0; }
+        .t-stick.fire .t-base { border-color: rgba(120, 255, 220, 0.60); }
+        .t-stick.fire .t-knob { background: rgba(120, 255, 220, 0.36); border-color: rgba(120, 255, 220, 0.90); }
+        /* Right thumb. In the ship the big Thrust button sits where the aim
+           stick rests, with Beam to its left; on foot the Tool button is
+           there. Use / Out is up and to the left of it. */
+        #t-up    { width: 86px; height: 86px; right: calc(53px + var(--sr)); bottom: calc(var(--lift) + 15px + var(--sb)); font-size: 13px; }
+        #t-space, #t-tool { width: 58px; height: 58px; right: calc(199px + var(--sr)); bottom: calc(var(--lift) + 29px + var(--sb)); }
+        #t-e     { width: 56px; height: 56px; right: calc(161px + var(--sr)); bottom: calc(var(--lift) + 123px + var(--sb)); }
         #t-e.ready { border-color: #8fffe0; background: rgba(120, 255, 220, 0.22); }
+        /* The Tool button names the tool in hand, in its colour. */
+        #t-tool[data-tool="0"] #t-tool-name { color: #ffb27a; }
+        #t-tool[data-tool="1"] #t-tool-name { color: #8fffe0; }
+        #t-tool[data-tool="2"] #t-tool-name { color: #e8f4ff; }
         /* The rest: a row of small pills along the top right. */
         #t-row { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
                  display: flex; gap: 6px; pointer-events: none; }
@@ -678,12 +715,16 @@
         #touch[data-mode="fly"] .t-foot, #touch[data-mode="land"] .t-foot,
         #touch[data-mode="foot"] .t-ship, #touch:not([data-mode="fly"]) .t-fly { display: none !important; }
         /* A panel open (inventory, trade): the controls give way to a close button. */
-        #touch.panel button { display: none !important; }
+        #touch.panel button, #touch.panel .t-stick { display: none !important; }
         #touch.panel #t-close { display: flex !important; }
         #t-close { display: none !important; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
                    width: 46px; height: 46px; font-size: 22px; z-index: 2; }
         #touch.panel { z-index: 90; }
         #touch[data-mode="fly"] #t-e { display: none; }
+        /* Crashed, or the tank is dry: the keyboard's R, under the message. */
+        #touch #t-rescue { display: none; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); width: auto; height: 46px;
+                           padding: 0 24px; border-radius: 23px; font-size: 14px; border-color: rgba(255, 157, 140, 0.8); background: rgba(40, 14, 12, 0.6); }
+        #touch.stranded #t-rescue { display: flex; }
 
         /* The HUD shrinks to a corner and drops the keyboard hints. */
         body.touch #hud { top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left));
@@ -692,17 +733,23 @@
         body.touch #hud .keys, body.touch #hud .sep,
         body.touch #hud-kind, body.touch #hud .row:has(#hud-kind), body.touch #hud .row:has(#hud-system),
         body.touch #hud .row:has(#hud-charted), body.touch #hud .row:has(#hud-online) { display: none !important; }
+        /* (The Tool button names the tool in hand; a short screen keeps only what changes.) */
+        body.touch #hud-tool-row { display: none !important; }
+        @media (max-height: 350px) { body.touch #hud .row:has(#hud-world) { display: none !important; } }
         body.touch #hud-obj-text { font-size: 10.5px; }
         body.touch #hud-obj { margin-bottom: 6px; padding-bottom: 5px; }
-        body.touch #toast { top: calc(58px + env(safe-area-inset-top)); max-width: 300px; font-size: 12px; padding: 8px 36px 8px 11px;
+        /* (Between the HUD and the right thumb's buttons, under the row.) */
+        body.touch #toast { top: calc(58px + env(safe-area-inset-top)); right: auto; left: calc(190px + env(safe-area-inset-left));
+                            max-width: min(300px, calc(100vw - 460px)); font-size: 12px; padding: 8px 36px 8px 11px;
                             pointer-events: none; }
         body.touch #toast-close { pointer-events: auto; }
         body.touch #pickups { right: calc(12px + env(safe-area-inset-right)); bottom: auto; top: calc(58px + env(safe-area-inset-top)); flex-direction: column; }
-        body.touch #chat { left: calc(180px + env(safe-area-inset-left)); bottom: 10px; width: min(340px, calc(100vw - 420px)); }
+        body.touch #chat { left: calc(170px + env(safe-area-inset-left)); bottom: 10px; width: min(340px, calc(100vw - 440px)); }
         body.touch #chat-key { display: none; }
-        body.touch #prompt { bottom: calc(18px + env(safe-area-inset-bottom)); }
+        /* (Bottom centre is the gap between the sticks; the right-hand cluster is the wider, so a little left of the middle.) */
+        body.touch #prompt { left: calc(50% - 50px); bottom: calc(18px + env(safe-area-inset-bottom)); }
         body.touch #prompt.show { pointer-events: auto; }
-        body.touch #notice { bottom: calc(76px + env(safe-area-inset-bottom)); white-space: normal; max-width: calc(100vw - 380px); text-align: center; }
+        body.touch #notice { left: calc(50% - 50px); bottom: calc(76px + env(safe-area-inset-bottom)); white-space: normal; max-width: calc(100vw - 450px); text-align: center; }
         body.touch #message { font-size: 20px; }
         body.touch #message .sub { font-size: 13px; }
         body.touch #debug-toggle { left: auto; right: calc(12px + env(safe-area-inset-right)); bottom: auto; top: calc(58px + env(safe-area-inset-top)); }
@@ -835,20 +882,27 @@
     <div id="prompt"><span class="key">E</span><span id="prompt-text"></span></div>
     <div id="notice"></div>
     <div id="jumpfx"></div>
-    <!-- Phones: turn sideways, then on-screen controls (body.touch only). Each
-         button holds a game key down while pressed (data-key = keyCode). -->
+    <!-- Phones: turn sideways, then on-screen controls (body.touch only),
+         laid out like a gamepad. The left stick holds the movement keys (and
+         tells the game how far it is pushed); the right stick aims the hand
+         tool; each button holds a game key down while pressed (data-key =
+         keyCode). -->
     <div id="rotate">
         <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="6" width="24" height="52" rx="5" fill="none" stroke="#8fffe0" stroke-width="3"/><circle cx="32" cy="51" r="2.2" fill="#8fffe0"/></svg>
         <div><b>Turn your phone sideways</b>Visitor is played in landscape.</div>
     </div>
     <div id="touch" data-mode="fly">
-        <button id="t-left" data-key="65" aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 5 L8 12 L15 19" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <button id="t-right" data-key="68" aria-label="Right"><svg viewBox="0 0 24 24"><path d="M9 5 L16 12 L9 19" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <button id="t-up" data-key="87"><span class="t-ship">Thrust</span><span class="t-foot">Jump</span><span class="k">W</span></button>
-        <button id="t-space" data-key="32"><span class="t-ship">Beam</span><span class="t-foot">Jet</span><span class="k">Space</span></button>
+        <div class="t-stick" id="t-move" aria-label="Move">
+            <div class="t-base"><span class="t-tick"><span class="t-ship">Thrust</span><span class="t-foot">Jump</span></span><div class="t-knob"></div></div>
+        </div>
+        <div class="t-stick t-foot" id="t-aim" aria-label="Aim the tool">
+            <div class="t-base"><span class="t-tick">Aim</span><div class="t-knob"></div></div>
+        </div>
+        <button id="t-up" class="t-ship" data-key="87">Thrust<span class="k">W</span></button>
+        <button id="t-space" class="t-ship" data-key="32">Beam<span class="k">Space</span></button>
+        <button id="t-tool" class="t-foot" data-key="81" data-tool="0"><span id="t-tool-name">Laser</span><span class="k">Tool</span></button>
         <button id="t-e" data-key="69"><span class="t-ship">Out</span><span class="t-foot">Use</span><span class="k">E</span></button>
         <div id="t-row">
-            <button class="t-foot" data-key="81">Tool<span class="k">Q</span></button>
             <button class="t-foot" data-key="71">Flare<span class="k">G</span></button>
             <button class="t-foot" data-key="67">Scan<span class="k">C</span></button>
             <button class="t-foot" data-key="70">Breathe<span class="k">F</span></button>
@@ -858,6 +912,7 @@
             <button data-act="zoomout" aria-label="Zoom out">&minus;</button>
             <button data-act="zoomin" aria-label="Zoom in">+</button>
         </div>
+        <button id="t-rescue" data-key="82">Rescue</button>
         <button id="t-close" data-act="close" aria-label="Close">&times;</button>
     </div>
     <!-- The front door: Continue / New game. main.cpp's init calls window.showTitle. -->
@@ -876,8 +931,8 @@
                 <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
             </div>
             <div class="title-keys touch-keys">
-                <div><b>Ship</b> &#9664; &#9654; turn &middot; <b>Thrust</b> hold to burn &middot; <b>Beam</b> tractor beam &middot; <b>Out</b> step out</div>
-                <div><b>On foot</b> &#9664; &#9654; walk &middot; <b>Jump</b> &middot; <b>Jet</b> jetpack &middot; touch the world to aim and fire the tool &middot; <b>Use</b> trade / board &middot; pinch to zoom</div>
+                <div><b>Ship</b> left stick turns &middot; push it up, or hold <b>Thrust</b>, to burn &middot; <b>Beam</b> tractor beam &middot; <b>Out</b> step out</div>
+                <div><b>On foot</b> left stick walks &middot; flick it up to jump, hold it up for the jetpack &middot; right stick aims the tool, pushed right over it fires &middot; <b>Tool</b> laser / cutter / sword &middot; <b>Use</b> trade / board &middot; pinch to zoom</div>
                 <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
             </div>
         </div>
@@ -2165,7 +2220,7 @@
                     toastEl.style.display = 'none';
                 }
                 if (enteredSpacewalk && !spacewalkToastDismissed && document.body.classList.contains('touch')) {
-                    showToast('On foot', 'Arrows walk, Jump, Jet. Touch the world to fire the tool there; Tool switches laser, cutter and sword. Use trades at a stall and boards the ship (your pack goes to the hold). Breathe tops the SUIT up with carbon.');
+                    showToast('On foot', 'Left stick: walk. Flick it up to jump, hold it up for the jetpack. Right stick: aim the tool, push it right over to fire. Tool switches laser, cutter and sword. Use trades at a stall and boards the ship. Breathe tops the SUIT up with carbon.');
                 } else if (enteredSpacewalk && !spacewalkToastDismissed) {
                     showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor. Q switches the hand tool (or 1, 2, 3): mining laser, terrain cutter once you own one, and the light sword, which cuts toward the cursor with each click. Draw it when something comes for you: crawlers at night, bats in the caves. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.');
                 }
@@ -2188,6 +2243,7 @@
                 altEl.textContent = Math.round(altitude);
                 velEl.textContent = velocity.toFixed(1);
 
+                var onPad = document.body.classList.contains('touch');     // (the touch pad: its buttons, not keys)
                 if (state === 1) {
                     statusEl.style.color = '#7fe3a0';
                     msgEl.style.display = 'block';
@@ -2196,18 +2252,21 @@
                         msgEl.style.display = 'none';
                     } else {
                         statusEl.textContent = 'LANDED';
-                        msgEl.innerHTML = 'LANDED SAFELY<div class="sub">E exit ship &nbsp;·&nbsp; hold W to lift off</div>';
+                        msgEl.innerHTML = onPad ? 'LANDED SAFELY<div class="sub">Out to step out &nbsp;·&nbsp; push the stick up to lift off</div>'
+                                                : 'LANDED SAFELY<div class="sub">E exit ship &nbsp;·&nbsp; hold W to lift off</div>';
                     }
                 } else if (state === 2) {
                     statusEl.textContent = 'CRASHED';
                     statusEl.style.color = '#ff7a6c';
                     msgEl.style.display = 'block';
-                    msgEl.innerHTML = 'CRASHED<div class="sub">your cargo is lost &nbsp;&middot;&nbsp; R to be rescued</div>';
+                    msgEl.innerHTML = onPad ? 'CRASHED<div class="sub">your cargo is lost</div>'
+                                            : 'CRASHED<div class="sub">your cargo is lost &nbsp;&middot;&nbsp; R to be rescued</div>';
                 } else if (dryTank) {
                     statusEl.textContent = 'NO FUEL';
                     statusEl.style.color = '#ff7a6c';
                     msgEl.style.display = 'block';
-                    msgEl.innerHTML = 'OUT OF FUEL<div class="sub">R to call for a rescue (your cargo is lost)</div>';
+                    msgEl.innerHTML = onPad ? 'OUT OF FUEL<div class="sub">a rescue costs you your cargo</div>'
+                                            : 'OUT OF FUEL<div class="sub">R to call for a rescue (your cargo is lost)</div>';
                 } else {
                     statusEl.textContent = 'FLYING';
                     statusEl.style.color = '#e8eef5';
@@ -2550,8 +2609,11 @@
         resizeCanvas();
 
         // ---- Touch: phones and tablets ---------------------------------------
-        // On a touch screen (or with ?touch) the page shows its own controls.
-        // Buttons hold a game key down while pressed (Module._inputKey); a
+        // On a touch screen (or with ?touch) the page shows its own controls,
+        // laid out like a gamepad. The left stick holds the movement keys
+        // down (Module._inputKey) and says how far it is pushed
+        // (Module._inputStick); the right stick aims the hand tool
+        // (Module._inputAim); the buttons hold a game key while pressed; a
         // finger on the world is the mouse (Module._inputPointer: aim, fire,
         // swing); two fingers pinch the zoom (Module._inputWheel).
         (function () {
@@ -2565,8 +2627,21 @@
             var pad = document.getElementById('touch');
 
             // A press shorter than a frame or two would slip between the
-            // game's looks at the keys: every press is held at least this long.
-            var MIN_HOLD = 110;
+            // game's looks at the keys: every press is held at least this
+            // long. (A key can have two holders — the stick pushed up and the
+            // Thrust button are both W — and is let go when the last one is.)
+            var MIN_HOLD = 110, holds = {};
+            function keyDown(code) {
+                var k = holds[code] || (holds[code] = { n: 0, since: 0, timer: 0 });
+                if (k.timer) { clearTimeout(k.timer); k.timer = 0; }
+                if (k.n++ === 0) { k.since = performance.now(); key(code, true); }
+            }
+            function keyUp(code) {
+                var k = holds[code];
+                if (!k || k.n === 0 || --k.n > 0) return;
+                k.timer = setTimeout(function () { k.timer = 0; if (k.n === 0) key(code, false); },
+                                     Math.max(0, MIN_HOLD - (performance.now() - k.since)));
+            }
             function closePanels() {
                 if (document.getElementById('trade').classList.contains('open') && M() && Module._tradeClose) Module._tradeClose();
                 if (window.toggleInventory) window.toggleInventory(false);
@@ -2578,19 +2653,19 @@
                 else if (name === 'close') closePanels();
             }
             pad.querySelectorAll('button').forEach(function (b) {
-                var code = b.dataset.key ? +b.dataset.key : 0, since = 0, held = false;
+                var code = b.dataset.key ? +b.dataset.key : 0, held = false;
                 function press(e) {
                     e.preventDefault();
                     try { b.setPointerCapture(e.pointerId); } catch (err) {}
                     b.classList.add('down');
-                    if (code) { held = true; since = performance.now(); key(code, true); }
-                    else act(b.dataset.act);
+                    if (!code) act(b.dataset.act);
+                    else if (!held) { held = true; keyDown(code); }
                 }
                 function release() {
                     b.classList.remove('down');
                     if (!held) return;
                     held = false;
-                    setTimeout(function () { key(code, false); }, Math.max(0, MIN_HOLD - (performance.now() - since)));
+                    keyUp(code);
                 }
                 b.addEventListener('pointerdown', press);
                 b.addEventListener('pointerup', release);
@@ -2601,11 +2676,113 @@
             // The "E  Trade with ..." hint is a button too.
             var prompt = document.getElementById('prompt');
             prompt.addEventListener('pointerdown', function (e) {
-                e.preventDefault(); key(69, true); setTimeout(function () { key(69, false); }, MIN_HOLD);
+                e.preventDefault(); keyDown(69); keyUp(69);
             });
+
+            // A thumb stick. The thumb comes down anywhere in its patch of
+            // the screen and that is the stick's middle: the ring moves there
+            // (kept `inset` inside the patch) and the knob follows the thumb
+            // out to the rim. A thumb that runs on past the rim takes the
+            // stick with it, so turning back answers at once. change(x, y,
+            // held): how far it is pushed, -1..1 across and -1..1 DOWN the
+            // screen, and whether a thumb is on it.
+            function makeStick(zone, inset, change) {
+                var base = zone.querySelector('.t-base'), knob = zone.querySelector('.t-knob');
+                var RIM = 46, RUN = 1.3;                 // the knob's travel (px); how far past it the thumb may go
+                var id = null, x0 = 0, y0 = 0, hx = 0, hy = 0, bx = 0, by = 0;
+                function draw(kx, ky) {
+                    base.style.setProperty('--bx', bx + 'px'); base.style.setProperty('--by', by + 'px');
+                    knob.style.setProperty('--kx', kx + 'px'); knob.style.setProperty('--ky', ky + 'px');
+                }
+                function ringTo(x, y) {
+                    var z = zone.getBoundingClientRect();
+                    bx = Math.min(Math.max(x, z.left + inset), z.right - inset) - hx;
+                    by = Math.min(Math.max(y, z.top + inset), z.bottom - inset) - hy;
+                }
+                function down(e) {
+                    if (id !== null) return;
+                    e.preventDefault();
+                    id = e.pointerId;
+                    try { zone.setPointerCapture(id); } catch (err) {}
+                    var r = base.getBoundingClientRect();
+                    hx = r.left + r.width / 2 - bx; hy = r.top + r.height / 2 - by;    // where the ring rests
+                    x0 = e.clientX; y0 = e.clientY;
+                    ringTo(x0, y0);
+                    zone.classList.add('on');
+                    draw(0, 0);
+                    change(0, 0, true);
+                }
+                function move(e) {
+                    if (e.pointerId !== id) return;
+                    e.preventDefault();
+                    var dx = e.clientX - x0, dy = e.clientY - y0, m = Math.hypot(dx, dy);
+                    if (m > RIM * RUN) {
+                        var k = (m - RIM * RUN) / m;
+                        x0 += dx * k; y0 += dy * k;
+                        ringTo(hx + bx + dx * k, hy + by + dy * k);
+                        dx = e.clientX - x0; dy = e.clientY - y0; m = RIM * RUN;
+                    }
+                    var s = m > RIM ? RIM / m : 1;
+                    draw(dx * s, dy * s);
+                    change(dx * s / RIM, dy * s / RIM, true);
+                }
+                function up(e) {
+                    if (id === null || (e && e.pointerId !== id)) return;
+                    id = null; bx = by = 0;
+                    zone.classList.remove('on');
+                    draw(0, 0);
+                    change(0, 0, false);
+                }
+                zone.addEventListener('pointerdown', down);
+                zone.addEventListener('pointermove', move);
+                zone.addEventListener('pointerup', up);
+                zone.addEventListener('pointercancel', up);
+                zone.addEventListener('lostpointercapture', up);
+                zone.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+                return { letGo: function () { if (id !== null) up(); } };
+            }
+
+            // The left stick moves. Past a threshold a direction is its key
+            // (A / D, W: thrust or jump, S: dive), and stays so until the
+            // stick comes a little way back. The game also gets how far
+            // across it is — the ship turns by that, nothing in the middle and
+            // gently at first — and how far up (held up in the air, on foot,
+            // is the jetpack).
+            var moveZone = document.getElementById('t-move'), moved = {};
+            function moveKey(code, want) {
+                if (!!moved[code] === want) return;
+                moved[code] = want;
+                if (want) keyDown(code); else keyUp(code);
+            }
+            var moveStick = makeStick(moveZone, 64, function (x, y) {
+                moveKey(65, x < -(moved[65] ? 0.22 : 0.34));
+                moveKey(68, x > (moved[68] ? 0.22 : 0.34));
+                moveKey(87, -y > (moved[87] ? 0.42 : 0.56));
+                moveKey(83, y > (moved[83] ? 0.42 : 0.56));
+                moveZone.classList.toggle('up', !!moved[87]);
+                var a = Math.abs(x), turn = a < 0.12 ? 0 : (x < 0 ? -1 : 1) * Math.pow((a - 0.12) / 0.88, 1.4);
+                var m = M(); if (m && m._inputStick) m._inputStick(turn, -y);
+            });
+            // The right stick points the hand tool: the game takes its
+            // direction, aims along it and, pushed far enough over, fires
+            // (main.cpp, updateAimStick: AIM_FIRE is the 0.58 here).
+            var aimZone = document.getElementById('t-aim');
+            var aimStick = makeStick(aimZone, 80, function (x, y, held) {
+                aimZone.classList.toggle('fire', held && Math.hypot(x, y) > 0.58);
+                var m = M(); if (m && m._inputAim) m._inputAim(x, y, held ? 1 : 0);
+            });
+            // The Tool button names the tool in hand (setTool is the HUD's).
+            var hudSetTool = window.setTool, toolBtn = document.getElementById('t-tool');
+            window.setTool = function (mode) {
+                if (hudSetTool) hudSetTool(mode);
+                toolBtn.dataset.tool = mode;
+                document.getElementById('t-tool-name').textContent = ['Laser', 'Cutter', 'Sword'][mode] || 'Laser';
+            };
 
             // A finger on the world: the first is the mouse; a second turns it
             // into a pinch (and lets the first go, so the tool stops firing).
+            // Only fingers that came down on the world count (targetTouches):
+            // a thumb on a stick or a button is not half of a pinch.
             var canvas = document.getElementById('canvas');
             var aim = null, pinch = 0;
             function at(t) { var r = canvas.getBoundingClientRect(); return [t.clientX - r.left, t.clientY - r.top]; }
@@ -2614,9 +2791,9 @@
             function pointer(t, phase) { var m = M(); if (!m) return; var p = at(t); m._inputPointer(p[0], p[1], phase); }
             canvas.addEventListener('touchstart', function (e) {
                 e.preventDefault();
-                if (e.touches.length >= 2) {
-                    if (aim !== null) { var t = find(e.touches, aim); if (t) pointer(t, 2); aim = null; }
-                    pinch = spread(e.touches);
+                if (e.targetTouches.length >= 2) {
+                    if (aim !== null) { var t = find(e.targetTouches, aim); if (t) pointer(t, 2); aim = null; }
+                    pinch = spread(e.targetTouches);
                 } else if (aim === null) {
                     aim = e.changedTouches[0].identifier;
                     pointer(e.changedTouches[0], 1);
@@ -2624,8 +2801,8 @@
             }, { passive: false });
             canvas.addEventListener('touchmove', function (e) {
                 e.preventDefault();
-                if (e.touches.length >= 2 && pinch > 0) {
-                    var s = spread(e.touches);
+                if (e.targetTouches.length >= 2 && pinch > 0) {
+                    var s = spread(e.targetTouches);
                     if (s > 0) wheel(-Math.log(s / pinch) / 0.0015);
                     pinch = s;
                     return;
@@ -2637,7 +2814,7 @@
                 e.preventDefault();
                 var t = aim !== null ? find(e.changedTouches, aim) : null;
                 if (t) { pointer(t, 2); aim = null; }
-                if (e.touches.length < 2) pinch = 0;
+                if (e.targetTouches.length < 2) pinch = 0;
             }
             canvas.addEventListener('touchend', lift, { passive: false });
             canvas.addEventListener('touchcancel', lift, { passive: false });
@@ -2649,14 +2826,21 @@
             function sync() {
                 document.body.classList.toggle('playing', !title.classList.contains('open') &&
                     document.getElementById('status').style.display === 'none');
-                pad.dataset.mode = hud.dataset.mode || 'fly';
+                var mode = hud.dataset.mode || 'fly';
+                // Back in the ship: the aim stick goes, and lets go as it does.
+                if (mode !== pad.dataset.mode && mode !== 'foot') aimStick.letGo();
+                pad.dataset.mode = mode;
                 var panel = trade.classList.contains('open') || inv.classList.contains('open');
                 if (panel && !pad.classList.contains('panel')) {
                     // Let go of everything held when a panel opens over the controls.
                     pad.querySelectorAll('button.down').forEach(function (b) { b.dispatchEvent(new PointerEvent('pointercancel')); });
+                    moveStick.letGo();
+                    aimStick.letGo();
                 }
                 pad.classList.toggle('panel', panel);
                 ebtn.classList.toggle('ready', prompt.classList.contains('show'));
+                // Crashed or out of fuel: the Rescue button (the keyboard's R).
+                pad.classList.toggle('stranded', /CRASHED|NO FUEL/.test(document.getElementById('hud-status').textContent));
             }
             setInterval(sync, 150);
             sync();

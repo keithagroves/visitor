@@ -53,6 +53,7 @@ sequenceDiagram
     Loop->>A: updateSuit() — the suit meter drains or refills; F breathes carbon, C scans, J jumps, the herd regrows
     Loop->>P: updateDiscovery() — chart worlds on approach
     Loop->>V: updateZoom() + updateView() — framing, follow, auto-roll, map
+    Loop->>In: updateAimStick() — touch pad: the right stick's direction becomes the pointer the tools read (aim, or fire past AIM_FIRE)
     Loop->>A: updateSword() — sword out: a click is a cut toward the cursor; what it hits, hit-stop, pogo (after the camera)
     Loop->>A: updateLaser() — aim at the cursor: harvest, or cut terrain (held off mid-swing)
     Loop->>P: updateEnemies() — crawlers after dark, bats in the caves: move, pounce / dive; a bite comes off the suit
