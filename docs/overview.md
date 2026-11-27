@@ -104,8 +104,9 @@ own flow:
   writes `window.DBG`; `syncDebugFromJS()` copies it into `gDebug` each frame.
 - **Host page / HUD** — [shell.html](../shell.html) is the Emscripten shell: it
   picks the system seed (`?seed=N` → remembered → random), hosts the `#canvas`,
-  renders the fuel/score/altitude HUD plus the current world and chart
-  progress (`window.updateHUD` / `updateNav`, called from the C++ loop), event
+  renders the HUD — the ship's fuel, altitude and velocity while you fly it,
+  the suit, pack and hand tool while you are on foot, plus the current world
+  and chart progress (`window.updateHUD` / `updateNav`, called from the C++ loop), event
   banners, the map's name labels, and the debug panel (sliders, "New random
   system", per-world "Warp to" buttons).
 - **Controls** — W/Up thrust, A/D rotate, Space tractor beam, E exit/enter the

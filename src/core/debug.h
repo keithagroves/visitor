@@ -37,6 +37,7 @@ struct Debug {
     // Clouds (see the cloud shader in main.cpp).
     float cloudHeight = 0.8f;      // how far up the atmosphere the cloud band reaches (0..1)
     float cloudCoverage = 1.0f;    // cloud density / coverage (0 = clear, 1 = overcast)
+    float cloudGroundClear = 200.0f; // world units of clear air over the ground before clouds start
     float cloudFalloff = 0.65f;    // how strongly coverage thins toward both band edges (0 = none, 1 = clouds only mid-band)
     float spaceHaze = 1.0f;        // max strength of the sky/cloud fill over the planet disk from space (1 = solid sky circle, 0 = planet stays bare)
     // Day/night terminator on the planet body (see the terminator shader in main.cpp).
@@ -112,6 +113,31 @@ struct Debug {
     float crawlers = 1.0f;
     float bats = 1.0f;
     float bite = 0.12f;
+    // The ship's exhaust as a fluid (graphics/plume.h): how much gas the
+    // engine puts out (1 = as tuned; 0 = off, and the ship draws its old
+    // flame cone instead).
+    float plume = 1.0f;
+    // The flame's colour: 0 = red-orange, 1 = blue-white (in between blends).
+    float flameBlue = 0.0f;
+    // Underground it is dark but for the lights you bring (drawCaveDark):
+    // 1 = as dark as it gets, 0 = off (caves lit as on the surface).
+    float caveDark = 1.0f;
+    // The suit lamp underground: how far its pool of light reaches (world
+    // units, 0 = no lamp) and how bright it is at your feet (0..1).
+    float caveLamp = 115.0f;
+    float caveLampBright = 1.0f;
+    // How brightly the drawn light sword lights the cave round you (0..1).
+    float caveSwordBright = 1.0f;
+    // How far the drawn sword's light reaches (world units; a cut adds 40).
+    float caveSwordReach = 140.0f;
+    // How far the jetpack's flame lights the cave while it fires (0 = none).
+    float caveJetLight = 130.0f;
+    // Lift-off like a rocket's: hold W on the pad and the engine burns this
+    // many seconds (big flames) before the ship lets go (0 = at once, as it
+    // used to); then its push builds from a little over its weight to full
+    // over liftSpool seconds, so it climbs off the pad slowly at first.
+    float liftDelay = 1.0f;
+    float liftSpool = 1.5f;
     // Sun-angle override for tuning time-of-day looks: -5 = auto day cycle;
     // 0..360 pins the sun's orbit angle (270 = noon over the spawn point,
     // ~350 = sunset there).

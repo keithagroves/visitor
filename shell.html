@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>Visitor</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3CclipPath id='c'%3E%3Crect width='64' height='64' rx='14'/%3E%3C/clipPath%3E%3CradialGradient id='g'%3E%3Cstop offset='0' stop-color='%23fff'/%3E%3Cstop offset='.3' stop-color='%23d6f8ff'/%3E%3Cstop offset='.6' stop-color='%238fe6ff' stop-opacity='.55'/%3E%3Cstop offset='1' stop-color='%238fe6ff' stop-opacity='0'/%3E%3C/radialGradient%3E%3ClinearGradient id='b' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23eafcff' stop-opacity='.95'/%3E%3Cstop offset='1' stop-color='%23eafcff' stop-opacity='.1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cg clip-path='url(%23c)'%3E%3Crect width='64' height='64' fill='%236c95ec'/%3E%3Cpath d='M30 26H34L38 53H26Z' fill='url(%23b)'/%3E%3Cpath d='M-6 55Q32 45 70 55V70H-6Z' fill='%237d776b'/%3E%3Cpath d='M-6 60Q32 51 70 60V70H-6Z' fill='%23625d54'/%3E%3Ccircle cx='32' cy='21' r='18' fill='url(%23g)'/%3E%3Ccircle cx='32' cy='21' r='7' fill='%23fff'/%3E%3C/g%3E%3C/svg%3E">
     <style>
@@ -202,7 +204,9 @@
         #nav-labels .lbl .sub { font-size: 10px; color: rgba(190, 208, 228, 0.75); }
 
         #hud .sep { height: 1px; background: rgba(255, 255, 255, 0.12); margin: 7px 0 5px; }
-        #hud .keys { margin-top: 7px; font-size: 11px; color: rgba(159, 179, 200, 0.75); }
+        #hud .keys { display: flex; flex-wrap: wrap; gap: 1px 11px; margin-top: 7px; font-size: 11px; color: rgba(159, 179, 200, 0.75); }
+        #hud .keys span { white-space: nowrap; }
+        #hud .keys b { font-weight: 600; color: #cfe3f5; }
 
         /* ---- Inventory (Tab) and the trading post's panel (E at a trader) ---- */
         #inventory, #trade {
@@ -244,20 +248,108 @@
         .cr svg { width: 0.85em; height: 0.85em; flex: none; }
 
         /* ---- Trading post ---- */
-        #trade { z-index: 79; width: min(780px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; user-select: none; }
-        .trade-say { margin: -6px 0 13px; font-size: 12.5px; line-height: 1.4; color: rgba(232, 238, 245, 0.78); }
-        .trade-say .alien { color: #ffd66e; font-style: italic; margin-right: 7px; }
-        .trade-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
-        @media (max-width: 640px) { .trade-cols { grid-template-columns: 1fr; } }
-        .trade-h { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 7px;
+        #trade { z-index: 79; width: min(840px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0;
+                 display: flex; flex-direction: column; overflow: hidden; user-select: none; }
+        /* Who you are dealing with. */
+        .tp-head { display: flex; align-items: center; gap: 15px; padding: 16px 20px 14px; }
+        .tp-face { flex: none; position: relative; width: 80px; height: 80px; border-radius: 12px; overflow: hidden;
+                   border: 1px solid rgba(255, 255, 255, 0.13);
+                   background: radial-gradient(circle at 50% 42%, var(--tp-glow, rgba(140, 200, 255, 0.30)), rgba(255, 255, 255, 0.03) 74%); }
+        .tp-face svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+        .tp-face .mouth { transform-box: fill-box; transform-origin: center; animation: tp-talk 0.26s ease-in-out 7 alternate; }
+        @keyframes tp-talk { to { transform: scaleY(3.4); } }
+        .tp-who { flex: 1; min-width: 0; }
+        .tp-name { display: flex; align-items: baseline; gap: 10px; }
+        .tp-name b { font-size: 20px; font-weight: 700; color: #fff; }
+        .tp-name span { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #9fb3c8;
+                        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .tp-say { display: inline-block; max-width: 100%; margin-top: 7px; padding: 7px 12px; border-radius: 3px 11px 11px 11px;
+                  background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.09);
+                  font-size: 12.5px; line-height: 1.4; color: rgba(232, 238, 245, 0.86); }
+        .tp-say .alien { color: #ffd66e; font-style: italic; margin-right: 7px; }
+        .tp-purse { flex: none; align-self: flex-start; text-align: right; }
+        .tp-purse .cr { font-size: 20px; }
+        .tp-caps { margin-top: 5px; font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 11px; line-height: 1.55;
+                   color: rgba(159, 179, 200, 0.9); white-space: nowrap; }
+        .tp-caps b { font-weight: 600; color: #e8eef5; }
+        .tp-caps .full b { color: #ff9a84; }
+        .tp-caps .off { opacity: 0.55; }
+        /* The two tabs. */
+        .tp-tabs { display: flex; align-items: flex-end; gap: 2px; padding: 0 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.10); }
+        .tp-tab { display: flex; align-items: center; gap: 8px; padding: 9px 15px 10px; margin-bottom: -1px;
+                  border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer;
+                  font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #9fb3c8; }
+        .tp-tab:hover { color: #e8eef5; }
+        .tp-tab.on { color: #8fffe0; border-bottom-color: #8fffe0; }
+        .tp-badge { padding: 1px 8px; border-radius: 9px; background: #8fffe0; color: #06241f;
+                    font-size: 10.5px; font-weight: 800; letter-spacing: 0.02em; text-transform: none; }
+        .tp-badge:empty { display: none; }
+        .tp-tabs .inv-hint { margin-left: auto; align-self: center; }
+        /* Both tabs are the same height (so the panel does not jump between
+           them) unless one has more to show; in a short window the body scrolls. */
+        .tp-body { flex: 1 1 auto; min-height: 0; padding: 14px 20px 4px; overflow-y: auto; }
+        .tp-pane { display: none; min-height: min(386px, calc(100vh - 240px)); }
+        .tp-pane.on { display: block; }
+        .tp-foot { padding: 9px 20px 13px; font-size: 11.5px; color: rgba(143, 255, 224, 0.85); }
+        .tp-foot.far { color: #ffcf9a; }
+        /* Sell and buy: two rows abreast. */
+        .trade-h { display: flex; align-items: center; gap: 9px; min-height: 26px; margin: 0 0 6px;
                    font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #9fb3c8; }
-        .trade-h.gap { margin-top: 13px; }
-        .trade-list { display: flex; flex-direction: column; gap: 5px; }
+        .trade-h.gap { margin-top: 14px; }
+        .trade-h span + span { font-weight: 400; letter-spacing: 0.02em; text-transform: none; color: rgba(159, 179, 200, 0.75); }
+        .trade-h .trade-btn { margin-left: auto; letter-spacing: 0; text-transform: none; }
+        .trade-list { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; }
+        .trade-list .trade-empty { grid-column: 1 / -1; }
+        /* Equipment: three columns (ship, suit, tool), one tile each, and the
+           chosen one spelled out underneath. */
+        .gear-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 10px; }
+        .gear-h { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #9fb3c8;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gear-h span { margin-left: 7px; font-weight: 400; letter-spacing: 0.02em; text-transform: none; color: rgba(159, 179, 200, 0.75); }
+        .gear-tile { display: grid; grid-template-columns: 34px 1fr; align-items: center; gap: 9px; width: 100%; margin-top: 6px;
+                     padding: 7px 10px 7px 8px; border-radius: 9px; cursor: pointer; text-align: left;
+                     font-family: inherit; color: inherit; background: rgba(255, 255, 255, 0.045); border: 1px solid rgba(255, 255, 255, 0.09); }
+        .gear-tile:hover { background: rgba(255, 255, 255, 0.085); }
+        .gear-tile svg { width: 34px; height: 34px; }
+        .gear-tile > div { min-width: 0; }
+        .gear-tile .nm { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .gear-tile .st { margin-top: 2px; font-size: 11px; color: rgba(159, 179, 200, 0.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gear-tile.ready { border-color: rgba(120, 255, 220, 0.50); background: rgba(120, 255, 220, 0.07); }
+        .gear-tile.ready .st { color: #8fffe0; font-weight: 600; }
+        .gear-tile.done svg, .gear-tile.done .nm { opacity: 0.6; }
+        .gear-tile.sel { border-color: #8fffe0; background: rgba(120, 255, 220, 0.13); box-shadow: 0 0 0 1px #8fffe0 inset; }
+        .gear-detail { display: grid; grid-template-columns: 56px 1fr auto; align-items: start; gap: 16px; margin-top: 14px;
+                       padding: 14px 16px; border-radius: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.09); }
+        .gear-detail > svg { width: 56px; height: 56px; }
+        .gd-title { display: flex; align-items: center; gap: 4px; font-size: 16px; font-weight: 700; }
+        .gd-fx { margin-top: 3px; font-size: 13px; line-height: 1.4; color: #e8eef5; }
+        .gd-now { font-size: 12px; line-height: 1.4; color: rgba(159, 179, 200, 0.9); }
+        .gd-h { margin: 11px 0 0; font-size: 10.5px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(159, 179, 200, 0.75); }
+        .gear-detail .trade-recipe .mat { font-size: 12px; padding: 2px 8px 2px 4px; }
+        .gear-detail .trade-recipe .mat svg { width: 17px; height: 17px; }
+        .gear-detail .trade-recipe .mat .cr { font-size: 12px; }
+        .gear-detail .trade-hint { font-size: 11.5px; margin-top: 3px; }
+        .gd-act { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; min-width: 112px; }
+        .trade-btn.big { padding: 9px 16px; font-size: 13px; border-radius: 8px; }
+        .trade-btn.big:not([disabled]) { background: rgba(120, 255, 220, 0.20); border-color: #8fffe0; }
+        .trade-btn.big .cr { font-size: 13px; }
+        .gd-why { max-width: 150px; font-size: 11px; line-height: 1.35; text-align: right; color: #ffb3a3; }
+        .gd-why .cr { font-size: 11px; color: inherit; }
+        @media (max-width: 860px) { .trade-list { grid-template-columns: 1fr; } }
+        @media (max-width: 640px) {
+            .gear-cols { grid-template-columns: 1fr; }
+            .gear-cols .gear-h { margin-top: 10px; }
+            .gear-detail { grid-template-columns: 1fr; }
+            .gear-detail > svg { display: none; }
+            .gd-act { align-items: flex-start; }
+            .tp-face { width: 58px; height: 58px; }
+        }
         .trade-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 9px;
                      padding: 6px 8px; border-radius: 8px;
                      background: rgba(255, 255, 255, 0.045); border: 1px solid rgba(255, 255, 255, 0.09); }
         .trade-row > svg { width: 30px; height: 30px; }
-        .trade-row .nm { font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .trade-row > div { min-width: 0; }
+        .trade-row .nm { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .trade-row .qty { font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-weight: 600; color: rgba(232, 238, 245, 0.7); margin-left: 3px; }
         .trade-row .sub { font-size: 11px; color: rgba(159, 179, 200, 0.9); margin-top: 2px; }
         .trade-row .sub .cr { font-size: 11px; }
@@ -275,15 +367,11 @@
         .trade-btn[disabled] { opacity: 0.4; cursor: default; border-color: rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.04); }
         .trade-max { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: #8fffe0; padding: 0 6px; }
         .trade-empty { font-size: 12.5px; line-height: 1.45; color: rgba(159, 179, 200, 0.85); padding: 9px 2px; }
-        .trade-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
 
         .inv-head.second { margin: 14px 0 10px; }
         #inventory { max-height: calc(100vh - 32px); overflow-y: auto; }
         .inv-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
         #inv-detail-act { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-        #trade-holdnote { margin-top: 4px; font-size: 11.5px; color: #8fffe0; }
-        .trade-group { margin: 8px 0 1px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(159, 179, 200, 0.75); }
-        .trade-group:first-child { margin-top: 0; }
         .trade-recipe { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
         .trade-recipe .mat { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px 1px 3px; border-radius: 5px;
                              font-size: 11px; color: #ffb3a3; background: rgba(255, 110, 80, 0.10); border: 1px solid rgba(255, 110, 80, 0.25); }
@@ -299,7 +387,12 @@
         #hud-obj { margin: -2px 0 9px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
         #hud-obj .label { font-size: 10px; letter-spacing: 0.16em; color: #8fffe0; }
         #hud-obj-text { color: #fff; font-size: 12.5px; line-height: 1.35; white-space: normal; }
-        #hud .gauge.thin { height: 7px; margin: 2px 0 6px; }
+        /* Only what the moment needs: the ship's readouts in the ship (and its
+           flight numbers only off the ground), the suit's on foot. */
+        #hud[data-mode="foot"] .in-ship, #hud[data-mode="foot"] .in-flight,
+        #hud[data-mode="land"] .in-flight,
+        #hud:not([data-mode="foot"]) .on-foot { display: none !important; }
+        #hud-foot .gauge { margin: 4px 0 8px; }
         #hud .gauge.mini { display: inline-block; width: 80px; height: 6px; margin: 0; vertical-align: middle; }
         #hud .gauge.mini .gauge-fill { display: block; background: #f58f33; }
         #hud-suit-label.warn #hud-suit { color: #ff7a6c; animation: blink 0.8s steps(2) infinite; }
@@ -506,6 +599,23 @@
         #debug-reset:hover { background: rgba(255, 255, 255, 0.16); }
         #debug-system { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
         #debug-system .dbg-head { margin-bottom: 6px; }
+        #debug-equip { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+        #debug-equip .dbg-head { margin-bottom: 6px; }
+        .dbg-equip-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+        .dbg-equip-row .lv { display: flex; gap: 3px; }
+        #debug-equip button {
+            background: rgba(255, 255, 255, 0.08);
+            color: #dde6f0;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 5px;
+            padding: 2px 7px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 11px;
+        }
+        #debug-equip > button { margin: 4px 4px 0 0; padding: 4px 7px; }
+        #debug-equip button:hover { background: rgba(255, 255, 255, 0.16); }
+        #debug-equip button.on { background: #50c0e0; border-color: #50c0e0; color: #08131a; }
         #debug-system button {
             background: rgba(255, 255, 255, 0.08);
             color: #dde6f0;
@@ -519,36 +629,138 @@
         }
         #debug-system button:hover { background: rgba(255, 255, 255, 0.16); }
         #debug-system .hint { color: #9fb3c8; font-size: 11px; margin: 6px 0 4px; }
+
+        /* ---- Phones and tablets (body.touch, set by the touch script) ----
+           Played sideways: upright, a full-screen card asks you to turn the
+           phone. On-screen buttons press the game's keys; a finger on the
+           world is the mouse (aim and fire), two fingers pinch to zoom. */
+        #rotate, #touch { display: none; }
+        body.touch, body.touch #canvas { touch-action: none; -webkit-user-select: none; user-select: none;
+            -webkit-touch-callout: none; overscroll-behavior: none; }
+        #rotate {
+            position: fixed; inset: 0; z-index: 300; align-items: center; justify-content: center; flex-direction: column; gap: 18px;
+            padding: 24px; text-align: center; background: #070b14; color: #e8eef5;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 16px; line-height: 1.45;
+        }
+        #rotate b { display: block; font-size: 20px; margin-bottom: 4px; color: #fff; }
+        #rotate svg { width: 92px; height: 92px; animation: turnphone 2.4s ease-in-out infinite; }
+        @keyframes turnphone { 0%, 20% { transform: rotate(0deg); } 55%, 100% { transform: rotate(-90deg); } }
+        @media (orientation: portrait) { body.touch #rotate { display: flex; } }
+
+        body.touch.playing #touch { display: block; }
+        #touch { position: fixed; inset: 0; z-index: 75; pointer-events: none; }
+        #touch button {
+            position: absolute; pointer-events: auto; touch-action: none; -webkit-tap-highlight-color: transparent;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+            border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, 0.28); background: rgba(9, 13, 21, 0.38);
+            color: #eef7ff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12px; font-weight: 700; letter-spacing: 0.02em; padding: 0;
+            -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+        }
+        #touch button .k { font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 9.5px; font-weight: 600;
+                           color: rgba(159, 179, 200, 0.85); }
+        #touch button.down { background: rgba(120, 255, 220, 0.30); border-color: rgba(120, 255, 220, 0.75); }
+        #touch button svg { width: 26px; height: 26px; }
+        /* Steering, bottom left. */
+        #t-left, #t-right { width: 68px; height: 68px; bottom: calc(18px + env(safe-area-inset-bottom)); }
+        #t-left  { left: calc(18px + env(safe-area-inset-left)); }
+        #t-right { left: calc(96px + env(safe-area-inset-left)); }
+        /* Thrust / jump, jetpack / beam and the act key, bottom right. */
+        #t-up    { width: 78px; height: 78px; right: calc(18px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom)); }
+        #t-space { width: 62px; height: 62px; right: calc(108px + env(safe-area-inset-right)); bottom: calc(14px + env(safe-area-inset-bottom)); }
+        #t-e     { width: 54px; height: 54px; right: calc(30px + env(safe-area-inset-right)); bottom: calc(108px + env(safe-area-inset-bottom)); }
+        #t-e.ready { border-color: #8fffe0; background: rgba(120, 255, 220, 0.22); }
+        /* The rest: a row of small pills along the top right. */
+        #t-row { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
+                 display: flex; gap: 6px; pointer-events: none; }
+        #t-row button { position: static; border-radius: 9px; width: auto; min-width: 44px; height: 40px; padding: 0 8px; }
+        /* Only what the moment needs (mode mirrors the HUD's data-mode). */
+        #touch[data-mode="fly"] .t-foot, #touch[data-mode="land"] .t-foot,
+        #touch[data-mode="foot"] .t-ship, #touch:not([data-mode="fly"]) .t-fly { display: none !important; }
+        /* A panel open (inventory, trade): the controls give way to a close button. */
+        #touch.panel button { display: none !important; }
+        #touch.panel #t-close { display: flex !important; }
+        #t-close { display: none !important; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
+                   width: 46px; height: 46px; font-size: 22px; z-index: 2; }
+        #touch.panel { z-index: 90; }
+        #touch[data-mode="fly"] #t-e { display: none; }
+
+        /* The HUD shrinks to a corner and drops the keyboard hints. */
+        body.touch #hud { top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left));
+                          width: 172px; min-width: 0; padding: 7px 9px; font-size: 10.5px; }
+        body.touch #hud .gauge { width: 100%; height: 8px; margin: 2px 0 6px; }
+        body.touch #hud .keys, body.touch #hud .sep,
+        body.touch #hud-kind, body.touch #hud .row:has(#hud-kind), body.touch #hud .row:has(#hud-system),
+        body.touch #hud .row:has(#hud-charted), body.touch #hud .row:has(#hud-online) { display: none !important; }
+        body.touch #hud-obj-text { font-size: 10.5px; }
+        body.touch #hud-obj { margin-bottom: 6px; padding-bottom: 5px; }
+        body.touch #toast { top: calc(58px + env(safe-area-inset-top)); max-width: 300px; font-size: 12px; padding: 8px 36px 8px 11px;
+                            pointer-events: none; }
+        body.touch #toast-close { pointer-events: auto; }
+        body.touch #pickups { right: calc(12px + env(safe-area-inset-right)); bottom: auto; top: calc(58px + env(safe-area-inset-top)); flex-direction: column; }
+        body.touch #chat { left: calc(180px + env(safe-area-inset-left)); bottom: 10px; width: min(340px, calc(100vw - 420px)); }
+        body.touch #chat-key { display: none; }
+        body.touch #prompt { bottom: calc(18px + env(safe-area-inset-bottom)); }
+        body.touch #prompt.show { pointer-events: auto; }
+        body.touch #notice { bottom: calc(76px + env(safe-area-inset-bottom)); white-space: normal; max-width: calc(100vw - 380px); text-align: center; }
+        body.touch #message { font-size: 20px; }
+        body.touch #message .sub { font-size: 13px; }
+        body.touch #debug-toggle { left: auto; right: calc(12px + env(safe-area-inset-right)); bottom: auto; top: calc(58px + env(safe-area-inset-top)); }
+        body.touch #debug-panel { max-height: calc(100vh - 20px); bottom: 10px; }
+        /* Panels fill the short screen. */
+        body.touch #inventory, body.touch #trade { max-height: calc(100vh - 16px); width: calc(100vw - 120px); }
+        body.touch #inventory { padding: 12px 14px; }
+        body.touch .inv-hint { display: none; }
+        /* The title: the keyboard list becomes the touch one, and it scrolls if short. */
+        #title .touch-keys { display: none; }
+        body.touch #title .title-keys:not(.touch-keys) { display: none; }
+        body.touch #title .touch-keys { display: block; }
+        body.touch #title { overflow-y: auto; align-items: flex-start; }
+        body.touch .title-box { margin: auto; }
+        @media (max-height: 500px) {
+            body.touch .title-name { font-size: 44px; }
+            body.touch .title-tag { margin: 6px auto 14px; font-size: 13.5px; }
+            body.touch .title-keys { margin-top: 12px; }
+        }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
 
-    <div id="hud">
+    <!-- The HUD shows what you are doing now (data-mode, set by updateHUD):
+         "fly" = in the ship and off the ground, "land" = in the ship on the
+         ground, "foot" = out of it. Rows marked in-flight / in-ship / on-foot
+         only show in their mode; the rest always do. -->
+    <div id="hud" data-mode="fly">
         <div id="hud-obj" style="display:none"><div class="label">NEXT</div><div id="hud-obj-text"></div></div>
-        <div class="label">FUEL <span id="hud-fuel">0/0</span></div>
-        <div class="gauge"><div id="hud-fuel-fill" class="gauge-fill"></div></div>
-        <div class="row"><span class="label">Altitude</span><span id="hud-alt">0</span></div>
-        <div class="row"><span class="label">Velocity</span><span id="hud-vel">0.0</span></div>
-        <div class="row"><span class="label">Credits</span><span class="cr" id="hud-credits"></span></div>
-        <div class="row"><span class="label">Hold</span><span id="hud-hold">0/150</span></div>
-        <div class="row" id="hud-warp-row" style="display:none"><span class="label">Time warp (T)</span><span id="hud-warp"></span></div>
-        <div class="row"><span class="label">Status</span><span id="hud-status">FLYING</span></div>
-        <div class="row" id="hud-tool-row" style="display:none"><span class="label">Tool (Q)</span><span id="hud-tool">Mining laser</span></div>
-        <div id="hud-foot" style="display:none">
-            <div class="row" id="hud-suit-label"><span class="label">SUIT</span><span id="hud-suit"></span></div>
-            <div class="gauge thin"><div id="hud-suit-fill" class="gauge-fill"></div></div>
-            <div class="row"><span class="label">Pack</span><span id="hud-pack">0/40</span></div>
-            <div class="row"><span class="label">Jetpack</span><span class="gauge mini"><span id="hud-jet-fill" class="gauge-fill"></span></span></div>
+        <div class="in-ship">
+            <div class="label">FUEL <span id="hud-fuel">0/0</span></div>
+            <div class="gauge"><div id="hud-fuel-fill" class="gauge-fill"></div></div>
         </div>
+        <div class="row in-flight"><span class="label">Altitude</span><span id="hud-alt">0</span></div>
+        <div class="row in-flight"><span class="label">Velocity</span><span id="hud-vel">0.0</span></div>
+        <div class="row in-flight" id="hud-warp-row" style="display:none"><span class="label">Time warp (T)</span><span id="hud-warp"></span></div>
+        <div id="hud-foot" class="on-foot" style="display:none">
+            <div class="row" id="hud-suit-label"><span class="label">SUIT</span><span id="hud-suit"></span></div>
+            <div class="gauge"><div id="hud-suit-fill" class="gauge-fill"></div></div>
+            <div class="row"><span class="label">Jetpack</span><span class="gauge mini"><span id="hud-jet-fill" class="gauge-fill"></span></span></div>
+            <div class="row"><span class="label">Pack</span><span id="hud-pack">0/40</span></div>
+            <div class="row"><span class="label">Flares (G)</span><span id="hud-flares">0</span></div>
+        </div>
+        <div class="row on-foot" id="hud-tool-row" style="display:none"><span class="label">Tool (Q)</span><span id="hud-tool">Mining laser</span></div>
+        <div class="row in-ship"><span class="label">Hold</span><span id="hud-hold">0/150</span></div>
+        <div class="row"><span class="label">Credits</span><span class="cr" id="hud-credits"></span></div>
+        <!-- Kept up to date for the capture rig and tests; the big message in
+             the middle of the screen already says landed / crashed / no fuel. -->
+        <div class="row" style="display:none"><span class="label">Status</span><span id="hud-status">FLYING</span></div>
         <div class="sep"></div>
         <div class="row"><span class="label">World</span><span id="hud-world">&mdash;</span></div>
         <div class="row"><span class="label">Type</span><span id="hud-kind">&mdash;</span></div>
-        <div class="row"><span class="label">System</span><span id="hud-system">&mdash;</span></div>
-        <div class="row"><span class="label">Charted</span><span id="hud-charted">0/0</span></div>
+        <div class="row in-ship"><span class="label">System</span><span id="hud-system">&mdash;</span></div>
+        <div class="row in-ship"><span class="label">Charted</span><span id="hud-charted">0/0</span></div>
         <div class="row" id="hud-trader-row" style="display:none"><span class="label">Trader</span><span id="hud-trader"></span></div>
         <div class="row" id="hud-online-row" style="display:none"><span class="label">Online</span><span id="hud-online"></span></div>
-        <div class="keys">M map &nbsp;&middot;&nbsp; Tab inventory &nbsp;&middot;&nbsp; T time warp &nbsp;&middot;&nbsp; wheel zoom<span id="chat-key"> &nbsp;&middot;&nbsp; Enter transmit</span></div>
+        <div class="keys"><span><b>M</b> map</span><span class="in-flight"><b>T</b> time warp</span><span class="on-foot"><b>Q</b> tool</span><span class="on-foot"><b>F</b> breathe</span><span class="on-foot"><b>G</b> flare</span><span><b>Tab</b> inventory</span><span><b>Wheel</b> zoom</span><span id="chat-key"><b>Enter</b> transmit</span></div>
     </div>
 
     <div id="nav-labels"></div>
@@ -585,32 +797,69 @@
         </div>
     </div>
     <!-- Trading post: E beside a trader opens it. Filled from C++ via window.showTrade. -->
+    <!-- The trader up top (a portrait of the one behind the stall, what they
+         say, your money and room), then two tabs: what changes hands for
+         credits, and the equipment they build. -->
     <div id="trade" role="dialog" aria-label="Trading post">
-        <div class="inv-head">
-            <span class="inv-title">TRADING POST</span>
-            <span class="inv-sub" id="trade-who"></span>
-            <span class="cr" id="trade-credits"></span>
+        <div class="tp-head">
+            <div class="tp-face" id="trade-face"></div>
+            <div class="tp-who">
+                <div class="tp-name"><b id="trade-keeper"></b><span id="trade-who"></span></div>
+                <div class="tp-say"><span class="alien" id="trade-alien"></span><span id="trade-line"></span></div>
+            </div>
+            <div class="tp-purse">
+                <span class="cr" id="trade-credits"></span>
+                <div class="tp-caps" id="trade-caps"></div>
+            </div>
+        </div>
+        <div class="tp-tabs" role="tablist">
+            <button class="tp-tab" type="button" role="tab" data-tab="goods">Sell &amp; buy</button>
+            <button class="tp-tab" type="button" role="tab" data-tab="gear">Equipment<span class="tp-badge" id="trade-ready"></span></button>
             <span class="inv-hint">E to leave</span>
         </div>
-        <div class="trade-say"><span class="alien" id="trade-alien"></span><span id="trade-line"></span>
-            <div id="trade-holdnote"></div></div>
-        <div class="trade-cols">
-            <div>
-                <div class="trade-h"><span>You sell</span></div>
+        <div class="tp-body">
+            <div class="tp-pane" id="trade-pane-goods">
+                <div class="trade-h"><span>You sell</span><span id="trade-sell-note"></span>
+                    <button class="trade-btn" id="trade-sell-all" type="button"></button></div>
                 <div class="trade-list" id="trade-sell"></div>
-                <div class="trade-foot"><button class="trade-btn" id="trade-sell-all" type="button"></button></div>
-                <div class="trade-h gap"><span>Goods</span><span id="trade-goods-note"></span></div>
+                <div class="trade-h gap"><span id="trade-goods-h">They sell</span><span id="trade-goods-note"></span></div>
                 <div class="trade-list" id="trade-goods"></div>
             </div>
-            <div>
-                <div class="trade-h"><span>Equipment</span><span>built from materials + credits</span></div>
-                <div class="trade-list" id="trade-upgrades"></div>
+            <div class="tp-pane" id="trade-pane-gear">
+                <div class="gear-cols" id="trade-upgrades"></div>
+                <div class="gear-detail" id="trade-detail"></div>
             </div>
         </div>
+        <div class="tp-foot" id="trade-holdnote"></div>
     </div>
     <div id="prompt"><span class="key">E</span><span id="prompt-text"></span></div>
     <div id="notice"></div>
     <div id="jumpfx"></div>
+    <!-- Phones: turn sideways, then on-screen controls (body.touch only). Each
+         button holds a game key down while pressed (data-key = keyCode). -->
+    <div id="rotate">
+        <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="6" width="24" height="52" rx="5" fill="none" stroke="#8fffe0" stroke-width="3"/><circle cx="32" cy="51" r="2.2" fill="#8fffe0"/></svg>
+        <div><b>Turn your phone sideways</b>Visitor is played in landscape.</div>
+    </div>
+    <div id="touch" data-mode="fly">
+        <button id="t-left" data-key="65" aria-label="Left"><svg viewBox="0 0 24 24"><path d="M15 5 L8 12 L15 19" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="t-right" data-key="68" aria-label="Right"><svg viewBox="0 0 24 24"><path d="M9 5 L16 12 L9 19" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="t-up" data-key="87"><span class="t-ship">Thrust</span><span class="t-foot">Jump</span><span class="k">W</span></button>
+        <button id="t-space" data-key="32"><span class="t-ship">Beam</span><span class="t-foot">Jet</span><span class="k">Space</span></button>
+        <button id="t-e" data-key="69"><span class="t-ship">Out</span><span class="t-foot">Use</span><span class="k">E</span></button>
+        <div id="t-row">
+            <button class="t-foot" data-key="81">Tool<span class="k">Q</span></button>
+            <button class="t-foot" data-key="71">Flare<span class="k">G</span></button>
+            <button class="t-foot" data-key="67">Scan<span class="k">C</span></button>
+            <button class="t-foot" data-key="70">Breathe<span class="k">F</span></button>
+            <button class="t-fly" data-key="84">Warp<span class="k">T</span></button>
+            <button data-key="77">Map<span class="k">M</span></button>
+            <button data-act="bag">Bag<span class="k">Tab</span></button>
+            <button data-act="zoomout" aria-label="Zoom out">&minus;</button>
+            <button data-act="zoomin" aria-label="Zoom in">+</button>
+        </div>
+        <button id="t-close" data-act="close" aria-label="Close">&times;</button>
+    </div>
     <!-- The front door: Continue / New game. main.cpp's init calls window.showTitle. -->
     <div id="title">
         <div class="title-box">
@@ -624,6 +873,11 @@
             <div class="title-keys">
                 <div><b>Ship</b> W thrust &middot; A/D turn &middot; Space tractor beam &middot; E step out &middot; M map &middot; T time warp &middot; Enter transmit</div>
                 <div><b>On foot</b> A/D walk &middot; W jump &middot; Space jetpack &middot; mouse fires the tool &middot; Q (or 1/2/3) laser / cutter / sword &middot; F breathe carbon &middot; C scan &middot; E trade / board &middot; Tab inventory</div>
+                <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
+            </div>
+            <div class="title-keys touch-keys">
+                <div><b>Ship</b> &#9664; &#9654; turn &middot; <b>Thrust</b> hold to burn &middot; <b>Beam</b> tractor beam &middot; <b>Out</b> step out</div>
+                <div><b>On foot</b> &#9664; &#9654; walk &middot; <b>Jump</b> &middot; <b>Jet</b> jetpack &middot; touch the world to aim and fire the tool &middot; <b>Use</b> trade / board &middot; pinch to zoom</div>
                 <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
             </div>
         </div>
@@ -645,6 +899,11 @@
             <button id="debug-newsystem">New random system</button>
             <div class="hint">Warp to (dev):</div>
             <div id="debug-warp"></div>
+        </div>
+        <div id="debug-equip">
+            <div class="dbg-head"><span>Equipment</span><span class="val">level</span></div>
+            <div id="debug-equip-rows"></div>
+            <button data-all="0">All off</button><button data-all="9">All max</button><button id="debug-flares">+6 flares</button>
         </div>
         <div id="debug-rows"></div>
         <button id="debug-reset">Reset to defaults</button>
@@ -726,11 +985,11 @@
                 beamRange: 300, beamWidth: 20,
                 planetDensity: 0.025, atmosphereScale: 0.4, atmosphereDrag: 0.015,
                 atmRayleighH: 1.5, atmRimH: 7.5, atmMieH: 2.0, atmSunIntensity: 44.0, atmExtinction: 4.5,
-                cloudHeight: 0.8, cloudCoverage: 1.0, cloudFalloff: 0.65, spaceHaze: 1.0,
+                cloudHeight: 0.8, cloudCoverage: 1.0, cloudFalloff: 0.65, cloudGroundClear: 200, spaceHaze: 1.0,
                 nightDarkness: 0.16, nightSoftness: 0.30,
                 cameraGroundZoom: 1.8, cameraFraming: 0.4, cameraHorizon: 0.14, cameraSpeedLook: 2.2,
                 walkSpeed: 2.4, jumpSpeed: 3.0, jetpackThrust: 0.115,
-                crawlers: 1.0, bats: 1.0, bite: 0.12,
+                crawlers: 1.0, bats: 1.0, bite: 0.12, plume: 1.0, flameBlue: 0, caveDark: 1.0, caveLamp: 115, caveLampBright: 1.0, caveSwordBright: 1.0, caveSwordReach: 140, caveJetLight: 130, liftDelay: 1.0, liftSpool: 1.5,
                 horizonHaze: 0.7, foreground: 1.0, vignette: 0.35, motes: 0, frontVeil: 0.45,
                 holeFloor: 0.34, holeDepth: 150, oreRichness: 1.0, oreBurn: 3.0,
                 waterLevel: 0, waterTint: 0.42,
@@ -754,6 +1013,7 @@
                 { key: 'cloudHeight',      label: 'Cloud Rim Reach',      min: 0.05,  max: 1.0,  step: 0.05 },
                 { key: 'cloudCoverage',    label: 'Cloud Coverage',       min: 0.0,   max: 1.0,  step: 0.05 },
                 { key: 'cloudFalloff',     label: 'Cloud Edge Falloff',   min: 0.0,   max: 1.0,  step: 0.05 },
+                { key: 'cloudGroundClear', label: 'Clouds: clear air over the ground', min: 0, max: 800, step: 10 },
                 { key: 'spaceHaze',        label: 'Space Sky Fill (over planet)', min: 0.0, max: 1.0, step: 0.05 },
                 { key: 'nightDarkness',    label: 'Night Side Darkness',  min: 0.0,   max: 1.0,  step: 0.02 },
                 { key: 'nightSoftness',    label: 'Terminator Softness',  min: 0.05,  max: 0.8,  step: 0.05 },
@@ -767,6 +1027,16 @@
                 { key: 'crawlers',         label: 'Night crawlers (0 = none, 1 = 2-4 at a time)', min: 0.0, max: 3.0, step: 0.1 },
                 { key: 'bats',             label: 'Cave bats (0 = none, 1 = beside a third of the stalactites)', min: 0.0, max: 3.0, step: 0.1 },
                 { key: 'bite',             label: 'Crawler bite, share of the suit meter (a bat: 2/3)', min: 0.0, max: 0.5, step: 0.01 },
+                { key: 'plume',            label: 'Exhaust as a fluid (0 = old flame cone)', min: 0.0, max: 2.0, step: 0.05 },
+                { key: 'caveDark',         label: 'Caves: darkness underground (0 = off)', min: 0.0, max: 1.0, step: 0.05 },
+                { key: 'caveLamp',         label: 'Caves: your lamp reach (0 = no lamp)', min: 0, max: 600, step: 5 },
+                { key: 'caveLampBright',   label: 'Caves: your lamp brightness', min: 0.0, max: 1.0, step: 0.05 },
+                { key: 'caveSwordBright',  label: 'Caves: light sword brightness', min: 0.0, max: 1.0, step: 0.05 },
+                { key: 'caveSwordReach',   label: 'Caves: light sword reach', min: 0, max: 400, step: 5 },
+                { key: 'caveJetLight',     label: 'Caves: jetpack light reach (0 = none)', min: 0, max: 400, step: 5 },
+                { key: 'flameBlue',        label: 'Flame colour (0 = red-orange, 1 = blue)', min: 0.0, max: 1.0, step: 0.05 },
+                { key: 'liftDelay',        label: 'Lift-off: seconds burning on the pad (0 = at once)', min: 0.0, max: 4.0, step: 0.1 },
+                { key: 'liftSpool',        label: 'Lift-off: seconds for the push to build to full', min: 0.0, max: 5.0, step: 0.1 },
                 { key: 'horizonHaze',      label: 'Horizon Haze',         min: 0.0,   max: 1.0,  step: 0.05 },
                 { key: 'foreground',       label: 'Foreground Band Height', min: 0.0, max: 1.6,  step: 0.05 },
                 { key: 'vignette',         label: 'Vignette',             min: 0.0,   max: 1.0,  step: 0.05 },
@@ -812,6 +1082,57 @@
             }
             function fmt(v) { return (Math.round(v * 1000) / 1000).toString(); }
 
+            // Equipment: every upgrade (by Trade::Upgrade in trade.h) at any of
+            // its levels, on or off, without trading for it. 0 = as you start:
+            // no star drive, cutter or scanner; the stock tank, hold, suit,
+            // pack, jetpack and mining laser (which cannot mine gold).
+            var EQUIP = ['Fuel tank', 'Cargo bay', 'Star drive', 'Seals', 'Pack', 'Jetpack cell',
+                         'Terrain cutter', 'Mining laser', 'Scanner'];
+            var equipRows = [];
+            function gameReady() { return window.Module && typeof Module._debugSetUpgrade === 'function'; }
+            function buildEquip() {
+                var box = document.getElementById('debug-equip-rows');
+                EQUIP.forEach(function (name, id) {
+                    var row = document.createElement('div'); row.className = 'dbg-equip-row';
+                    var lab = document.createElement('span'); lab.textContent = name;
+                    var lv = document.createElement('span'); lv.className = 'lv';
+                    row.appendChild(lab); row.appendChild(lv); box.appendChild(row);
+                    equipRows.push({ id: id, lv: lv, max: -1, buttons: [] });
+                });
+                document.querySelectorAll('#debug-equip > button[data-all]').forEach(function (b) {
+                    b.addEventListener('click', function () {
+                        if (!gameReady()) return;
+                        var to = +b.getAttribute('data-all');
+                        equipRows.forEach(function (r) { Module._debugSetUpgrade(r.id, to); });
+                        refreshEquip();
+                    });
+                });
+                document.getElementById('debug-flares').addEventListener('click', function () {
+                    if (window.Module && Module._debugGive) Module._debugGive(300, 6);
+                });
+                // Trading changes them too: keep the rows honest while open.
+                setInterval(function () {
+                    if (document.getElementById('debug-panel').style.display === 'block') refreshEquip();
+                }, 1000);
+            }
+            function refreshEquip() {
+                if (!gameReady()) return;
+                equipRows.forEach(function (r) {
+                    if (r.max < 0) {
+                        r.max = Module._debugUpgradeLevels(r.id);
+                        for (var l = 0; l <= r.max; l++) (function (l) {
+                            var b = document.createElement('button');
+                            // (0 is "off" for what you start without, "stock" for the rest.)
+                            b.textContent = l > 0 ? String(l) : (r.id === 2 || r.id === 6 || r.id === 8 ? 'off' : 'stock');
+                            b.addEventListener('click', function () { Module._debugSetUpgrade(r.id, l); refreshEquip(); });
+                            r.lv.appendChild(b); r.buttons.push(b);
+                        })(l);
+                    }
+                    var now = Module._debugSetUpgrade(r.id, -1);
+                    r.buttons.forEach(function (b, l) { b.classList.toggle('on', l === now); });
+                });
+            }
+
             function build() {
                 if (!DEBUG_MODE) return;
                 document.getElementById('debug-toggle').style.display = 'block';
@@ -830,9 +1151,11 @@
                     p._input = inp; p._val = val;
                     row.appendChild(head); row.appendChild(inp); rows.appendChild(row);
                 });
+                buildEquip();
                 document.getElementById('debug-toggle').addEventListener('click', function () {
                     var panel = document.getElementById('debug-panel');
                     panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+                    refreshEquip();
                 });
                 document.getElementById('debug-seed').textContent = 'seed ' + window.GAME_SEED;
                 document.getElementById('debug-newsystem').addEventListener('click', function () {
@@ -859,6 +1182,7 @@
                 toastEl = null, toastTitle = null, toastBody = null, toastClose = null;
             var wasSpacewalking = false;
             var spacewalkToastDismissed = false;
+            var hudMode = 'fly';            // #hud's data-mode: 'fly' | 'land' | 'foot'
             function cache() {
                 fuelEl = document.getElementById('hud-fuel');
                 fuelFill = document.getElementById('hud-fuel-fill');
@@ -984,6 +1308,10 @@
                 } else if (item.icon === 'radar') {
                     body = '<circle cx="20" cy="20" r="16" fill="' + d + '"/><circle cx="20" cy="20" r="11" fill="none" stroke="' + c + '" stroke-width="2"/>' +
                            '<circle cx="20" cy="20" r="5" fill="none" stroke="' + c + '" stroke-width="2"/><path d="M20 20 L33 11 L35 18 Z" fill="' + c + '"/>';
+                } else if (item.icon === 'flare') {
+                    body = '<path d="M7 31 L26 12 L30 16 L11 35 Z" fill="' + d + '"/>' +
+                           '<circle cx="29" cy="11" r="8" fill="' + c + '" opacity="0.45"/>' +
+                           '<circle cx="29" cy="11" r="4.5" fill="' + c + '"/><circle cx="29" cy="11" r="2" fill="#fff4e8"/>';
                 } else if (item.icon === 'nugget') {
                     body = '<path d="M6 30 L10 16 L22 9 L33 15 L35 28 L24 35 L12 35 Z" fill="' + d + '"/>' +
                            '<path d="M12 18 L22 11 L31 16 L25 23 L15 25 Z" fill="' + c + '"/>';
@@ -1158,6 +1486,8 @@
                 { name: 'Scanner', icon: 'radar', color: '#9effa8', group: 'Tool',
                   fx: function (v, l) { return l === 0 ? 'not owned' : 'C: shows ore through the rock'; } }
             ];
+            // What each piece of equipment answers (docs/gameplay.md, decision 4).
+            var GROUP_FOR = { Ship: 'where you can go', Suit: 'how long you can stay', Tool: 'what you can take' };
             var LEVEL = ['', ' I', ' II', ' III'];
             // A level's name: the laser you start with is the first (so the
             // first one you build is II); the cutter's first level is the
@@ -1188,6 +1518,10 @@
                 'Everything has a price. Mine are fair.'
             ];
             var tradeOpen = false;
+            var tradeTab = 'goods';        // 'goods' (sell and buy) | 'gear' (equipment)
+            var gearSel = -1;              // the upgrade spelled out under the grid
+            var lastTrade = null;          // what the panel is showing (showTrade's d)
+            var faceOf = '';               // whose portrait is up
             function tradeButton(html, enabled, fn) {
                 var b = document.createElement('button');
                 b.type = 'button';
@@ -1197,6 +1531,7 @@
                 else b.addEventListener('click', function () { fn(); b.blur(); });
                 return b;
             }
+            function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
             function tradeRow(item, nameHtml, subHtml) {
                 var row = document.createElement('div');
                 row.className = 'trade-row';
@@ -1204,10 +1539,140 @@
                                 '</div></div><div class="act"></div>';
                 return row;
             }
-            // The whole panel, from main.cpp (pushTrade) whenever it opens or
-            // anything in it changes.
-            window.showTrade = function (json) {
-                var d = JSON.parse(json);
+            // The trader, from the waist up behind the counter: the same
+            // figure outposts.cpp draws (drawAlien: three body plans, one to
+            // three eyes, antennae, a glass bubble where there is no air),
+            // standing still. In its units: one tall, feet at y = 0, facing
+            // right; the counter hides the legs, so they are not drawn.
+            function folkSvg(k) {
+                function col(c, m) { return 'rgb(' + Math.round(c[0] * m) + ',' + Math.round(c[1] * m) + ',' + Math.round(c[2] * m) + ')'; }
+                var skin = col(k.body, 1), shade = col(k.body, 0.70);
+                // What they wear is a deeper shade of their world's crystal (Outposts' dye).
+                var dyed = k.accent.map(function (v) { v /= 255; return v * (0.30 + 0.70 * v) * 255; });
+                var accent = col(dyed, 1), collar = col(dyed, 0.8);
+                var dark = 'rgb(26,28,43)', white = 'rgb(247,245,230)';
+                var bw = k.girth * 0.5, s = bw / 0.35, o = '';
+                function n(v) { return (+v).toFixed(3); }
+                function ell(x, y, rx, ry, c, extra) {
+                    o += '<ellipse cx="' + n(x) + '" cy="' + n(y) + '" rx="' + n(rx) + '" ry="' + n(ry) + '" fill="' + c + '"' + (extra || '') + '/>';
+                }
+                function cap(x1, y1, x2, y2, w, c, round) {
+                    o += '<line x1="' + n(x1) + '" y1="' + n(y1) + '" x2="' + n(x2) + '" y2="' + n(y2) + '" stroke="' + c +
+                         '" stroke-width="' + n(w) + '" stroke-linecap="' + (round === false ? 'butt' : 'round') + '"/>';
+                }
+                function poly(pts, c) { o += '<path d="M' + pts.map(n).join(' ') + 'Z" fill="' + c + '"/>'; }
+                function eye(x, y, r) { ell(x, y, r, r, white); ell(x + r * 0.30, y + r * 0.06, r * 0.54, r * 0.54, dark); }
+                function arm(x, y, side, c) { cap(x, y, x + 0.05 * side, y + 0.20, 0.085, c); }
+                function antennae(x0, x1, y) {
+                    for (var i = 0; i < k.ant; i++) {
+                        var x = i === 0 ? x0 : x1, lean = i === 0 ? -0.09 : 0.11;
+                        cap(x, y, x + lean, y - 0.19, 0.03, shade, false);
+                        ell(x + lean, y - 0.20, 0.042, 0.042, accent);
+                    }
+                }
+                function mouth(x, y, rx, ry) { ell(x, y, rx, ry, dark, ' class="mouth"'); }
+                var bub, bubR;
+                var frame;      // the square of it that shows: [middle x, top, side]
+                if (k.head === 1) {
+                    // A small body on long legs, a wide head on a neck.
+                    var bx = bw * 0.82;
+                    arm(-bx * 0.45, -0.60, -1, shade);
+                    cap(0.03, -0.64, 0.09, -0.80, 0.11, shade);
+                    ell(0, -0.48, bx, 0.22, shade);
+                    ell(bx * 0.10, -0.49, bx * 0.86, 0.20, skin);
+                    ell(0.04, -0.675, 0.13, 0.045, accent);
+                    poly([0.06, -0.67, 0.15, -0.67, 0.13, -0.50], accent);
+                    ell(0.11, -0.87, 0.20, 0.13, shade);
+                    ell(0.13, -0.875, 0.175, 0.115, skin);
+                    var ex = 0.18, ey = -0.89;
+                    if (k.eyes === 1) eye(ex, ey, 0.075);
+                    else if (k.eyes === 2) { eye(ex - 0.07, ey, 0.05); eye(ex + 0.07, ey, 0.05); }
+                    else { eye(ex - 0.10, ey + 0.005, 0.04); eye(ex, ey - 0.03, 0.044); eye(ex + 0.10, ey + 0.005, 0.04); }
+                    mouth(0.22, -0.795, 0.05, 0.008);
+                    antennae(0.05, 0.17, -0.985);
+                    arm(bx * 0.50, -0.58, 1, skin);
+                    bub = [0.12, -0.90]; bubR = 0.31;
+                    frame = [0.08, -1.27, 0.88];
+                } else if (k.head === 2) {
+                    // A low dome with its eyes up on stalks.
+                    var dx = bw * 1.05;
+                    arm(-dx * 0.60, -0.38, -1, shade);
+                    for (var i = 0; i < k.eyes; i++) {
+                        var off = k.eyes === 1 ? 0 : (i - (k.eyes - 1) * 0.5) * 0.17;
+                        var tx = 0.10 + off, ty = -0.90 - (k.eyes === 3 && i === 1 ? 0.07 : 0);
+                        cap(0.08 + off * 0.6, -0.60, tx, ty, 0.05, shade, false);
+                        eye(tx, ty, k.eyes === 1 ? 0.10 : 0.078);
+                    }
+                    ell(0, -0.40, dx, 0.27, shade);
+                    ell(dx * 0.09, -0.41, dx * 0.87, 0.245, skin);
+                    poly([-dx * 0.77, -0.235, dx * 0.78, -0.235, dx * 0.90, -0.30, -dx * 0.89, -0.30], accent);
+                    mouth(dx * 0.45, -0.43, 0.07, 0.012);
+                    arm(dx * 0.66, -0.36, 1, skin);
+                    bub = [0.10, -0.80]; bubR = 0.36;
+                    frame = [0.06, -1.20, 1.00];
+                } else {
+                    // Gumdrop: body and head are one.
+                    arm(-bw * 0.55, -0.50, -1, shade);
+                    ell(0, -0.55, bw, 0.42, shade);
+                    ell(bw * 0.10, -0.565, bw * 0.86, 0.385, skin);
+                    poly([-bw * 0.83, -0.33, bw * 0.90, -0.43, bw * 0.86, -0.50, -bw * 0.79, -0.40], accent);
+                    var gx = bw * 0.30, gy = -0.72;
+                    if (k.eyes === 1) eye(gx, gy, 0.13 * s);
+                    else if (k.eyes === 2) { eye(gx - 0.10 * s, gy, 0.08 * s); eye(gx + 0.10 * s, gy, 0.08 * s); }
+                    else { eye(gx - 0.14 * s, gy + 0.01, 0.062 * s); eye(gx, gy - 0.07, 0.07 * s); eye(gx + 0.14 * s, gy + 0.01, 0.062 * s); }
+                    mouth(gx + 0.02, -0.575, 0.07 * s, 0.012 * s);
+                    antennae(-0.10 * s, 0.12 * s, -0.94);
+                    arm(bw * 0.62, -0.48, 1, skin);
+                    bub = [0.02, -0.62]; bubR = Math.max(bw, 0.34) + 0.13;
+                    frame = [0.02, -1.24, 1.12];
+                }
+                if (k.helmet) {
+                    ell(bub[0], bub[1] + bubR * 0.90, bubR * 0.56, 0.04, collar);
+                    ell(bub[0], bub[1], bubR, bubR, 'rgba(209,237,255,0.17)');
+                    ell(bub[0] + bubR * 0.40, bub[1] - bubR * 0.52, bubR * 0.24, bubR * 0.11, 'rgba(255,255,255,0.5)');
+                }
+                // The counter they stand behind (the bottom of the picture),
+                // with a pennant of their cloth hanging from it.
+                var cx = frame[0], top = frame[1], h = frame[2], ct = top + h * 0.86;
+                o += '<rect x="' + n(cx - h) + '" y="' + n(ct) + '" width="' + n(2 * h) + '" height="' + n(h) + '" fill="rgb(74,56,44)"/>' +
+                     '<rect x="' + n(cx - h) + '" y="' + n(ct) + '" width="' + n(2 * h) + '" height="' + n(h * 0.035) + '" fill="rgb(112,88,66)"/>';
+                poly([cx - h * 0.13, ct + h * 0.035, cx + h * 0.13, ct + h * 0.035, cx + h * 0.13, ct + h * 0.09, cx, ct + h * 0.135, cx - h * 0.13, ct + h * 0.09], accent);
+                return '<svg viewBox="' + n(cx - h / 2) + ' ' + n(top) + ' ' + n(h) + ' ' + n(h) + '" aria-hidden="true">' + o + '</svg>';
+            }
+            function showTab(tab) {
+                tradeTab = tab;
+                var tabs = document.querySelectorAll('#trade .tp-tab');
+                for (var i = 0; i < tabs.length; i++) {
+                    var on = tabs[i].dataset.tab === tab;
+                    tabs[i].classList.toggle('on', on);
+                    tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+                }
+                document.getElementById('trade-pane-goods').classList.toggle('on', tab === 'goods');
+                document.getElementById('trade-pane-gear').classList.toggle('on', tab === 'gear');
+            }
+            (function () {
+                var tabs = document.querySelectorAll('#trade .tp-tab');
+                for (var i = 0; i < tabs.length; i++) (function (t) {
+                    t.addEventListener('click', function () { showTab(t.dataset.tab); t.blur(); });
+                })(tabs[i]);
+            })();
+            // What an upgrade still wants: the materials you are short of, by
+            // name, and whether the credits are.
+            function shortOf(d, u) {
+                var names = [];
+                u.mats.forEach(function (m) { if (m.have < m.need && ITEMS[m.id]) names.push(ITEMS[m.id].name.toLowerCase()); });
+                if (d.credits < u.cr) names.push('credits');
+                return names;
+            }
+            // The chosen upgrade, in full: what the next level does, what it
+            // costs (have / need), where the things you have never held are
+            // found, and the button.
+            function renderGearDetail() {
+                var d = lastTrade, box = document.getElementById('trade-detail');
+                var u = null;
+                d.up.forEach(function (x) { if (x.id === gearSel) u = x; });
+                var info = u && UPGRADES[u.id];
+                if (!info) { box.innerHTML = ''; return; }
                 var M = window.Module;
                 var found = {};
                 (d.found || []).forEach(function (f) { found[f.id] = f; });
@@ -1216,18 +1681,99 @@
                     var f = found[id];
                     return f && f.body ? 'on ' + f.body + (f.kind ? ' (' + f.kind.toLowerCase() + ')' : '') : 'somewhere in this system';
                 }
-                document.getElementById('trade-who').textContent = d.keeper + ' · ' + d.world;
+                var maxed = u.lvl >= u.max;
+                var pips = '';
+                if (u.max > 1) {
+                    pips = '<span class="trade-pips">';
+                    for (var i = 0; i < u.max; i++) pips += '<i' + (i < u.lvl ? ' class="on"' : '') + '></i>';
+                    pips += '</span>';
+                }
+                // Named for what you would be building.
+                var html = iconSvg(info) + '<div><div class="gd-title">' + info.name + levelName(u.id, maxed ? u.lvl : u.lvl + 1) + pips + '</div>';
+                if (maxed) {
+                    html += '<div class="gd-fx">' + info.fx(u.now, u.lvl) + '</div>' +
+                            '<div class="gd-now">' + (u.max > 1 ? 'Nothing more to build here.' : 'Yours.') + '</div>';
+                } else {
+                    html += '<div class="gd-fx">' + info.fx(u.next, u.lvl + 1) + '</div>' +
+                            '<div class="gd-now">Now: ' + info.fx(u.now, u.lvl) + '</div>' +
+                            '<div class="gd-h">Costs</div><div class="trade-recipe">' +
+                            '<span class="mat' + (d.credits >= u.cr ? ' ok' : '') + '">' + cr(u.cr) + '</span>';
+                    u.mats.forEach(function (m) {
+                        var it = ITEMS[m.id];
+                        if (!it) return;
+                        var tip = m.known ? '' : ' title="Found ' + esc(whereFrom(m.id)) + '"';
+                        html += '<span class="mat' + (m.have >= m.need ? ' ok' : '') + (m.known ? '' : ' new') + '"' + tip + '>' +
+                                iconSvg(it) + it.name + ' <b>' + Math.min(m.have, m.need) + '/' + m.need + '</b></span>';
+                    });
+                    var unknown = u.mats.filter(function (m) { return !m.known && m.have < m.need && ITEMS[m.id]; });
+                    if (unknown.length > 2) {
+                        html += '<div class="trade-hint">A crystal from every kind of world in this system, and gold from deep down.</div>';
+                    } else {
+                        unknown.forEach(function (m) {
+                            html += '<div class="trade-hint">' + ITEMS[m.id].name + ': ' + esc(whereFrom(m.id)) + '</div>';
+                        });
+                    }
+                    html += '</div>';
+                }
+                html += '</div><div class="gd-act"></div>';
+                box.innerHTML = html;
+                var act = box.querySelector('.gd-act');
+                if (maxed) {
+                    act.innerHTML = '<span class="trade-max">' + (u.max > 1 ? 'MAX' : 'OWNED') + '</span>';
+                } else {
+                    var b = tradeButton('Build ' + cr(u.cr), !!u.can, function () { M._tradeBuyUpgrade(u.id); });
+                    b.className += ' big';
+                    b.id = 'trade-build';
+                    act.appendChild(b);
+                    if (!u.can) {
+                        var why = document.createElement('div');
+                        why.className = 'gd-why';
+                        var lacking = u.mats.filter(function (m) { return m.have < m.need; }).length;
+                        why.innerHTML = (lacking ? '<div>Missing the materials in red</div>' : '') +
+                                        (d.credits < u.cr ? '<div>Short by ' + cr(u.cr - d.credits) + '</div>' : '');
+                        act.appendChild(why);
+                    }
+                }
+            }
+            // The whole panel, from main.cpp (pushTrade) whenever it opens or
+            // anything in it changes.
+            window.showTrade = function (json) {
+                var d = JSON.parse(json);
+                var M = window.Module;
+                var opening = !tradeOpen;
+                lastTrade = d;
+
+                // Who: the portrait (drawn once per trader), the name, what they say.
+                var face = d.keeper + '|' + d.world;
+                if (d.folk && (opening || face !== faceOf)) {
+                    faceOf = face;
+                    var faceEl = document.getElementById('trade-face');
+                    faceEl.innerHTML = folkSvg(d.folk);
+                    faceEl.style.setProperty('--tp-glow', 'rgba(' + d.folk.accent.join(',') + ',0.34)');
+                }
+                document.getElementById('trade-keeper').textContent = d.keeper;
+                document.getElementById('trade-who').textContent = 'Trading post · ' + d.world;
                 window.setCredits(d.credits);
                 document.getElementById('trade-alien').textContent = '“' + d.say + '”';
                 var wantItem = ITEMS[d.want];
                 document.getElementById('trade-line').textContent = LINES[d.line % LINES.length] +
                     (wantItem ? ' We are short of ' + wantItem.name.toLowerCase() + '.' : '');
-                document.getElementById('trade-holdnote').textContent = d.hold
+                // Your room: the pack, and the hold when the ship is in reach.
+                var caps = '<div' + (d.pack && d.pack[0] >= d.pack[1] ? ' class="full"' : '') + '>Pack <b>' +
+                           (d.pack ? d.pack[0] + '/' + d.pack[1] : '') + '</b></div>';
+                caps += d.hold ? '<div' + (d.holdN && d.holdN[0] >= d.holdN[1] ? ' class="full"' : '') + '>Hold <b>' +
+                                 (d.holdN ? d.holdN[0] + '/' + d.holdN[1] : '') + '</b></div>'
+                               : '<div class="off">Hold out of reach</div>';
+                document.getElementById('trade-caps').innerHTML = caps;
+                var note = document.getElementById('trade-holdnote');
+                note.textContent = d.hold
                     ? 'Your ship is parked close by: trading from the pack and the hold.'
-                    : 'Your ship is not parked close by: trading from your pack only.';
+                    : 'Your ship is not parked close by: trading from your pack only. Land within a short walk to trade from the hold.';
+                note.classList.toggle('far', !d.hold);
 
                 // What you can sell them.
                 var sell = document.getElementById('trade-sell');
+                var sellScroll = sell.scrollTop;
                 sell.innerHTML = '';
                 var total = 0;
                 d.sell.forEach(function (r) {
@@ -1250,68 +1796,14 @@
                                      'mining laser, explore the caves, or park the ship close by to sell from its hold' +
                                      ' (cows included).</div>';
                 }
+                sell.scrollTop = sellScroll;
+                document.getElementById('trade-sell-note').textContent = d.hold ? 'from the pack and the hold' : 'from your pack';
                 var all = document.getElementById('trade-sell-all');
                 all.innerHTML = 'Sell everything but carbon ' + cr('+' + total);
                 all.style.display = total > 0 ? '' : 'none';
                 all.onclick = function () { M._tradeSell(-1, 0); all.blur(); };
 
-                // Equipment, by what it is for.
-                var ups = document.getElementById('trade-upgrades');
-                ups.innerHTML = '';
-                var group = '';
-                d.up.forEach(function (u) {
-                    var info = UPGRADES[u.id];
-                    if (!info) return;
-                    if (info.group !== group) {
-                        group = info.group;
-                        var h = document.createElement('div');
-                        h.className = 'trade-group';
-                        h.textContent = group;
-                        ups.appendChild(h);
-                    }
-                    var pips = '';
-                    if (u.max > 1) {
-                        pips = '<span class="trade-pips">';
-                        for (var i = 0; i < u.max; i++) pips += '<i' + (i < u.lvl ? ' class="on"' : '') + '></i>';
-                        pips += '</span>';
-                    }
-                    var maxed = u.lvl >= u.max;
-                    var sub = maxed ? info.fx(u.now, u.lvl) : (u.lvl > 0 ? info.fx(u.now, u.lvl) + ' → ' : '') + info.fx(u.next, u.lvl + 1);
-                    var row = tradeRow(info, info.name + levelName(u.id, u.lvl) + pips, sub);
-                    if (!maxed) {
-                        // The recipe: credits and each material, have / need.
-                        var rec = document.createElement('div');
-                        rec.className = 'trade-recipe';
-                        var html = '<span class="mat' + (d.credits >= u.cr ? ' ok' : '') + '">' + cr(u.cr) + '</span>';
-                        u.mats.forEach(function (m) {
-                            var it = ITEMS[m.id];
-                            if (!it) return;
-                            var tip = m.known ? '' : ' title="Found ' + whereFrom(m.id).replace(/"/g, '') + '"';
-                            html += '<span class="mat' + (m.have >= m.need ? ' ok' : '') + (m.known ? '' : ' new') + '"' + tip + '>' +
-                                    iconSvg(it) + it.name + ' <b>' + Math.min(m.have, m.need) + '/' + m.need + '</b></span>';
-                        });
-                        rec.innerHTML = html;
-                        var unknown = u.mats.filter(function (m) { return !m.known && m.have < m.need; });
-                        if (unknown.length > 2) {
-                            var hint3 = document.createElement('div');
-                            hint3.className = 'trade-hint';
-                            hint3.textContent = 'A crystal from every kind of world in this system, and gold from deep down.';
-                            rec.appendChild(hint3);
-                        } else if (unknown.length) {
-                            var hint = document.createElement('div');
-                            hint.className = 'trade-hint';
-                            hint.textContent = unknown.map(function (m) { return ITEMS[m.id].name + ': ' + whereFrom(m.id); }).join(' · ');
-                            rec.appendChild(hint);
-                        }
-                        row.querySelector('div').appendChild(rec);
-                    }
-                    var act = row.querySelector('.act');
-                    if (maxed) act.innerHTML = '<span class="trade-max">' + (u.max > 1 ? 'MAX' : 'OWNED') + '</span>';
-                    else act.appendChild(tradeButton('Build', !!u.can, function () { M._tradeBuyUpgrade(u.id); }));
-                    ups.appendChild(row);
-                });
-
-                // Goods.
+                // What they sell.
                 var goods = document.getElementById('trade-goods');
                 goods.innerHTML = '';
                 d.goods.forEach(function (g) {
@@ -1324,8 +1816,71 @@
                     if (g.stock >= 5) act.appendChild(tradeButton('Buy 5', room && d.credits >= g.p * 5, function () { M._tradeBuyGoods(g.slot, 5); }));
                     goods.appendChild(row);
                 });
+                // Flares, made to order: for the dark under the ground.
+                if (d.flares) {
+                    var F = d.flares;
+                    var frow = tradeRow({ icon: 'flare', color: '#ff5a46' },
+                        'Flares<span class="qty">' + F.n + '/' + F.max + ' carried</span>',
+                        F.make + ' for ' + F.carbon + ' carbon, ' + F.ferrite + ' ferrite and ' + cr(F.cr) +
+                        ' · light up a cave: G throws one');
+                    frow.querySelector('.act').appendChild(tradeButton('Make ' + F.make, !!F.can, function () { M._tradeMakeFlares(); }));
+                    goods.appendChild(frow);
+                }
+                document.getElementById('trade-goods-h').textContent = d.keeper + ' sells';
                 document.getElementById('trade-goods-note').textContent = 'worth more on other worlds';
 
+                // Equipment: a tile each, by what it is for, saying where it
+                // stands; the chosen one is spelled out underneath.
+                var ready = d.up.filter(function (u) { return u.can; });
+                var open = d.up.filter(function (u) { return u.lvl < u.max; });
+                var has = function (id) { return d.up.some(function (u) { return u.id === id; }); };
+                if (opening && ready.length) gearSel = ready[0].id;
+                else if (!has(gearSel)) gearSel = (open[0] || d.up[0] || { id: -1 }).id;
+                var badge = document.getElementById('trade-ready');
+                badge.textContent = ready.length ? ready.length + ' ready' : '';
+                var ups = document.getElementById('trade-upgrades');
+                ups.innerHTML = '';
+                var cols = {};
+                d.up.forEach(function (u) {
+                    var info = UPGRADES[u.id];
+                    if (!info) return;
+                    var col = cols[info.group];
+                    if (!col) {
+                        col = cols[info.group] = document.createElement('div');
+                        col.className = 'gear-col';
+                        col.innerHTML = '<div class="gear-h">' + info.group + '<span>' + (GROUP_FOR[info.group] || '') + '</span></div>';
+                        ups.appendChild(col);
+                    }
+                    var maxed = u.lvl >= u.max;
+                    var pips = '';
+                    if (u.max > 1) {
+                        pips = '<span class="trade-pips">';
+                        for (var i = 0; i < u.max; i++) pips += '<i' + (i < u.lvl ? ' class="on"' : '') + '></i>';
+                        pips += '</span>';
+                    }
+                    var status = maxed ? (u.max > 1 ? 'Fully built' : 'Built')
+                               : u.can ? 'Ready to build'
+                               : 'Needs ' + shortOf(d, u).join(', ');
+                    var tile = document.createElement('button');
+                    tile.type = 'button';
+                    tile.className = 'gear-tile' + (maxed ? ' done' : u.can ? ' ready' : '') + (u.id === gearSel ? ' sel' : '');
+                    tile.dataset.up = u.id;
+                    tile.innerHTML = iconSvg(info) + '<div><div class="nm"><span>' + info.name + levelName(u.id, u.lvl) + '</span>' + pips +
+                                     '</div><div class="st">' + status + '</div></div>';
+                    tile.addEventListener('click', function () {
+                        gearSel = u.id;
+                        var tiles = ups.querySelectorAll('.gear-tile');
+                        for (var i = 0; i < tiles.length; i++) tiles[i].classList.toggle('sel', tiles[i] === tile);
+                        renderGearDetail();
+                        tile.blur();
+                    });
+                    col.appendChild(tile);
+                });
+                renderGearDetail();
+
+                // Opening: straight to the equipment when something can be
+                // built, else to the selling. After that the tab is yours.
+                if (opening) showTab(ready.length ? 'gear' : 'goods');
                 tradeOpen = true;
                 document.getElementById('trade').classList.add('open');
             };
@@ -1360,7 +1915,7 @@
                 document.getElementById('hud-obj-text').textContent = text;
             };
             var HAZARDS = ['Breathable', 'No air', 'Cold', 'Heat', 'Toxic air'];
-            window.updateGame = function (suit, left, hazard, onFoot, packN, packMax, holdN, holdMax, cows, cowMax, warp, jet, dry) {
+            window.updateGame = function (suit, left, hazard, onFoot, packN, packMax, holdN, holdMax, cows, cowMax, warp, jet, dry, flares) {
                 document.getElementById('hud-hold').textContent = holdN + '/' + holdMax + '  ·  cows ' + cows + '/' + cowMax;
                 var foot = document.getElementById('hud-foot');
                 foot.style.display = onFoot ? 'block' : 'none';
@@ -1375,6 +1930,9 @@
                     document.getElementById('hud-pack').textContent = packN + '/' + packMax;
                     document.getElementById('hud-pack').style.color = packN >= packMax ? '#ff9a84' : '';
                     document.getElementById('hud-jet-fill').style.width = (Math.max(0, Math.min(1, jet)) * 100) + '%';
+                    var fl = document.getElementById('hud-flares');
+                    fl.textContent = flares > 0 ? String(flares) : 'none';
+                    fl.style.color = flares > 0 ? '' : '#8a96a3';
                 }
                 var wr = document.getElementById('hud-warp-row');
                 wr.style.display = warp > 1 ? 'flex' : 'none';
@@ -1606,13 +2164,18 @@
                     spacewalkToastDismissed = false;
                     toastEl.style.display = 'none';
                 }
-                if (enteredSpacewalk && !spacewalkToastDismissed) {
+                if (enteredSpacewalk && !spacewalkToastDismissed && document.body.classList.contains('touch')) {
+                    showToast('On foot', 'Arrows walk, Jump, Jet. Touch the world to fire the tool there; Tool switches laser, cutter and sword. Use trades at a stall and boards the ship (your pack goes to the hold). Breathe tops the SUIT up with carbon.');
+                } else if (enteredSpacewalk && !spacewalkToastDismissed) {
                     showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor. Q switches the hand tool (or 1, 2, 3): mining laser, terrain cutter once you own one, and the light sword, which cuts toward the cursor with each click. Draw it when something comes for you: crawlers at night, bats in the caves. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.');
                 }
                 wasSpacewalking = !!spacewalking;
                 // On foot the pointer aims the hand tool, and the HUD says which mode it is in.
                 document.getElementById('canvas').style.cursor = spacewalking ? 'crosshair' : 'default';
                 document.getElementById('hud-tool-row').style.display = spacewalking ? 'flex' : 'none';
+                // The HUD keeps to what you are doing: flying, parked, or out on foot.
+                var mode = spacewalking ? 'foot' : (state === 0 ? 'fly' : 'land');
+                if (mode !== hudMode) { hudMode = mode; document.getElementById('hud').dataset.mode = mode; }
 
                 var f = Math.max(0, Math.round(fuel));
                 var mf = Math.round(maxFuel);
@@ -1633,7 +2196,7 @@
                         msgEl.style.display = 'none';
                     } else {
                         statusEl.textContent = 'LANDED';
-                        msgEl.innerHTML = 'LANDED SAFELY<div class="sub">E exit ship &nbsp;·&nbsp; W lift off</div>';
+                        msgEl.innerHTML = 'LANDED SAFELY<div class="sub">E exit ship &nbsp;·&nbsp; hold W to lift off</div>';
                     }
                 } else if (state === 2) {
                     statusEl.textContent = 'CRASHED';
@@ -1985,6 +2548,132 @@
 
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
+
+        // ---- Touch: phones and tablets ---------------------------------------
+        // On a touch screen (or with ?touch) the page shows its own controls.
+        // Buttons hold a game key down while pressed (Module._inputKey); a
+        // finger on the world is the mouse (Module._inputPointer: aim, fire,
+        // swing); two fingers pinch the zoom (Module._inputWheel).
+        (function () {
+            var forced = /[?&]touch\b/.test(location.search);
+            var coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+            if (!forced && !coarse) return;
+            document.body.classList.add('touch');
+            var M = function () { return window.Module && Module._inputKey ? Module : null; };
+            var key = function (code, down) { var m = M(); if (m) m._inputKey(code, down ? 1 : 0); };
+            var wheel = function (d) { var m = M(); if (m) m._inputWheel(d); };
+            var pad = document.getElementById('touch');
+
+            // A press shorter than a frame or two would slip between the
+            // game's looks at the keys: every press is held at least this long.
+            var MIN_HOLD = 110;
+            function closePanels() {
+                if (document.getElementById('trade').classList.contains('open') && M() && Module._tradeClose) Module._tradeClose();
+                if (window.toggleInventory) window.toggleInventory(false);
+            }
+            function act(name) {
+                if (name === 'bag') window.toggleInventory && window.toggleInventory();
+                else if (name === 'zoomin') wheel(-260);
+                else if (name === 'zoomout') wheel(260);
+                else if (name === 'close') closePanels();
+            }
+            pad.querySelectorAll('button').forEach(function (b) {
+                var code = b.dataset.key ? +b.dataset.key : 0, since = 0, held = false;
+                function press(e) {
+                    e.preventDefault();
+                    try { b.setPointerCapture(e.pointerId); } catch (err) {}
+                    b.classList.add('down');
+                    if (code) { held = true; since = performance.now(); key(code, true); }
+                    else act(b.dataset.act);
+                }
+                function release() {
+                    b.classList.remove('down');
+                    if (!held) return;
+                    held = false;
+                    setTimeout(function () { key(code, false); }, Math.max(0, MIN_HOLD - (performance.now() - since)));
+                }
+                b.addEventListener('pointerdown', press);
+                b.addEventListener('pointerup', release);
+                b.addEventListener('pointercancel', release);
+                b.addEventListener('lostpointercapture', release);
+                b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+            });
+            // The "E  Trade with ..." hint is a button too.
+            var prompt = document.getElementById('prompt');
+            prompt.addEventListener('pointerdown', function (e) {
+                e.preventDefault(); key(69, true); setTimeout(function () { key(69, false); }, MIN_HOLD);
+            });
+
+            // A finger on the world: the first is the mouse; a second turns it
+            // into a pinch (and lets the first go, so the tool stops firing).
+            var canvas = document.getElementById('canvas');
+            var aim = null, pinch = 0;
+            function at(t) { var r = canvas.getBoundingClientRect(); return [t.clientX - r.left, t.clientY - r.top]; }
+            function find(list, id) { for (var i = 0; i < list.length; i++) if (list[i].identifier === id) return list[i]; return null; }
+            function spread(ts) { return Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY); }
+            function pointer(t, phase) { var m = M(); if (!m) return; var p = at(t); m._inputPointer(p[0], p[1], phase); }
+            canvas.addEventListener('touchstart', function (e) {
+                e.preventDefault();
+                if (e.touches.length >= 2) {
+                    if (aim !== null) { var t = find(e.touches, aim); if (t) pointer(t, 2); aim = null; }
+                    pinch = spread(e.touches);
+                } else if (aim === null) {
+                    aim = e.changedTouches[0].identifier;
+                    pointer(e.changedTouches[0], 1);
+                }
+            }, { passive: false });
+            canvas.addEventListener('touchmove', function (e) {
+                e.preventDefault();
+                if (e.touches.length >= 2 && pinch > 0) {
+                    var s = spread(e.touches);
+                    if (s > 0) wheel(-Math.log(s / pinch) / 0.0015);
+                    pinch = s;
+                    return;
+                }
+                var t = aim !== null ? find(e.changedTouches, aim) : null;
+                if (t) pointer(t, 0);
+            }, { passive: false });
+            function lift(e) {
+                e.preventDefault();
+                var t = aim !== null ? find(e.changedTouches, aim) : null;
+                if (t) { pointer(t, 2); aim = null; }
+                if (e.touches.length < 2) pinch = 0;
+            }
+            canvas.addEventListener('touchend', lift, { passive: false });
+            canvas.addEventListener('touchcancel', lift, { passive: false });
+
+            // Keep the controls in step with the game: the HUD's mode, the
+            // title, open panels, and whether there is something to use (E).
+            var hud = document.getElementById('hud'), title = document.getElementById('title');
+            var trade = document.getElementById('trade'), inv = document.getElementById('inventory'), ebtn = document.getElementById('t-e');
+            function sync() {
+                document.body.classList.toggle('playing', !title.classList.contains('open') &&
+                    document.getElementById('status').style.display === 'none');
+                pad.dataset.mode = hud.dataset.mode || 'fly';
+                var panel = trade.classList.contains('open') || inv.classList.contains('open');
+                if (panel && !pad.classList.contains('panel')) {
+                    // Let go of everything held when a panel opens over the controls.
+                    pad.querySelectorAll('button.down').forEach(function (b) { b.dispatchEvent(new PointerEvent('pointercancel')); });
+                }
+                pad.classList.toggle('panel', panel);
+                ebtn.classList.toggle('ready', prompt.classList.contains('show'));
+            }
+            setInterval(sync, 150);
+            sync();
+
+            // Playing on a phone: go full screen (hides the browser's bars)
+            // and hold landscape where the browser allows it (Android).
+            document.getElementById('title-play').addEventListener('click', function () {
+                var el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
+                if (!req || document.fullscreenElement) return;
+                try {
+                    var p = req.call(el, { navigationUI: 'hide' });
+                    if (p && p.then) p.then(function () {
+                        if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(function () {});
+                    }).catch(function () {});
+                } catch (err) {}
+            });
+        })();
         // The right mouse button is the game's (kept for interacting with things): no context menu over it.
         document.getElementById('canvas').addEventListener('contextmenu', function (e) { e.preventDefault(); });
 

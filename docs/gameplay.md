@@ -60,7 +60,8 @@ not when the suit fails, not on a jump. What you have built is the save file
 that matters. *Not:* the current restart-from-nothing on a crash.
 
 **3. Traders build upgrades from materials plus credits. There is no crafting
-menu.** One panel does selling, buying and building. Every tier's key
+menu.** One panel does selling, buying and building (two tabs: *Sell & buy*,
+and *Equipment* — a tile per upgrade under ship / suit / tool). Every tier's key
 material comes from the next place out, so credits alone never buy past the
 first tier: you cannot farm grass at home and buy your way to the end.
 *Not:* a crafting grid, recipes with intermediate parts, a workbench.
@@ -235,6 +236,19 @@ is my call, not yet confirmed.
 Tunable on the debug panel: *Night crawlers* (0 = none, 1 = as above),
 *Cave bats* (0 = none, 1 = a third of the stalactites) and *bite*.
 
+**The caves are dark** (the user, 2026-11-25: "only lit in your immediate
+surroundings and more by your light sword … some material to buy some kind
+of light source … maybe flares"). Underground you see only what your lights
+reach: the suit lamp (a small pool), the light sword when drawn (a wider
+one), what glows down there, and **flares**. Any trader makes them to order:
+3 for 2 carbon, 1 ferrite and 10 credits, up to 12 carried (saved with the
+game). **G** throws one toward the aim; it bounces to rest and burns red for
+about half a minute, lighting a wide stretch of cave; at most 8 burn at
+once. They work on the surface at night too. Calls of mine, unconfirmed:
+the recipe and numbers, G, flares not shown to other players online, and a
+one-time notice the first time you go down without light. Debug panel:
+*Caves: darkness* (0 = off) and *+6 flares*.
+
 **The posts shut at night** (the user, 2026-11-25: "make the towns closed at
 night so you can't buy stuff at the shop"). A post closes when the sun at it
 is a little below the horizon (`Outposts::CLOSE_SUN`) and opens at dawn: the
@@ -293,8 +307,8 @@ Nothing in the pack should be junk.
 
 | Resource | From | Used for | Sells for |
 |---|---|---|---|
-| Carbon | plants | **suit air in the field** (5 carbon = a quarter of the bar) | almost nothing; a lot where nothing grows |
-| Ferrite | rocks, shallow ore | the cutter, and some in most recipes | little |
+| Carbon | plants | **suit air in the field** (5 carbon = a quarter of the bar); flares | almost nothing; a lot where nothing grows |
+| Ferrite | rocks, shallow ore | the cutter, and some in most recipes; flares | little |
 | Calcite, glowcap | caves | tier I; glowcap for the scanner | modest |
 | Home crystal | home world | tier I | little at home, about 3x on other worlds |
 | Moon crystal | barren worlds | Laser II, scanner, tier II | the same pattern |

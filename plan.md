@@ -185,4 +185,5 @@ lazy fields) — biggest refactor, do it while the codebase is still small.
 Stages 3–5 are additive.
 
 Out of scope for now: parallax starfield (explicitly dropped), true cave
-lighting, fluid plumes, audio, hull heat / re-entry.
+lighting, audio, hull heat / re-entry. (Fluid plumes were on this list until
+2026-11-25: the ship's exhaust is now a fluid, see docs/architecture/core.md.)

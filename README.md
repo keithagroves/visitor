@@ -149,7 +149,7 @@ src/
 ├── entities/   the lander, the astronaut, cows
 ├── world/      solar-system generation, planets, destructible terrain, caves,
 │               ore deposits, water, trading posts
-├── graphics/   immediate-mode 2D batch renderer, shader helper
+├── graphics/   immediate-mode 2D batch renderer, shader helper, the exhaust's fluid solver
 ├── input/      browser keyboard/mouse bridge
 └── math/       Vec2/Mat3 (degree-based trig), Perlin noise
 shell.html      the page around the game: title, HUD, inventory, trading UI, multiplayer client, debug panel
@@ -168,6 +168,8 @@ visual rules are in [docs/art-style.md](docs/art-style.md).
   [shader articles](https://blog.maximeheckel.com/) on atmospheric scattering
   and volumetric light, and on Sébastien Hillaire's
   [*A Scalable and Production Ready Sky and Atmosphere Rendering Technique*](https://sebh.github.io/publications/egsr2020.pdf).
+- The ship's exhaust is Jos Stam's *Stable Fluids*, built from the walkthrough
+  [Navier-Stokes fluid simulation explained with Godot](https://myzopotamia.dev/navier-stokes-fluid-simulation-explained-with-godot).
 - The art direction takes cues from *A Short Hike*.
 
 ## License

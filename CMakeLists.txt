@@ -10,6 +10,7 @@ set(SOURCES
     src/core/trade.cpp
     src/graphics/shader.cpp
     src/graphics/renderer2d.cpp
+    src/graphics/plume.cpp
     src/world/planet.cpp
     src/world/system_gen.cpp
     src/world/nearfield.cpp

@@ -51,7 +51,9 @@ flowchart TD
   multiplicative atmospheric drag with substepping, and a velocity clamp
   (ported from `lander.js`). Owns the tractor-beam cone (`updateBeam` builds a
   terrain-clipped triangle used for both rendering and catch tests), the
-  landing/crash/lift-off transitions, and `predictTrajectory()` for the coast
+  landing/crash/lift-off transitions (lift-off as a rocket's: `ignite` burns
+  on the pad first, then `spool` builds the push from just over the ship's
+  weight), and `predictTrajectory()` for the coast
   path drawn in space. Touchdown is judged with the ship's center still a
   radius above the ground line, about 20 units above where a parked ship
   rests (base sunk onto its shadow), so `land()` doesn't teleport it there:

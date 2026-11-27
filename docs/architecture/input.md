@@ -39,6 +39,17 @@ flowchart TD
   in `pollInput`, `pollInputAstronaut`, `updateZoom`, `updateSword` and
   `updateLaser`. (`getMouseDeltaX/Y` / `isPointerLocked` are stubs kept for
   API stability.)
+- **Touch** — phones and tablets have no keyboard or mouse, so the page
+  (shell.html, `body.touch`: a coarse pointer, or `?touch` to force it) puts
+  on-screen buttons over the game that press the same keys through the
+  exported `inputKey(code, down)` (each press held at least 110 ms so a quick
+  tap still lands on a frame). A finger on the world is the mouse
+  (`inputPointer(x, y, phase)`: aim, fire, swing); two fingers pinch the zoom
+  (`inputWheel`, wheel units). Upright, a full-screen card asks you to turn
+  the phone sideways; Play goes full screen and locks landscape where the
+  browser allows (Android). The buttons follow the HUD's mode (fly / land /
+  foot) and give way to a close button while the inventory or a trade is
+  open; the HUD shrinks to a corner and drops its keyboard hints.
 
 ## Source
 

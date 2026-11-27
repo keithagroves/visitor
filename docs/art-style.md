@@ -40,7 +40,10 @@ computed sky.**
 
 3. **The sky stays soft.** Atmosphere (Rayleigh/Mie), clouds, and the
    terminator glow are smooth and computed; they are the painterly half of the
-   look. Don't posterize them.
+   look. Don't posterize them. The cloud band stops a little above the
+   ground (`gDebug.cloudGroundClear`, 200 units): the air the walking player,
+   the posts and a parked ship stand in is clear, so cloud never washes the
+   top half of a figure whose feet are on the ground.
 
 3a. **The horizon glows.** The lowest slice of air carries a pale aerial haze
    (per-world color, `PlanetLook::haze`) so the sky lightens toward the land
@@ -157,6 +160,16 @@ computed sky.**
      light, soft-capped so a room full of crystals never goes white. The
      player carries a faint lamp underground. Keep it dim: the astronaut and
      the things to mine must stay the brightest things in a cave.
+   - **Down there, it is dark.** (The user, 2026-11-25: caves "only lit in
+     your immediate surroundings and more by your light sword".) Once the
+     player is down a hole, everything below the ground line goes dark with
+     depth — near-black blue, the one place the game goes nearly black —
+     except soft pools round the lights: a small one round the player (the
+     suit lamp), a wider one in the sword's colour while it is drawn
+     (flaring on a cut), the glowing crystals and glowcaps, rock still hot
+     from the cutter, the laser where it lands, and big warm red ones round
+     flares. Each pool is brightest at its light and falls off smoothly all
+     the way out; no hard rims. From the surface, caves look as above.
    - **Buried ore is a lump in the rock with the ore set in it.** The lump
      is the rock around it a step darker (a shaded tone and a lit facet,
      never as dark as a hole, or it reads as one). Each kind has its own
@@ -203,6 +216,24 @@ computed sky.**
      burning it: no embers, no smoke down there); rings spreading on the
      surface, outlines only, flatter than the ground ellipse (40% of their
      width) because water is seen at a lower angle across it.
+   - **Exhaust is gas, and gas is soft.** The ship's flame and smoke are a
+     fluid simulation, and like the sky and the clouds they are smooth, not
+     posterized: the fire is emitted light on one continuous ramp (a pale
+     yellow core at the nozzle, through orange, to a red edge — a short,
+     tight jet, and see-through: what is behind it shows; the debug panel's
+     `flameBlue` turns it blue-white), the smoke is one pale tone in the
+     hour's light — warm where the fire is beside it — and only
+     as thick as there is smoke in the way. Most smoke is what the jet kicks
+     up near the ground: a pale grey cloud at lift-off, only a thin, white
+     trail up in the sky. No outlines, no stepped
+     bands, and no straight edges: what the ship leaves behind thins away
+     before the simulated patch ends. It is drawn behind the ship, so it
+     never hides the hull. No air, no smoke: over an airless world there is
+     only the flame. The jet meets the ground where the ship's shadow lies,
+     below the silhouette line (the ground-plane rule above): it goes on
+     down past the outline and blooms on the ground in front of it. On the
+     pad, before lift-off, the flame flares and runs out from under the ship
+     both ways along the ground.
    - **Each world's people are one kind, in the world's colors.** Flat
      vector figures like the astronaut and the cows: a lit skin tone and
      its shade, dark feet and pupils, pale eyes, and ONE accent — the

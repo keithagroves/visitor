@@ -10,6 +10,7 @@
 #include "../math/vecmath.h"
 #include "../math/noise.h"
 #include "../graphics/renderer2d.h"
+#include "../graphics/plume.h"
 #include "../world/planet.h"
 #include "../world/system_gen.h"
 #include "../world/nearfield.h"
@@ -313,6 +314,7 @@ uniform float u_falloff;    // how much coverage thins with altitude (0 = none, 
 uniform float u_overlay;    // cloud deck over the planet disk (0 near surface -> 1 in space)
 uniform float u_nightDarkness; // brightness of clouds on the deepest night side
 uniform float u_softness;      // terminator half-width in sunDot units (matches the body)
+uniform float u_groundClear;   // world units of clear air over the ground (no cloud haze)
 uniform sampler2D u_terrainTex; // terrain radius per angle (one row per planet)
 // Per-planet cloud identity (PlanetLook): coverage multiplier + lit/shaded color.
 uniform float u_cover[MAX_PLANETS];
@@ -389,6 +391,10 @@ void main() {
     float deckDensity = u_overlay * (1.0 - smoothstep(0.0, edgeFeather, signedSurfaceAlt));
     float shellBand = smoothstep(-0.06, 0.22, shellHRaw) *
                       (1.0 - smoothstep(0.82, 1.0, shellH));
+    // Clear air just over the ground: no cloud haze down where the walking
+    // player, the posts and a parked ship stand (it washed their upper half
+    // pale while their feet, below the ground line, stayed clear).
+    shellBand *= smoothstep(u_groundClear * 0.3, u_groundClear, signedSurfaceAlt);
     float altDensity = max(deckDensity, shellBand);
     vec2 local = d;
     float density = fbm(local * 0.0008 + vec2(u_time * CLOUD_DRIFT, u_time * CLOUD_DRIFT * 0.4));
@@ -895,6 +901,162 @@ void main() {
 // lit by the hour's light, no grain. The only motion is a slow swell on the
 // surface line and a few short glints drifting along the far strip.
 // ============================================================================
+// ============================================================================
+// The ship's exhaust: the fluid grid (graphics/plume.h) as a patch of the
+// world. Fire is emitted light, one smooth ramp: a white core, pale blue
+// around it, a deep blue edge (a clean, hot burn; the ship's engine glow is
+// the same blue). Only the densest of the hot gas shows as flame, so the
+// flame is a short, tight jet inside the wider push of the exhaust. Smoke is
+// one tone in the hour's light, as thick as there is smoke in the way. Both
+// soft, like the sky and the clouds (docs/art-style.md: gradients belong to
+// the air).
+// ============================================================================
+static const char* kPlumeFrag = R"(#version 300 es
+precision highp float;
+uniform vec2 u_resolution;
+uniform vec2 u_viewFocus;
+uniform vec2 u_screenCenter;
+uniform float u_viewScale;
+uniform float u_viewRotation;
+uniform sampler2D u_plume;      // r = fire, g = smoke
+uniform vec2 u_origin;          // the grid's corner (world)
+uniform float u_span;           // how far across it is (world units)
+uniform float u_cells;          // ...and in cells
+uniform vec3 u_smoke;           // the smoke's tone in this hour's light
+uniform vec3 u_glow;            // what the fire adds to smoke beside it
+uniform float u_blue;           // the flame's colour: 0 red-orange .. 1 blue (gDebug.flameBlue)
+out vec4 fragColor;
+
+// A smooth (bicubic B-spline) read of the grid from four bilinear taps, so a
+// close zoom shows soft billows and not the cells.
+vec4 cubic(float v) {
+  vec4 n = vec4(1.0, 2.0, 3.0, 4.0) - v;
+  vec4 s = n * n * n;
+  float x = s.x;
+  float y = s.y - 4.0 * s.x;
+  float z = s.z - 4.0 * s.y + 6.0 * s.x;
+  float w = 6.0 - x - y - z;
+  return vec4(x, y, z, w) * (1.0 / 6.0);
+}
+vec2 gas(vec2 uv) {
+  vec2 tc = uv * u_cells - 0.5;
+  vec2 f = fract(tc);
+  tc -= f;
+  vec4 xc = cubic(f.x), yc = cubic(f.y);
+  vec4 c = tc.xxyy + vec2(-0.5, 1.5).xyxy;
+  vec4 s = vec4(xc.xz + xc.yw, yc.xz + yc.yw);
+  vec4 off = (c + vec4(xc.yw, yc.yw) / s) / u_cells;
+  vec2 s0 = texture(u_plume, off.xz).rg, s1 = texture(u_plume, off.yz).rg;
+  vec2 s2 = texture(u_plume, off.xw).rg, s3 = texture(u_plume, off.yw).rg;
+  float sx = s.x / (s.x + s.y), sy = s.z / (s.z + s.w);
+  return mix(mix(s3, s2, sx), mix(s1, s0, sx), sy);
+}
+
+void main() {
+  vec2 pixel = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+  vec2 centered = pixel - u_screenCenter;
+  float c = cos(-u_viewRotation), s = sin(-u_viewRotation);
+  vec2 unrot = vec2(c * centered.x - s * centered.y, s * centered.x + c * centered.y);
+  vec2 world = unrot / u_viewScale + u_viewFocus;
+  vec2 uv = (world - u_origin) / u_span;
+  if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) discard;
+  vec2 g = max(gas(uv), 0.0);
+  float fire = g.r, smoke = g.g;
+
+  float fa = smoothstep(0.04, 0.24, fire);
+  // Red-orange: a red edge, orange, a pale yellow core. Blue: a deep blue
+  // edge, pale blue, a near-white core. The core only where the gas is
+  // densest, so the flame is never a white blob.
+  float t1 = smoothstep(0.08, 0.26, fire), t2 = smoothstep(0.30, 0.95, fire);
+  vec3 red = mix(mix(vec3(0.90, 0.22, 0.06), vec3(1.0, 0.55, 0.14), t1), vec3(1.0, 0.86, 0.58), t2);
+  vec3 blue = mix(mix(vec3(0.05, 0.20, 0.95), vec3(0.25, 0.60, 1.0), t1), vec3(0.78, 0.90, 1.0), t2);
+  vec3 fc = mix(red, blue, u_blue);
+
+  float sa = (1.0 - exp(-smoke * 4.2)) * 0.84;
+  vec3 sc = u_smoke + u_glow * smoothstep(0.0, 0.22, fire);
+
+  // Fire over smoke. The flame is see-through: it covers under a third of
+  // what is behind it and adds its light on top, the way a clean blue
+  // flame does (the ground, the hull's shadow and the smoke show through).
+  float cover = fa * 0.30;
+  vec3 rgb = fc * fa * 0.62 + sc * sa * (1.0 - cover);
+  float a = cover + sa * (1.0 - cover);
+  // The grid has an edge and the smoke does not: what is left behind thins
+  // away before it gets there, never cut off along a straight line.
+  float rim = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));
+  float keep = smoothstep(0.0, 0.16, rim);
+  rgb *= keep;
+  a *= keep;
+  if (a < 0.004) discard;
+  fragColor = vec4(rgb, a);      // premultiplied
+}
+)";
+
+// The dark under the ground (see "Dark caves, and flares", with drawCaveDark).
+static const char* kCaveDarkFrag = R"(#version 300 es
+precision highp float;
+uniform vec2 u_resolution;
+uniform vec2 u_viewFocus;
+uniform vec2 u_screenCenter;
+uniform float u_viewScale;
+uniform float u_viewRotation;
+uniform vec2 u_center;          // the world's center
+uniform float u_angle0;         // the view's middle angle (degrees)...
+uniform float u_span;           // ...and the half-span the samples cover
+const int SAMPLES = 64;
+uniform float u_surf[SAMPLES];  // the ground line's radius across that span
+uniform float u_dark;           // 0 (on the surface) .. 1 (down a hole)
+const int MAX_LIGHTS = 24;
+uniform vec4 u_light[MAX_LIGHTS];   // xy, radius, strength
+uniform vec3 u_lightCol[MAX_LIGHTS];
+uniform int u_lightCount;
+out vec4 fragColor;
+
+void main() {
+  vec2 pixel = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+  vec2 centered = pixel - u_screenCenter;
+  float c = cos(-u_viewRotation), s = sin(-u_viewRotation);
+  vec2 unrot = vec2(c * centered.x - s * centered.y, s * centered.x + c * centered.y);
+  vec2 world = unrot / u_viewScale + u_viewFocus;
+
+  vec2 d = world - u_center;
+  float r = length(d);
+  float ang = degrees(atan(d.y, d.x));
+  float rel = mod(ang - u_angle0 + 540.0, 360.0) - 180.0;
+  float x = clamp((rel + u_span) / (2.0 * u_span), 0.0, 1.0) * float(SAMPLES - 1);
+  int i0 = int(floor(x));
+  int i1 = min(i0 + 1, SAMPLES - 1);
+  float surf = mix(u_surf[i0], u_surf[i1], fract(x));
+  float depth = surf - r;
+  // The first stretch under the ground line is the ground in front of the
+  // walker and the mouth of the hole: it darkens from there down.
+  float dark = u_dark * smoothstep(14.0, 120.0, depth);
+  if (dark <= 0.002) discard;
+
+  // How much light gets here, and what colour it is.
+  float lit = 0.0;
+  vec3 tint = vec3(0.0);
+  for (int k = 0; k < MAX_LIGHTS; k++) {
+    if (k >= u_lightCount) break;
+    vec2 ld = world - u_light[k].xy;
+    float rr = u_light[k].z;
+    // Brightest at the light, falling off smoothly all the way out.
+    float t = 1.0 - clamp(length(ld) / rr, 0.0, 1.0);
+    float f = u_light[k].w * t * t * (3.0 - 2.0 * t);
+    lit += f;
+    tint += u_lightCol[k] * f;
+  }
+  lit = clamp(lit, 0.0, 1.0);
+  tint /= max(1.0, dot(tint, vec3(0.34)) * 2.5);
+
+  // Near-black blue where nothing reaches; a touch of each light's colour
+  // where it does (the light itself is the world as drawn, let through).
+  float a = dark * (1.0 - lit) * 0.97;
+  vec3 rgb = vec3(0.010, 0.012, 0.022) * a + tint * dark * 0.16;
+  fragColor = vec4(rgb, a);
+}
+)";
+
 static const char* kWaterFrag = R"(#version 300 es
 precision highp float;
 #define MAX_PLANETS 10
@@ -1343,6 +1505,29 @@ struct App {
     GLuint waterProgram = 0;        // water: behind the crust, and in front of the walker
     GLuint wetTex = 0;              // R8 mirror of that window's flooded samples
 
+    // The ship's exhaust, as a fluid (updatePlume / drawPlumePass).
+    Plume plume;
+    GLuint plumeProgram = 0;
+    GLuint plumeTex = 0;            // RG16F: fire and smoke in each of its cells
+    int plumePlanet = -1;           // the world its grid is tied to
+    Vec2 plumeNozzle;               // where the nozzle was last frame (planet-relative)...
+    bool plumeNozzleSet = false;    // ...if the engine was burning then
+    bool plumeGround = false;       // some of its cells are marked as ground
+    int plumeMaskAge = 0;           // frames since the ground under it was last looked at
+
+    // Dark caves and flares (updateFlares / drawCaveDark). `flares`: how
+    // many you carry (traders make them; G throws one). `thrown`: the ones
+    // burning, planet-relative, on the world they were thrown on.
+    static constexpr int FLARES_MAX = 12;
+    int flares = 0;
+    struct Flare { int planet; Vec2 local, vel; float life; bool resting = false; float seed; };
+    std::vector<Flare> thrown;
+    bool prevFlareKey = false;
+    bool darkHinted = false;        // said once a session: it's dark, flares help
+    GLuint caveDarkProgram = 0;
+    float jetGlow = 0.0f;   // the jetpack's light underground, eased 0..1
+    double plumeMs[3] = {0, 0, 0};  // dev: ms spent stepping it, ms drawing it, frames it was live (debugDump)
+
     // Previous-frame key states for edge-triggered actions (lift off / restart).
     bool prevThrustKey = false;
     bool prevRestartKey = false;
@@ -1401,6 +1586,7 @@ static constexpr int KEY_T = 84;   // in open space: time warp
 static constexpr int KEY_C = 67;   // on foot: scanner pulse
 static constexpr int KEY_1 = 49;   // on foot: 1 laser, 2 cutter, 3 light sword
 static constexpr int KEY_J = 74;   // with a star drive, clear of every world: jump
+static constexpr int KEY_G = 71;   // on foot: throw a flare
 static constexpr float LANDING_MAX_SLOPE = 40.0f; // degrees off the local tangent
 static constexpr int NUM_COWS = 5;
 
@@ -1574,6 +1760,8 @@ static void newGame() {
     app.everHeld = 0;
     app.lastPostPlanet = app.lastPostIdx = -1;
     app.jumps = 0;
+    app.flares = 0;
+    app.thrown.clear();
     for (int i = 0; i < (int)app.planets.size(); i++) {
         Planet& p = app.planets[i];
         p.discovered = p.isSun || i == app.homeIdx;
@@ -1649,6 +1837,8 @@ static void initShaderPasses() {
     app.cloudProgram = Shader::createProgram(kFsVert, kCloudFrag);
     app.bodyProgram = Shader::createProgram(kFsVert, kBodyFrag);
     app.waterProgram = Shader::createProgram(kFsVert, kWaterFrag);
+    app.plumeProgram = Shader::createProgram(kFsVert, kPlumeFrag);
+    app.caveDarkProgram = Shader::createProgram(kFsVert, kCaveDarkFrag);
 
     float quad[] = { -1, -1,  1, -1,  -1, 1,  -1, 1,  1, -1,  1, 1 };
     glGenVertexArrays(1, &app.fsVao);
@@ -1699,6 +1889,16 @@ static void initShaderPasses() {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, CarveMap::N, CarveMap::N, 0, GL_RED, GL_UNSIGNED_BYTE, dry.data());
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // The exhaust's fluid grid: fire and smoke per cell (half floats, which
+    // filter smoothly everywhere; its border cells are always empty).
+    glGenTextures(1, &app.plumeTex);
+    glBindTexture(GL_TEXTURE_2D, app.plumeTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, Plume::S, Plume::S, 0, GL_RG, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -2189,6 +2389,14 @@ static bool wouldTrade() {
     return shipDist >= app.lander.radius * 4.0f || postDist <= shipDist;
 }
 
+// Flares, made to order at any post: FLARE_MAKE of them from FLARE_CARBON
+// carbon, FLARE_FERRITE ferrite and FLARE_CREDITS credits. Returns how many
+// you got (0 if you cannot pay or carry no more).
+static constexpr int FLARE_MAKE = 3, FLARE_CARBON = 2, FLARE_FERRITE = 1, FLARE_CREDITS = 10;
+static bool canMakeFlares(bool hold) {
+    return app.flares < App::FLARES_MAX && app.credits >= FLARE_CREDITS &&
+           haveItem(Trade::CARBON, hold) >= FLARE_CARBON && haveItem(Trade::FERRITE, hold) >= FLARE_FERRITE;
+}
 // Send the open panel its contents: who you are dealing with, whether the
 // hold is in reach, what they pay for each thing you have, the equipment
 // they can build (recipes with have / need), the goods they sell, and where
@@ -2243,7 +2451,25 @@ static void pushTrade() {
              (bp ? (bp->discovered ? bp->name : std::string("an uncharted world")) : std::string("")) +
              "\",\"kind\":\"" + (bp ? bp->kind : std::string("")) + "\"}";
     }
-    j += "],\"room\":" + num(packRoom() + (hold ? holdRoom() : 0)) + "}";
+    j += "],\"room\":" + num(packRoom() + (hold ? holdRoom() : 0));
+    j += ",\"flares\":{\"n\":" + num(app.flares) + ",\"max\":" + num(App::FLARES_MAX) + ",\"make\":" +
+         num(FLARE_MAKE) + ",\"carbon\":" + num(FLARE_CARBON) + ",\"ferrite\":" + num(FLARE_FERRITE) +
+         ",\"cr\":" + num(FLARE_CREDITS) + ",\"can\":" + num(canMakeFlares(hold) ? 1 : 0) + "}";
+    // How full the pack and the hold are, and what the trader looks like
+    // (Planet::Folk), for the panel's portrait.
+    j += ",\"pack\":[" + num(itemTotal(app.pack)) + "," + num(packSize()) + "],\"holdN\":[" +
+         num(itemTotal(app.hold)) + "," + num(holdSize()) + "]";
+    {
+        const Planet::Folk& k = p.folk;
+        auto c255 = [](float v) { return std::to_string((int)lroundf(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+        char shape[96];
+        snprintf(shape, sizeof(shape), "\"girth\":%.3f,\"eyes\":%d,\"head\":%d,\"ant\":%d,\"helmet\":%d",
+                 k.girth, k.eyes, k.head, k.antennae, k.helmet ? 1 : 0);
+        j += ",\"folk\":{\"body\":[" + c255(k.body[0]) + "," + c255(k.body[1]) + "," + c255(k.body[2]) +
+             "],\"accent\":[" + c255(k.accent[0]) + "," + c255(k.accent[1]) + "," + c255(k.accent[2]) + "]," +
+             shape + "}";
+    }
+    j += "}";
     EM_ASM({ if (window.showTrade) window.showTrade(UTF8ToString($0)); }, j.c_str());
 }
 
@@ -2362,6 +2588,20 @@ extern "C" EMSCRIPTEN_KEEPALIVE int tradeBuyGoods(int slot, int count) {
     return count;
 }
 
+extern "C" EMSCRIPTEN_KEEPALIVE int tradeMakeFlares() {
+    if (app.tradePost < 0) return 0;
+    bool hold = holdAtPost(app.tradePost);
+    if (!canMakeFlares(hold)) return 0;
+    takeItem(Trade::CARBON, FLARE_CARBON, hold);
+    takeItem(Trade::FERRITE, FLARE_FERRITE, hold);
+    addCredits(-FLARE_CREDITS);
+    int got = std::min(FLARE_MAKE, App::FLARES_MAX - app.flares);
+    app.flares += got;
+    app.inventoryDirty = true;
+    dealDone(6);
+    return got;
+}
+
 extern "C" EMSCRIPTEN_KEEPALIVE void tradeClose() { closeTrade(); }
 
 // The inventory panel's buttons: move `count` (<= 0: all) of an item from
@@ -2450,6 +2690,7 @@ static std::string saveText(unsigned int seed, bool arriving) {
                 v.push_back(o.met ? 1 : 0);
             }
         }
+        v.push_back(app.flares);            // (after the worlds: older saves just end there)
     }
     std::string s = "[";
     for (size_t i = 0; i < v.size(); i++) s += (i ? "," : "") + std::to_string(v[i]);
@@ -2543,6 +2784,7 @@ static void applySave() {
                 }
             }
         }
+        app.flares = std::clamp((int)at(i++), 0, (int)App::FLARES_MAX);
     }
     app.cargo = std::clamp(app.cargo, 0, maxCargo());
     app.inventoryDirty = true;
@@ -3382,6 +3624,17 @@ void update(float timeScale) {
     }
 }
 
+// The other ships at the world you are at with their engines lit: where each
+// is (planet-relative), which way it points, how hard it burns, and whether
+// it is still on the pad (burning before it lifts off).
+void eachBurning(const std::function<void(Vec2 ship, float rotation, float level, bool onPad)>& fn) {
+    for (const Peer& q : peers) {
+        if (q.planet != app.dominantIdx || !q.placed) continue;
+        if (q.d[0] > 1.5f || q.d[6] <= 0.01f) continue;      // a wreck, or not burning
+        fn(q.ship, q.d[5], q.d[6], q.d[0] > 0.5f);
+    }
+}
+
 // The others at the world you are at, inside an active world-space batch.
 void draw(Renderer2D& r) {
     const Planet& p = dominantPlanet();
@@ -3395,6 +3648,8 @@ void draw(Renderer2D& r) {
         l.active = q.d[0] < 0.5f;
         l.crashed = q.d[0] > 1.5f;
         l.fuel = 1.0f;
+        // Landed with the engine lit: burning on the pad before lift-off.
+        l.ignition = (!l.active && !l.crashed && q.d[6] > 0.01f) ? 30.0f : 0.0f;
         l.bob = Vec2(0, 0);
         l.draw(r);
         if (q.d[7] < 0.5f) continue;
@@ -3471,6 +3726,434 @@ void applyPending() {
 }
 
 }  // namespace Net
+
+// ============================================================================
+// The ship's exhaust. The engine does not draw a flame: it puts hot gas into a
+// small fluid simulation around the ship (Plume, graphics/plume.h) and the
+// gas does the rest — a jet that flickers and curls, blooms against the
+// ground on the way down and spreads along it, and leaves smoke hanging in
+// the air behind a climb.
+//
+// The grid belongs to the world the ship is at and is kept around the ship.
+// In air the gas stays where the air is (with the ground) while the ship
+// flies on; the thinner the air, the more it simply goes along with the ship
+// (there is nothing out there to leave it behind in), until in a vacuum the
+// grid rides with the ship and all there is is the flame. Looks only: none
+// of it pushes on anything.
+// ============================================================================
+static constexpr float PLUME_JET = 10.5f;        // how fast the gas leaves the nozzle, world units a frame
+static constexpr float PLUME_NOZZLE = 19.0f;     // the nozzle, world units behind the ship's center
+static constexpr float PLUME_WIDTH = 3.4f;       // the jet's radius at the nozzle
+
+// The ground is seen from a little above, so it reaches toward the viewer in
+// front of its own outline: what stands on it touches it some way BELOW the
+// silhouette line, where its shadow lies (drawBlobShadow). GROUND_DROP is
+// that distance as a share of the shadow's size; SHIP_SHADOW is the ship's
+// shadow size in ship radii. The exhaust meets the ground at the same place.
+static constexpr float GROUND_DROP = 0.64f;
+static constexpr float SHIP_SHADOW = 1.5f;
+
+static void updatePlume(float timeScale) {
+    Plume& pl = app.plume;
+    const Lander& l = app.lander;
+    if (gDebug.plume <= 0.0f) {
+        if (pl.live()) pl.clear();
+        app.plumeNozzleSet = false;
+        return;
+    }
+    if (app.plumePlanet != app.dominantIdx) {
+        // Another world: another frame of reference. Start clean.
+        pl.clear();
+        app.plumePlanet = app.dominantIdx;
+        app.plumeNozzleSet = false;
+        app.plumeGround = false;
+    }
+    bool burning = l.burning();
+    bool others = false;
+    if (app.online) Net::eachBurning([&](Vec2, float, float, bool) { others = true; });
+    if (!burning && !others && !pl.live()) { app.plumeNozzleSet = false; return; }
+
+    const Planet& p = dominantPlanet();
+    Vec2 ship = l.pos - p.center;
+    Vec2 shipVel = l.vel - p.orbitVel;               // against the world, and its air
+    // How much the air holds the gas where it is: all of it low down, none
+    // of it from the thin top of the sky outward.
+    float air = smoothstepf(0.0f, 0.22f, p.atmosphericDensity(l.pos.x, l.pos.y));
+    Vec2 drift = shipVel * ((1.0f - air) * timeScale);
+    bool moved = pl.follow(ship, drift);
+
+    // What is ground under the grid: the rock (dug holes are open) and the
+    // sea — both taken as lying where the ship's shadow does, a little below
+    // their outline, so the jet goes on down past the silhouette line and
+    // blooms on the ground in front of it, on its own shadow. The cells that
+    // have come into the grid are looked at as it moves, and all of them
+    // again now and then, in case of digging.
+    app.plumeMaskAge++;
+    bool nearGround = ship.length() - Plume::span() * 0.75f < p.maxSurfaceRadius();
+    if (!nearGround) {
+        if (app.plumeGround) { pl.openSky(); app.plumeGround = false; }
+    } else {
+        bool all = !app.plumeGround || app.plumeMaskAge > 45;
+        if (moved || all) {
+            const float drop = l.radius * SHIP_SHADOW * GROUND_DROP;
+            float seaR = p.sea ? p.seaRadius() - drop : 0.0f;
+            pl.markGround([&](Vec2 local) {
+                float r = local.length();
+                if (seaR > 0.0f && r < seaR) return true;
+                if (r < 1.0f) return true;
+                // (In the ground if the point `drop` above it is in the rock.)
+                float k = (r + drop) / r;
+                return p.rockAt(Vec2(p.center.x + local.x * k, p.center.y + local.y * k)) > 0.0f;
+            }, all);
+            if (all) app.plumeMaskAge = 0;
+        }
+        app.plumeGround = true;
+    }
+
+    // The engines: gas along the nozzle's path this frame, leaving backward.
+    // A real burn is never quite steady: the jet wavers a little from side
+    // to side and in strength, which is what the flame's flicker and the
+    // smoke's curls grow out of.
+    // `boost` (Lander::flameBoost): over 1 the engine is flaring, on the pad
+    // and as the ship first climbs off it — more gas, wider, harder.
+    auto burn = [&](Vec2 at, Vec2 from, Vec2 vel, float rotation, float level, float boost) {
+        Vec2 back(-sind(rotation), cosd(rotation));
+        Vec2 side(-back.y, back.x);
+        float speed = PLUME_JET * (0.55f + 0.45f * level) * (0.92f + 0.16f * fxRand()) * (0.75f + 0.25f * boost);
+        Vec2 jet = vel * air + back * speed + side * ((fxRand() - 0.5f) * 0.30f * speed);
+        float amount = 1.4f * level * gDebug.plume * (0.85f + 0.30f * fxRand()) * boost * boost;
+        // (On the pad the nozzle sits at, or just under, where the ground is:
+        // the gas goes in over it.)
+        Vec2 up = at.normalize();
+        Vec2 at0 = at;
+        at = pl.openAbove(at, up, Plume::CELL * 4.0f);
+        from = pl.openAbove(from, up, Plume::CELL * 4.0f);
+        pl.inject(from, at, jet, PLUME_WIDTH * (0.6f + 0.4f * boost), amount, 0.0f, 0.9f);
+        // A jet that meets the ground close below splashes off it both ways
+        // along it — the harder the closer, the flame running out from under
+        // the ship over the ground where its shadow lies. (A coarse grid on
+        // its own turns too little of the jet aside before the fire is spent.)
+        const float SPLASH = 70.0f;
+        float hit = pl.groundAlong(at0, back, SPLASH);
+        if (hit >= 0.0f && back.dot(up) < -0.35f) {
+            float near = 1.0f - hit / SPLASH;
+            Vec2 where = pl.openAbove(at0 + back * hit, up, Plume::CELL * 4.0f);
+            Vec2 along(-up.y, up.x);
+            // Aimed down the ground more than across it: the side the jet
+            // leans to gets more of it.
+            float lean = back.dot(along);
+            for (int k = -1; k <= 1; k += 2) {
+                float share = 0.5f + 0.45f * lean * k;
+                // (Each side starts out to the side of the jet itself, so the
+                // two and the jet do not undo one another's push.)
+                Vec2 v = vel * air + (along * (float)k * 1.2f + up * 0.10f) * speed;
+                Vec2 a = where + along * ((float)k * PLUME_WIDTH * 1.6f);
+                pl.inject(a, a + along * ((float)k * Plume::CELL * 2.0f), v, PLUME_WIDTH * 0.8f,
+                          amount * near * share * 0.9f, 0.0f, 0.9f * near);
+            }
+        }
+    };
+    if (burning) {
+        Vec2 nozzle = ship - l.noseDir() * PLUME_NOZZLE;
+        // (Where it was a frame ago, in the gas's own frame: the medium has
+        // carried that point along by `drift` since.)
+        Vec2 from = app.plumeNozzleSet ? app.plumeNozzle + drift : nozzle;
+        if (dist(from.x, from.y, nozzle.x, nozzle.y) > Plume::span() * 0.3f) from = nozzle;
+        burn(nozzle, from, shipVel, l.rotation, l.thrustLevel > 0.3f ? l.thrustLevel : 0.3f, l.flameBoost());
+        app.plumeNozzle = nozzle;
+        app.plumeNozzleSet = true;
+    } else {
+        app.plumeNozzleSet = false;
+    }
+    if (others) {
+        Net::eachBurning([&](Vec2 at, float rotation, float level, bool onPad) {
+            Vec2 nozzle = at + Vec2(-sind(rotation), cosd(rotation)) * PLUME_NOZZLE;
+            burn(nozzle, nozzle, Vec2(0, 0), rotation, level, onPad ? 2.0f : 1.0f);
+        });
+    }
+
+    // While the engine flares (the pad burn) its fire lasts longer: the big
+    // flames.
+    pl.tune.fireLife = 3.4f * (burning ? 1.0f + 1.5f * (l.flameBoost() - 1.0f) : 1.0f);
+    // Smoke is mostly what the jet kicks up off the ground: a big cloud at
+    // lift-off and landing, only a thin trail once the ship is up in the
+    // sky (and it clears sooner there).
+    {
+        const Plume::Tuning base;
+        float low = 1.0f - smoothstepf(80.0f, 500.0f, l.altitude);
+        pl.tune.smokeFromFire = base.smokeFromFire * (0.25f + 0.75f * low);
+        pl.tune.smokeLife = base.smokeLife * (0.55f + 0.45f * low);
+    }
+    pl.step(timeScale, ship.normalize(), air);
+}
+
+// Draw the exhaust: one pass over the patch of the world its grid covers.
+// After the world, before the ships (the hull hides the nozzle end of it).
+static void drawPlumePass() {
+    Plume& pl = app.plume;
+    if (!pl.live() || gDebug.plume <= 0.0f || app.plumePlanet < 0 || app.plumePlanet >= (int)app.planets.size()) return;
+    const Planet& p = app.planets[app.plumePlanet];
+    GLuint pr = app.plumeProgram;
+    glUseProgram(pr);
+    setPassViewUniforms(pr);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, app.plumeTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Plume::S, Plume::S, GL_RG, GL_FLOAT, pl.texels().data());
+    glUniform1i(glGetUniformLocation(pr, "u_plume"), 0);
+    Vec2 o = pl.origin();
+    glUniform2f(glGetUniformLocation(pr, "u_origin"), p.center.x + o.x, p.center.y + o.y);
+    glUniform1f(glGetUniformLocation(pr, "u_span"), Plume::span());
+    glUniform1f(glGetUniformLocation(pr, "u_cells"), (float)Plume::S);
+    // Smoke is pale and takes the hour's light where the ship is; the fire
+    // lights what is beside it, in its own colour.
+    Vec2 up = (app.lander.pos - p.center).normalize();
+    Vec2 toSun = (sunWorldPos() - p.center).normalize();
+    float light[3];
+    groundLight(lightParams(p), up.dot(toSun), light);
+    // Near the ground it is pale grey (dust in it); up in the sky, clean
+    // white vapour, with less of the fire's colour on it.
+    float high = smoothstepf(80.0f, 500.0f, app.lander.altitude);
+    const float low[3] = {0.84f, 0.83f, 0.82f}, sky[3] = {0.98f, 0.98f, 0.99f};
+    float smoke[3];
+    for (int k = 0; k < 3; k++) smoke[k] = std::min(1.0f, (low[k] + (sky[k] - low[k]) * high) * light[k]);
+    glUniform3f(glGetUniformLocation(pr, "u_smoke"), smoke[0], smoke[1], smoke[2]);
+    {
+        float b = std::clamp(gDebug.flameBlue, 0.0f, 1.0f);
+        float g = 1.0f - 0.6f * high;
+        glUniform3f(glGetUniformLocation(pr, "u_glow"), (0.50f + (0.10f - 0.50f) * b) * g,
+                    (0.24f + (0.22f - 0.24f) * b) * g, (0.07f + (0.44f - 0.07f) * b) * g);
+        glUniform1f(glGetUniformLocation(pr, "u_blue"), b);
+    }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   // premultiplied "over"
+    // Only the part of the screen the grid covers is worth a look.
+    Mat3 vm = app.view.matrix(app.width, app.height);
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int k = 0; k < 4; k++) {
+        Vec2 corner(p.center.x + o.x + ((k & 1) ? Plume::span() : 0.0f), p.center.y + o.y + ((k & 2) ? Plume::span() : 0.0f));
+        Vec2 clip = vm.transform(corner);
+        float sx = (clip.x * 0.5f + 0.5f) * app.width, sy = (clip.y * 0.5f + 0.5f) * app.height;
+        x0 = std::min(x0, sx); x1 = std::max(x1, sx);
+        y0 = std::min(y0, sy); y1 = std::max(y1, sy);
+    }
+    int ix0 = std::max(0, (int)std::floor(x0)), iy0 = std::max(0, (int)std::floor(y0));
+    int ix1 = std::min(app.width, (int)std::ceil(x1)), iy1 = std::min(app.height, (int)std::ceil(y1));
+    if (ix1 <= ix0 || iy1 <= iy0) return;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(ix0, iy0, ix1 - ix0, iy1 - iy0);
+    glBindVertexArray(app.fsVao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDisable(GL_SCISSOR_TEST);
+}
+
+// ============================================================================
+// Dark caves, and flares.
+//
+// Under the ground there is no light but what you bring. Once the player is
+// down a hole, everything below the ground line goes dark — the deeper, the
+// darker, until it is all but black — except what a light reaches: the
+// suit's own lamp (a small pool round the player), the light sword (a wider,
+// coloured one while it is drawn, flaring on a swing), the glowing things
+// that grow in caves, rock still hot from the cutter, the mining laser where
+// it lands, and flares. A flare is thrown (G, toward the aim), falls,
+// bounces once or twice off the rock and lies there burning red for half a
+// minute. Traders make them from carbon and ferrite (tradeMakeFlares).
+//
+// One full-screen pass (kCaveDarkFrag) after everything in the world is
+// drawn, before the near framing bands: it lays the dark over, with holes
+// where the lights are. "Under the ground" is measured from the terrain line
+// as it was before anything was dug (Planet::surfaceRadius), sampled across
+// the view, so a dug shaft is as dark as a natural cave. Local to each
+// player: other players' flares are not seen (flares are not sent online).
+// ============================================================================
+
+static constexpr float FLARE_LIFE = 32.0f;       // seconds a flare burns
+static constexpr float FLARE_FADE = 4.0f;        // ...the last of them dying down
+static constexpr float FLARE_LIGHT = 380.0f;     // how far its light reaches (world units)
+static constexpr float FLARE_THROW = 7.0f;       // world units a frame, as it leaves the hand
+static constexpr int FLARES_BURNING = 8;         // at once; the oldest goes out first
+
+static void throwFlare() {
+    if (!app.spacewalking) return;
+    if (app.flares <= 0) { notice("No flares: a trader makes them (2 carbon, 1 ferrite)"); return; }
+    const Planet& p = dominantPlanet();
+    const Astronaut& a = app.astronaut;
+    Vec2 up = (a.pos - p.center).normalize();
+    Vec2 from = a.pos + up * 10.0f;
+    Vec2 aim = a.aimWorld - from;
+    if (aim.length() < 1.0f) aim = Vec2(-up.y, up.x) * (float)a.facing + up;
+    aim = aim.normalize();
+    // A lob: aimed a little above where you point.
+    Vec2 dir = (aim + up * 0.25f).normalize();
+    App::Flare f;
+    f.planet = app.dominantIdx;
+    f.local = from - p.center;
+    f.vel = dir * FLARE_THROW;
+    f.life = FLARE_LIFE;
+    f.seed = fxRand() * 100.0f;
+    app.thrown.push_back(f);
+    if ((int)app.thrown.size() > FLARES_BURNING) app.thrown.erase(app.thrown.begin());
+    app.flares--;
+}
+
+static void updateFlares(float dt, float timeScale) {
+    // Down a hole without a flare, the first time: say how to get some.
+    if (app.spacewalking && app.inHole > 0.9f && !app.darkHinted && gDebug.caveDark > 0.0f) {
+        app.darkHinted = true;
+        notice(app.flares > 0 ? "It is dark down here: G throws a flare"
+                              : "It is dark down here. Traders make flares (G throws one)");
+    }
+    for (size_t i = 0; i < app.thrown.size();) {
+        App::Flare& f = app.thrown[i];
+        f.life -= dt;
+        if (f.life <= 0.0f || f.planet < 0 || f.planet >= (int)app.planets.size()) {
+            app.thrown.erase(app.thrown.begin() + i);
+            continue;
+        }
+        const Planet& p = app.planets[f.planet];
+        if (!f.resting) {
+            // Falls under the world's gravity, and bounces off the rock,
+            // losing most of its speed each time, until it lies still.
+            float r = f.local.length();
+            Vec2 down = f.local * (-1.0f / std::max(r, 1.0f));
+            f.vel = f.vel * (1.0f - 0.004f * timeScale) + down * (p.gravity / std::max(r * r, 1.0f) * timeScale);
+            int steps = std::max(1, (int)std::ceil(f.vel.length() * timeScale / 3.0f));
+            for (int k = 0; k < steps; k++) {
+                Vec2 next = f.local + f.vel * (timeScale / steps);
+                if (p.rockAt(p.center + next) > 0.0f) {
+                    Vec2 n = p.normalAt(p.center + f.local);
+                    float into = f.vel.dot(n);
+                    if (into < 0.0f) f.vel = (f.vel - n * (1.6f * into)) * 0.45f;
+                    if (f.vel.length() < 0.6f) { f.resting = true; f.vel = Vec2(0, 0); }
+                    break;
+                }
+                f.local = next;
+            }
+        }
+        // Sparks and a little smoke off the burning end (only where you are).
+        if (f.planet == app.dominantIdx && f.life > FLARE_FADE) {
+            static const float sparkCol[3] = {1.0f, 0.45f, 0.30f};
+            if (fxRand() < 0.35f * timeScale) {
+                Vec2 up = f.local.normalize();
+                float ang = fxRand() * 360.0f, sp = 0.6f + fxRand() * 1.6f;
+                spawnParticle(p.center + f.local + up * 2.0f, up * 0.8f + Vec2(cosd(ang), sind(ang)) * sp,
+                              0.3f + fxRand() * 0.4f, 1.0f + fxRand() * 1.0f, sparkCol, 2);
+            }
+        }
+        i++;
+    }
+}
+
+// How bright a flare is now (0..1), flickering, dying down at the end.
+static float flareGlow(const App::Flare& f, float time) {
+    float k = std::min(1.0f, f.life / FLARE_FADE);
+    float flick = 0.86f + 0.08f * sinf(time * 7.3f + f.seed) + 0.06f * sinf(time * 13.1f + f.seed * 2.0f);
+    return k * flick;
+}
+
+static void drawFlares(float time) {
+    Renderer2D& r = app.renderer;
+    for (const App::Flare& f : app.thrown) {
+        if (f.planet != app.dominantIdx) continue;
+        const Planet& p = app.planets[f.planet];
+        Vec2 at = p.center + f.local;
+        Vec2 up = f.local.normalize();
+        float g = flareGlow(f, time);
+        // The stick, lying along the ground once it rests (tumbling in the air).
+        float rot = f.resting ? atan2d(up.y, up.x) + 90.0f : time * 600.0f + f.seed * 40.0f;
+        r.pushMatrix();
+        r.translate(at.x, at.y);
+        r.rotate(rot);
+        r.fill(0.42f, 0.10f, 0.08f, 1.0f);
+        r.quad(-4.0f, -1.2f, 4.0f, -1.2f, 4.0f, 1.2f, -4.0f, 1.2f);
+        r.setBlend(Renderer2D::Blend::Additive);
+        r.fill(1.0f, 0.30f, 0.18f, 0.20f * g);
+        r.circle(4.0f, 0.0f, 16.0f * g);
+        r.fill(1.0f, 0.45f, 0.30f, 0.45f * g);
+        r.circle(4.0f, 0.0f, 6.0f * g);
+        r.fill(1.0f, 0.92f, 0.80f, 0.9f * g);
+        r.circle(4.0f, 0.0f, 2.2f);
+        r.setBlend(Renderer2D::Blend::Normal);
+        r.popMatrix();
+    }
+}
+
+static void drawCaveDark() {
+    float strength = std::clamp(gDebug.caveDark, 0.0f, 1.0f) * app.inHole;
+    if (strength <= 0.01f || !app.spacewalking || !app.caveDarkProgram) return;
+    const Planet& p = dominantPlanet();
+    GLuint pr = app.caveDarkProgram;
+    glUseProgram(pr);
+    setPassViewUniforms(pr);
+    glUniform2f(glGetUniformLocation(pr, "u_center"), p.center.x, p.center.y);
+    // The ground line across the view.
+    const int SAMPLES = 64;
+    float va = atan2d(app.view.focusY - p.center.y, app.view.focusX - p.center.x);
+    float span = 0.5f * sqrtf((float)app.width * app.width + (float)app.height * app.height) / app.view.scale /
+                 std::max(p.baseRadius, 1.0f) * RAD2DEG * 1.15f;
+    span = std::min(span, 179.0f);
+    float surf[SAMPLES];
+    for (int k = 0; k < SAMPLES; k++) surf[k] = p.surfaceRadius(va - span + 2.0f * span * k / (SAMPLES - 1));
+    glUniform1f(glGetUniformLocation(pr, "u_angle0"), va);
+    glUniform1f(glGetUniformLocation(pr, "u_span"), span);
+    glUniform1fv(glGetUniformLocation(pr, "u_surf"), SAMPLES, surf);
+    glUniform1f(glGetUniformLocation(pr, "u_dark"), strength);
+
+    // The lights.
+    const int MAX_LIGHTS = 24;
+    float L[MAX_LIGHTS * 4] = {0}, C[MAX_LIGHTS * 3] = {0};
+    int n = 0;
+    auto add = [&](Vec2 at, float radius, float strength, float r, float g, float b) {
+        if (n >= MAX_LIGHTS || radius <= 1.0f || strength <= 0.0f) return;
+        L[n * 4] = at.x; L[n * 4 + 1] = at.y; L[n * 4 + 2] = radius; L[n * 4 + 3] = strength;
+        C[n * 3] = r; C[n * 3 + 1] = g; C[n * 3 + 2] = b;
+        n++;
+    };
+    const Astronaut& a = app.astronaut;
+    Vec2 up = (a.pos - p.center).normalize();
+    // The suit's lamp: just round you.
+    add(a.pos + up * 8.0f, gDebug.caveLamp, std::clamp(gDebug.caveLampBright, 0.0f, 1.0f), 1.0f, 0.93f, 0.80f);
+    // The light sword, drawn: a wider pool in its colour, flaring on a cut.
+    if (a.blade > 0.0f) {
+        float cut = a.swing >= 0.0f && a.swing < 1.0f ? 1.0f : 0.0f;
+        const float* gl = a.livery.glow;
+        float reach = std::max(0.0f, gDebug.caveSwordReach);
+        add(a.pos + up * 14.0f, (reach + 40.0f * cut) * a.blade, std::clamp(gDebug.caveSwordBright, 0.0f, 1.0f), gl[0], gl[1], gl[2]);
+    }
+    float time = (float)emscripten_get_now() * 0.001f;
+    // The jetpack's flame: a warm, flickering pool at the nozzle (behind and
+    // below the back), easing in and out with the burn rather than snapping.
+    app.jetGlow += ((a.jetting ? 1.0f : 0.0f) - app.jetGlow) * (a.jetting ? 0.35f : 0.18f);
+    if (app.jetGlow > 0.01f) {
+        Vec2 right(-up.y, up.x);
+        Vec2 nozzle = a.pos - right * (6.0f * (float)a.facing) - up * 12.0f;
+        float flick = 0.88f + 0.12f * sinf(time * 37.0f) * sinf(time * 23.0f + 1.3f);
+        add(nozzle, std::max(0.0f, gDebug.caveJetLight) * (0.6f + 0.4f * app.jetGlow) * flick,
+            0.9f * app.jetGlow, 1.0f, 0.62f, 0.28f);
+    }
+    for (const App::Flare& f : app.thrown) {
+        if (f.planet != app.dominantIdx) continue;
+        float g = flareGlow(f, time);
+        add(p.center + f.local, FLARE_LIGHT * (0.55f + 0.45f * g), std::min(1.0f, 1.2f * g), 1.0f, 0.32f, 0.20f);
+    }
+    // The mining laser where it lands, and rock the cutter has just heated.
+    if (app.laserOn) add(app.laserEnd, 60.0f, 0.8f, 1.0f, 0.75f, 0.5f);
+    for (const App::Burn& b : app.burns)
+        if (b.heat > 0.05f) add(p.center + b.local, 30.0f + 50.0f * b.heat, b.heat, 1.0f, 0.4f, 0.1f);
+    // What glows in the caves.
+    if (app.dominantIdx == app.activeFieldIdx && p.carve.ready()) {
+        CaveField::Light cl[12];
+        int m = CaveField::lights(p, caveFrame(0.0f), cl, std::min(12, MAX_LIGHTS - n));
+        for (int k = 0; k < m; k++) add(cl[k].pos, cl[k].radius * 1.6f, 0.55f, cl[k].r, cl[k].g, cl[k].b);
+    }
+    glUniform4fv(glGetUniformLocation(pr, "u_light"), MAX_LIGHTS, L);
+    glUniform3fv(glGetUniformLocation(pr, "u_lightCol"), MAX_LIGHTS, C);
+    glUniform1i(glGetUniformLocation(pr, "u_lightCount"), n);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(app.fsVao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
 
 // ---- What the page calls (window.net) ----------------------------------------
 
@@ -4118,6 +4801,12 @@ static void updateWaterFx(float dt, float time) {
     Lander& l = app.lander;
     const Planet& p = dominantPlanet();
     l.bob = Vec2(0, 0);
+    if (l.ignition > 0.0f) {
+        // Burning on the pad: the hull trembles, harder as the burn builds.
+        Vec2 up = (l.pos - p.center).normalize();
+        float k = std::min(1.0f, l.ignition / 30.0f);
+        l.bob = Vec2(-up.y, up.x) * ((fxRand() - 0.5f) * 1.4f * k) + up * ((fxRand() - 0.5f) * 0.6f * k);
+    }
     if (!p.sea) { app.wasWet = false; return; }
 
     Vec2 shipUp = (l.pos - p.center).normalize();
@@ -4126,14 +4815,14 @@ static void updateWaterFx(float dt, float time) {
     if (app.state == LANDED && shipOverWater && app.stuckIdx == app.dominantIdx) {
         // Afloat: a slow rise and fall (drawn only — where the ship IS does
         // not move), and now and then a ring off the hull.
-        l.bob = shipUp * (1.0f * sinf(time * 0.52f) + 0.45f * sinf(time * 0.31f + 1.3f));
+        l.bob += shipUp * (1.0f * sinf(time * 0.52f) + 0.45f * sinf(time * 0.31f + 1.3f));
         app.shipRippleIn -= dt;
         if (app.shipRippleIn <= 0.0f) {
             app.shipRippleIn = 1.5f + fxRand() * 1.4f;
             spawnRipple(p, l.pos + Vec2(-shipUp.y, shipUp.x) * ((fxRand() - 0.5f) * 16.0f), 9.0f + fxRand() * 5.0f);
         }
     }
-    if (app.state == PLAYING && l.active && l.thrusting > 0.0f && l.fuel > 0.0f && shipOverWater) {
+    if (l.burning() && shipOverWater) {
         // Exhaust on the water: spray fanned up and out from under the
         // nozzle, harder the closer the ship is.
         const float REACH = 150.0f;
@@ -4376,6 +5065,7 @@ static void drawCloudsPass(float t) {
     setLightUniforms(pr);
     glUniform1f(glGetUniformLocation(pr, "u_coverage"), gDebug.cloudCoverage);
     glUniform1f(glGetUniformLocation(pr, "u_falloff"), gDebug.cloudFalloff);
+    glUniform1f(glGetUniformLocation(pr, "u_groundClear"), std::max(1.0f, gDebug.cloudGroundClear));
     glUniform1f(glGetUniformLocation(pr, "u_overlay"), spaceOverlay());
     glUniform1f(glGetUniformLocation(pr, "u_nightDarkness"), gDebug.nightDarkness);
     glUniform1f(glGetUniformLocation(pr, "u_softness"), gDebug.nightSoftness);
@@ -5204,11 +5894,11 @@ static void drawBlobShadow(const Planet& p, Vec2 pos, float size, float maxAlt, 
     // angle above the surface (sin 40). The contact point sits one ellipse
     // half-height BELOW the terrain silhouette line, so the ground reads as
     // extending toward the viewer in front of whatever stands on it.
-    float ry = rx * 0.64f;
+    float ry = rx * GROUND_DROP;
     float a = 0.42f * fade * fade * lit;
 
     Renderer2D& r = app.renderer;
-    float drop = size * 0.64f;   // contact point below the silhouette line
+    float drop = size * GROUND_DROP;   // contact point below the silhouette line
     Vec2 ground(p.center.x + outward.x * (surfR - drop),
                 p.center.y + outward.y * (surfR - drop));
     r.pushMatrix();
@@ -5256,7 +5946,7 @@ static void drawEntityShadows() {
     }
     const Planet& dom = dominantPlanet();
     Vec2 toSunDom = (sunW - dom.center).normalize();
-    drawBlobShadow(dom, app.lander.pos, app.lander.radius * 1.5f, 650.0f, toSunDom);
+    drawBlobShadow(dom, app.lander.pos, app.lander.radius * SHIP_SHADOW, 650.0f, toSunDom);
     if (app.spacewalking) {
         // Not when they are down a hole: the shadow is projected onto the
         // terrain's outline, which would put it on the ground above them.
@@ -6208,6 +6898,7 @@ static void syncDebugFromJS() {
     gDebug.cloudHeight      = EM_ASM_DOUBLE({ return window.DBG.cloudHeight; });
     gDebug.cloudCoverage    = EM_ASM_DOUBLE({ return window.DBG.cloudCoverage; });
     gDebug.cloudFalloff     = EM_ASM_DOUBLE({ return window.DBG.cloudFalloff; });
+    gDebug.cloudGroundClear = EM_ASM_DOUBLE({ return window.DBG.cloudGroundClear !== undefined ? window.DBG.cloudGroundClear : $0; }, gDebug.cloudGroundClear);
     gDebug.spaceHaze        = EM_ASM_DOUBLE({ return window.DBG.spaceHaze; });
     gDebug.nightDarkness    = EM_ASM_DOUBLE({ return window.DBG.nightDarkness; });
     gDebug.nightSoftness    = EM_ASM_DOUBLE({ return window.DBG.nightSoftness; });
@@ -6236,6 +6927,16 @@ static void syncDebugFromJS() {
     gDebug.crawlers         = EM_ASM_DOUBLE({ return window.DBG.crawlers !== undefined ? window.DBG.crawlers : $0; }, gDebug.crawlers);
     gDebug.bats             = EM_ASM_DOUBLE({ return window.DBG.bats !== undefined ? window.DBG.bats : $0; }, gDebug.bats);
     gDebug.bite             = EM_ASM_DOUBLE({ return window.DBG.bite !== undefined ? window.DBG.bite : $0; }, gDebug.bite);
+    gDebug.plume            = EM_ASM_DOUBLE({ return window.DBG.plume !== undefined ? window.DBG.plume : $0; }, gDebug.plume);
+    gDebug.caveDark         = EM_ASM_DOUBLE({ return window.DBG.caveDark !== undefined ? window.DBG.caveDark : $0; }, gDebug.caveDark);
+    gDebug.caveLamp         = EM_ASM_DOUBLE({ return window.DBG.caveLamp !== undefined ? window.DBG.caveLamp : $0; }, gDebug.caveLamp);
+    gDebug.caveLampBright   = EM_ASM_DOUBLE({ return window.DBG.caveLampBright !== undefined ? window.DBG.caveLampBright : $0; }, gDebug.caveLampBright);
+    gDebug.caveSwordBright  = EM_ASM_DOUBLE({ return window.DBG.caveSwordBright !== undefined ? window.DBG.caveSwordBright : $0; }, gDebug.caveSwordBright);
+    gDebug.caveSwordReach   = EM_ASM_DOUBLE({ return window.DBG.caveSwordReach !== undefined ? window.DBG.caveSwordReach : $0; }, gDebug.caveSwordReach);
+    gDebug.caveJetLight     = EM_ASM_DOUBLE({ return window.DBG.caveJetLight !== undefined ? window.DBG.caveJetLight : $0; }, gDebug.caveJetLight);
+    gDebug.flameBlue        = EM_ASM_DOUBLE({ return window.DBG.flameBlue !== undefined ? window.DBG.flameBlue : $0; }, gDebug.flameBlue);
+    gDebug.liftDelay        = EM_ASM_DOUBLE({ return window.DBG.liftDelay !== undefined ? window.DBG.liftDelay : $0; }, gDebug.liftDelay);
+    gDebug.liftSpool        = EM_ASM_DOUBLE({ return window.DBG.liftSpool !== undefined ? window.DBG.liftSpool : $0; }, gDebug.liftSpool);
 
     // The gravity knob scales every body together (each keeps its own relative
     // density; the star keeps its mass ratio), then the orbit rates are
@@ -6406,6 +7107,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int debugVisitOutpost(int idx, float offset) {
 // item id, 100 for cows in the hold, 200 for credits. Module._debugGive(what, n).
 extern "C" EMSCRIPTEN_KEEPALIVE void debugGive(int what, int amount) {
     if (what == 200) addCredits(amount);
+    else if (what == 300) app.flares = std::clamp(app.flares + amount, 0, (int)App::FLARES_MAX);
     else if (what == Trade::COW) app.cargo = std::min(maxCargo(), app.cargo + amount);
     else if (what >= 0 && what < App::ITEM_COUNT) {
         int put = addItem(what, amount);
@@ -6424,6 +7126,23 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugUpgrade(int level) {
     applyUpgrades();
     if (app.tradePost >= 0) pushTrade();
 }
+// Dev hook (the debug panel's Equipment rows): one upgrade (Trade::Upgrade)
+// at `level`, clamped to 0..its top — taking it away as well as giving it.
+// Returns the level it is now; level < 0 just reports it.
+// Module._debugSetUpgrade(id, level)
+extern "C" EMSCRIPTEN_KEEPALIVE int debugSetUpgrade(int id, int level) {
+    if (id < 0 || id >= Trade::UPGRADES) return -1;
+    if (level >= 0) {
+        app.upgrades[id] = std::clamp(level, 0, Trade::maxLevel(id));
+        applyUpgrades();
+        // (A smaller tank or hold: what is over the new size stays until used.)
+        if (app.lander.fuel > maxFuel()) app.lander.fuel = maxFuel();
+        if (app.tradePost >= 0) pushTrade();
+    }
+    return app.upgrades[id];
+}
+// How many levels an upgrade has. Module._debugUpgradeLevels(id)
+extern "C" EMSCRIPTEN_KEEPALIVE int debugUpgradeLevels(int id) { return Trade::maxLevel(id); }
 // Dev hook: bring a night crawler up `along` units along the ground from the
 // astronaut (+ = screen right), whatever the hour. Returns how many there are.
 // Module._debugSpawnCrawler(along)
@@ -6638,6 +7357,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugDump() {
     items += "],\"inHole\":" + std::to_string(app.inHole) + ",\"hitStop\":" + std::to_string(app.hitStop);
     items += ",\"sunHere\":" + std::to_string(sunHeight(dominantPlanet(), playerPos() - dominantPlanet().center)) +
              ",\"sword\":" + std::to_string(app.swordT);
+    // The exhaust: is the fluid live, and what it has cost (ms stepping, ms
+    // drawing, over how many frames; reading it starts the count again).
+    items += ",\"plume\":[" + std::to_string(app.plume.live() ? 1 : 0) + "," + std::to_string(app.plumeMs[0]) + "," +
+             std::to_string(app.plumeMs[1]) + "," + std::to_string(app.plumeMs[2]) + "]";
+    app.plumeMs[0] = app.plumeMs[1] = app.plumeMs[2] = 0.0;
     items += ",\"credits\":" + std::to_string(app.credits) + ",\"cargo\":" + std::to_string(app.cargo) +
              ",\"nearPost\":" + std::to_string(app.nearPost) + ",\"tradePost\":" + std::to_string(app.tradePost) +
              ",\"upgrades\":[";
@@ -6933,9 +7657,16 @@ static void mainLoop() {
                 app.lander.fuel += gDebug.refuelRate * timeScale;
                 if (app.lander.fuel > maxFuel()) app.lander.fuel = maxFuel();
             }
-            if (!app.spacewalking && thrustPressed) {
-                app.lander.liftOff(body);
-                app.state = PLAYING;
+            // W lights the engine; held, it burns on the pad (big flames,
+            // the hull trembling) for gDebug.liftDelay before the ship lets
+            // go. Let go of W before then and the engine goes out.
+            if (!app.spacewalking && (thrustPressed || (thrustKey && app.lander.ignition > 0.0f))) {
+                if (app.lander.ignite(timeScale, gDebug.liftDelay * 60.0f)) {
+                    app.lander.liftOff(body);
+                    app.state = PLAYING;
+                }
+            } else {
+                app.lander.stopIgnition();
             }
             // The herd keeps living while you are parked or out on foot: that
             // is when the ground can be cut out from under one.
@@ -6996,6 +7727,10 @@ static void mainLoop() {
         bool scanKey = live && Input::isKeyDown(KEY_C);
         if (scanKey && !app.prevScanKey) scanPulse();
         app.prevScanKey = scanKey;
+        // G throws a flare toward the aim.
+        bool flareKey = live && Input::isKeyDown(KEY_G);
+        if (flareKey && !app.prevFlareKey) throwFlare();
+        app.prevFlareKey = flareKey;
     } else if ((app.state == LANDED || (app.state == PLAYING && app.lander.altitude < 1500.0f)) &&
                app.dominantIdx == app.activeFieldIdx && dominantPlanet().hasDigs()) {
         // Parked, or flying low: show the caves and whatever has been dug
@@ -7072,6 +7807,12 @@ static void mainLoop() {
     Deposits::update(dominantPlanet(), dt, app.burnOre);
     updateWaterFx(dt, (float)(now - app.startTime) * 3.0f);
     updateParticles(dt, timeScale);
+    {
+        double t0 = emscripten_get_now();
+        updatePlume(timeScale);
+        if (app.plume.live()) { app.plumeMs[0] += emscripten_get_now() - t0; app.plumeMs[2] += 1.0; }
+    }
+    updateFlares(dt, timeScale);
     for (App::Burn& b : app.burns) {
         if (b.heat > 0.0f) b.heat -= dt / 1.7f;       // cools in under two seconds
     }
@@ -7202,6 +7943,13 @@ static void mainLoop() {
     //     the view is far enough out that worlds are specks.
     drawNavOverlay(viewMat);
 
+    // 3b+) The ship's exhaust: fire and smoke, behind the ships.
+    {
+        double t0 = emscripten_get_now();
+        drawPlumePass();
+        if (app.plume.live()) app.plumeMs[1] += emscripten_get_now() - t0;
+    }
+
     // 3c) Ship + astronaut + space aids stay crisp on top of the sky.
     app.renderer.begin(viewMat, app.width, app.height);
     if (spaceAids) drawTrajectory();
@@ -7209,6 +7957,7 @@ static void mainLoop() {
     Net::draw(app.renderer);
     app.lander.drawBeam(app.renderer);
     app.lander.draw(app.renderer);   // always draw the actual ship
+    drawFlares(shaderTime);
     // Night crawlers and cave bats, on the walking line: behind the astronaut.
     drawEnemies(shaderTime);
     // The astronaut after the ship: stepping out (and walking past it) they
@@ -7259,6 +8008,10 @@ static void mainLoop() {
         app.renderer.end();
     }
 
+    // 3c2) Underground it is dark: everything below the ground line, but
+    //      what the lights around the player reach (drawCaveDark).
+    drawCaveDark();
+
     // 3d) Near framing planes: dark silhouette bands (plus their spires and
     //     fronds) along the bottom of the frame, drawn after the ship because
     //     they are the closest depth plane. Screen-anchored, so they frame the
@@ -7296,10 +8049,11 @@ static void mainLoop() {
         float left = rate > 1e-6f ? app.suit / rate : -1.0f;
         bool dry = app.state == PLAYING && app.lander.active && app.lander.fuel <= 0.0f;
         EM_ASM({
-            if (window.updateGame) window.updateGame($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+            if (window.updateGame) window.updateGame($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
         }, app.suit, left, hazard, (int)app.spacewalking, itemTotal(app.pack), packSize(), itemTotal(app.hold),
            holdSize(), app.cargo, maxCargo(), app.warp,
-           app.astronaut.jetpackMax > 0.0f ? app.astronaut.jetpackFuel / app.astronaut.jetpackMax : 0.0f, (int)dry);
+           app.astronaut.jetpackMax > 0.0f ? app.astronaut.jetpackFuel / app.astronaut.jetpackMax : 0.0f, (int)dry,
+           app.flares);
         std::string obj = app.titleOpen ? std::string() : objective();
         if (obj != app.objectiveShown) {
             app.objectiveShown = obj;

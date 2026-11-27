@@ -1,4 +1,5 @@
 #include "lander.h"
+#include <algorithm>
 #include <cmath>
 
 void Lander::reset() {
@@ -13,6 +14,8 @@ void Lander::reset() {
     landed = false;
     altitude = 0.0f;
     anim = 0.0f;
+    ignition = 0.0f;
+    spool = 1.0f;
 }
 
 void Lander::spawnOnPlanet(const Planet& planet, float angle) {
@@ -97,13 +100,24 @@ void Lander::update(const std::vector<Planet>& planets, float timeScale) {
         fuel -= gDebug.fuelBurn * thrusting * timeScale;
     }
 
+    // Just off the pad the push is only a little more than the ship's weight,
+    // so it rises slowly at first; it builds to full over gDebug.liftSpool
+    // seconds (eased in, so most of the gain comes late). Over in a few
+    // seconds whether the engine is held or not.
+    float push = gDebug.thrust;
+    if (spool < 1.0f) {
+        float floor = std::min(push, liftWeight + std::max(0.012f, liftWeight * 0.15f));
+        push = floor + (push - floor) * (spool * spool);
+        spool = gDebug.liftSpool > 0.0f ? std::min(1.0f, spool + timeScale / (gDebug.liftSpool * 60.0f)) : 1.0f;
+    }
+
     for (int i = 0; i < substeps; i++) {
         // Gravity: sum over every body in the system.
         vel += gravityAt(planets, pos) * dt;
 
         // Thrust along the ship's local "up": (sin(rot), -cos(rot)).
         if (thrusting > 0 && fuel > 0) {
-            float force = gDebug.thrust * thrusting * dt;
+            float force = push * thrusting * dt;
             vel.x += sind(rotation) * force;
             vel.y -= cosd(rotation) * force;
         }
@@ -182,6 +196,8 @@ void Lander::land(const Planet& planet) {
     crashed = false;
     landed = true;
     liftingOff = false;
+    ignition = 0.0f;
+    spool = 1.0f;
     thrusting = 0.0f;
     thrustLevel = 0.0f;
     Vec2 rel = vel - planet.orbitVel;            // motion over the ground
@@ -241,6 +257,8 @@ void Lander::crash() {
     active = false;
     crashed = true;
     landed = false;
+    ignition = 0.0f;
+    spool = 1.0f;
     thrusting = 0.0f;
     thrustLevel = 0.0f;
 }
@@ -257,6 +275,36 @@ void Lander::liftOff(const Planet& planet) {
     // Inherit the body's orbital motion so lifting off a moving moon doesn't
     // instantly smear you across its surface.
     vel = planet.orbitVel;
+    // The push starts a little over the weight here and builds (see update).
+    ignition = 0.0f;
+    spool = 0.0f;
+    float d = (pos - planet.center).length();
+    liftWeight = d > 1.0f ? planet.gravity / (d * d) : 0.0f;
+}
+
+bool Lander::ignite(float timeScale, float holdFrames) {
+    if (fuel <= 0.0f) { stopIgnition(); return false; }
+    thrusting = 1.0f;
+    thrustLevel += (1.0f - thrustLevel) * 0.4f;
+    anim += timeScale;                  // (the flame's flicker runs on it)
+    fuel -= gDebug.fuelBurn * timeScale;
+    if (fuel < 0.0f) fuel = 0.0f;
+    ignition += timeScale;
+    return ignition >= holdFrames;
+}
+
+void Lander::stopIgnition() {
+    if (ignition <= 0.0f) return;
+    ignition = 0.0f;
+    thrusting = 0.0f;
+    thrustLevel = 0.0f;
+}
+
+float Lander::flameBoost() const {
+    const float FLARE = 1.0f;           // on the pad the flame is this much bigger again
+    if (ignition > 0.0f) return 1.0f + FLARE * std::min(1.0f, ignition / 15.0f);
+    if (active && spool < 1.0f) return 1.0f + FLARE * (1.0f - spool);
+    return 1.0f;
 }
 
 void Lander::updateClearing(const Planet& planet, float altitude) {
@@ -550,22 +598,40 @@ void Lander::draw(Renderer2D& r) {
     r.scale(SCALE);
     r.rotate(rotation);
 
-    // Thrust flame first so the hull sits on top of it (additive plasma cone).
-    if (thrusting > 0 && active && fuel > 0) {
+    // Thrust flame first so the hull sits on top of it. With the exhaust
+    // simulated as a fluid (the `plume` knob; main.cpp's updatePlume) the
+    // flame and smoke are the gas itself, drawn before the ship: all the
+    // hull adds is the white-hot throat of the nozzle. With it off, the old
+    // additive plasma cone. Either way a short flame, red-orange or blue.
+    const float boost = flameBoost();
+    // The flame's colours, red-orange or blue (gDebug.flameBlue).
+    const float fb = std::clamp(gDebug.flameBlue, 0.0f, 1.0f);
+    auto flame = [&](float r0, float g0, float b0, float r1, float g1, float b1, float a) {
+        r.fill(r0 + (r1 - r0) * fb, g0 + (g1 - g0) * fb, b0 + (b1 - b0) * fb, a);
+    };
+    if (burning() && gDebug.plume > 0.0f) {
+        r.setBlend(Renderer2D::Blend::Additive);
+        float bloom = (0.9f + 0.1f * sind(anim * 300.0f)) * (0.6f + 0.4f * boost);
+        flame(1.0f, 0.62f, 0.26f, 0.45f, 0.72f, 1.0f, 0.14f);
+        r.circle(0, 21, 5.0f * bloom);
+        flame(1.0f, 0.86f, 0.58f, 0.75f, 0.88f, 1.0f, 0.40f);
+        r.triangle(-2.6f, 19, 0, 19 + 7.0f * bloom, 2.6f, 19);
+        r.setBlend(Renderer2D::Blend::Normal);
+    } else if (burning()) {
         r.setBlend(Renderer2D::Blend::Additive);
         float flicker = 0.78f + 0.22f * sind(anim * 180.0f);
-        float len = 30.0f * flicker;
-        float bloom = 0.9f + 0.1f * sind(anim * 300.0f);
-        r.fill(1.0f, 0.55f, 0.16f, 0.20f);
-        r.circle(0, 19, 13 * bloom);
-        r.fill(1.0f, 0.75f, 0.35f, 0.27f);
-        r.circle(0, 19, 7 * bloom);
-        r.fill(0.90f, 0.27f, 0.08f, 0.47f);
-        r.triangle(-9, 18, 0, 18 + len, 9, 18);
-        r.fill(1.0f, 0.59f, 0.16f, 0.75f);
-        r.triangle(-5, 18, 0, 18 + len * 0.85f, 5, 18);
-        r.fill(1.0f, 0.92f, 0.55f, 0.94f);
-        r.triangle(-2.5f, 18, 0, 18 + len * 0.55f, 2.5f, 18);
+        float len = 26.0f * flicker * boost;
+        float bloom = (0.9f + 0.1f * sind(anim * 300.0f)) * (0.6f + 0.4f * boost);
+        flame(1.0f, 0.55f, 0.16f, 0.22f, 0.48f, 1.0f, 0.20f);
+        r.circle(0, 19, 9 * bloom);
+        flame(1.0f, 0.75f, 0.35f, 0.50f, 0.78f, 1.0f, 0.27f);
+        r.circle(0, 19, 5 * bloom);
+        flame(0.90f, 0.27f, 0.08f, 0.10f, 0.28f, 0.96f, 0.24f);
+        r.triangle(-6.5f, 18, 0, 18 + len, 6.5f, 18);
+        flame(1.0f, 0.59f, 0.16f, 0.40f, 0.72f, 1.0f, 0.34f);
+        r.triangle(-3.8f, 18, 0, 18 + len * 0.85f, 3.8f, 18);
+        flame(1.0f, 0.88f, 0.58f, 0.78f, 0.90f, 1.0f, 0.42f);
+        r.triangle(-2.0f, 18, 0, 18 + len * 0.55f, 2.0f, 18);
         r.setBlend(Renderer2D::Blend::Normal);
     }
 

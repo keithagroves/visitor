@@ -53,7 +53,12 @@ flowchart TD
   `updateContact()` judges ground contact as a safe landing (slow + upright +
   flat, via `terrainFlat()`/`pointInTriangle()`) or a crash. Edge-triggered keys
   handle lift-off (thrust from `LANDED`), restart (R from `CRASHED`), and exit/
-  enter ship (E toggles the spacewalking astronaut).
+  enter ship (E toggles the spacewalking astronaut). Lift-off is a rocket's:
+  W pressed on the pad lights the engine (`Lander::ignite`) and, held, it
+  burns there for `gDebug.liftDelay` seconds — the flame flaring, the hull
+  trembling (`Lander::bob`) — before `liftOff()`; let go sooner and it goes
+  out (`stopIgnition`). Off the pad the push starts a little over the ship's
+  weight and builds to full over `gDebug.liftSpool` seconds (`spool`).
 - **Moving frames** — every planet is travelling along its orbit at tens of
   units per frame, so anything "at" a world is simulated relative to it: the
   ship spawns and lifts off with the body's `orbitVel`, atmospheric drag pulls
@@ -208,9 +213,21 @@ flowchart TD
   a trader, **E** opens the trade panel (`openTrade` → `pushTrade` sends
   the page one JSON blob: who, whether the hold is in reach, what they pay
   for each thing you have, every piece of equipment with its recipe —
-  credits and materials, have / need — the goods, and where each of the
-  system's crystals is found); E again, Escape, walking off or boarding
-  the ship closes it. When the ship is in reach too, E does whichever is
+  credits and materials, have / need — the goods, where each of the
+  system's crystals is found, how full the pack and the hold are, and what
+  the world's people look like, `Planet::Folk`); E again, Escape, walking
+  off or boarding the ship closes it. The page lays it out
+  (`showTrade` in [shell.html](../../shell.html)): the trader up top — a
+  portrait drawn from `Folk` the way `Outposts` draws them (`folkSvg`),
+  what they say, your credits and room — then two tabs. **Sell & buy** is
+  what you carry (two rows abreast, a "sell everything but carbon" button)
+  over what the post sells. **Equipment** is a tile per upgrade in three
+  columns (ship, suit, tool) saying where each stands — "Ready to build",
+  "Needs gold, moonshard", "Fully built" — with the chosen one spelled out
+  underneath: what the next level does, the recipe, where a material you
+  have never held is found, and the Build button. The panel opens on
+  Equipment when something can be built (the tab's badge counts them),
+  else on Sell & buy; after that the tab is the player's until they leave. When the ship is in reach too, E does whichever is
   nearer (`wouldTrade`). A post deals with the ship's hold, cows included,
   only when the ship is parked within `HOLD_REACH` (600) of the stall
   (`holdAtPost`); otherwise with the pack alone. The panel's buttons call
@@ -295,6 +312,53 @@ flowchart TD
   the sea into a dry tunnel sends a rush of them back along it. Blob
   shadows, the tractor beam's end, the predicted path's end and the
   camera's idea of "the ground" all use the visible surface.
+- **Exhaust** — the ship's engine does not draw a flame, it feeds a fluid
+  ([graphics](graphics.md): `Plume`). `updatePlume` (once a frame, after the
+  particles) keeps the grid round the ship on the world it is at, marks which
+  cells are ground (`Planet::rockAt`, so dug holes are open, plus the sea —
+  both lowered by the ship's shadow drop, `GROUND_DROP`, so the jet blooms
+  where the shadow lies and not up on the silhouette line),
+  puts fire in behind the nozzle (in the first open cell over it, on the
+  pad), splashes it both ways along the ground when the ground is close
+  below the jet, scales all of it by `Lander::flameBoost` (the flare on the
+  pad and as the climb builds, when the fire also lasts longer), makes less
+  smoke the higher the ship is (a cloud at lift-off, a thin trail in the
+  sky — and whiter there: `drawPlumePass` brightens the smoke's tone with
+  height), along the path it travelled that frame —
+  wavering a little in aim and strength, which is where the flicker and the
+  curls come from — and steps it. In air the gas stays with the ground while
+  the ship flies on; the thinner the air, the more the grid drifts along
+  with the ship, and in a vacuum it rides with it and there is no smoke,
+  only flame. Other players' ships at the same world burn into the same
+  grid (`Net::eachBurning`). `drawPlumePass` (`kPlumeFrag`, just before the
+  ships are drawn) uploads fire and smoke as an RG16F texture and draws
+  that patch of the world, scissored to it, read through a bicubic filter:
+  fire as one smooth emitted ramp (pale yellow core through orange to a red
+  edge, or blue-white with the `flameBlue` knob; only the densest
+  gas shows, so the flame is short; see-through, covering under a third of
+  what is behind it, white only where the gas is densest), smoke in one tone lit by the hour, both
+  thinning to nothing before the grid's edge. The hull itself only draws
+  the white-hot throat of the nozzle. Looks only — nothing is pushed by it.
+  The `plume` knob scales the gas; 0 turns the fluid off and brings back
+  the old flame cone (`Lander::draw`).
+- **Dark caves and flares** — `drawCaveDark` (`kCaveDarkFrag`, after the
+  world and the near plants, before the framing bands) lays darkness over
+  everything below the ground line once the player is down a hole (scaled
+  by `inHole` and `gDebug.caveDark`), deeper = darker, with up to 24 lights
+  cut out of it: the suit lamp (reach `gDebug.caveLamp`, brightness
+  `gDebug.caveLampBright`), the light sword while drawn (brightness
+  `gDebug.caveSwordBright`, reach `gDebug.caveSwordReach`), the jetpack's
+  flame while it fires (`gDebug.caveJetLight`, eased by `App::jetGlow`), flares, the
+  laser's end, hot burns and `CaveField::lights`. "Below the ground line" is
+  `Planet::surfaceRadius` sampled 64 times across the view, so dug shafts
+  count. Flares (`App::flares` carried, saved last in the save array;
+  `App::thrown` burning) are made at a post (`tradeMakeFlares`), thrown with
+  G (`throwFlare`), fall and bounce off `rockAt`/`normalAt` in
+  `updateFlares`, and are drawn in `drawFlares`. Local only, not sent online.
+- **Debug equipment** — the panel's Equipment rows set any upgrade to any
+  level, or off, without trading (`Module._debugSetUpgrade(id, level)`;
+  level < 0 only reads it), with "All off" / "All max". Taking the cutter
+  away puts the mining laser back in hand (`applyUpgrades`).
 - **Live tunables** — `syncDebugFromJS()` pulls `window.DBG` sliders into the
   `gDebug` struct each frame (see [debug.h](../../src/core/debug.h)); the
   gravity knob is re-applied (to every body, followed by `updateKeplerSpeeds`)
@@ -306,6 +370,15 @@ flowchart TD
 - **HUD** — pushes fuel/altitude/speed/state to the DOM overlay via
   `EM_ASM(window.updateHUD(...))`, the current world / system / chart progress
   via `updateNav` (only on change), and event banners via `showEvent`.
+  The page shows only what the moment needs (`#hud[data-mode]`, set in
+  `updateHUD`): **fly** — fuel, altitude, velocity, time warp, the hold;
+  **land** (in the ship, on the ground) — the same without the flight
+  numbers; **foot** — the suit, the jetpack, the pack and the hand tool
+  instead of the ship's readouts, and no system / chart lines. Credits, the
+  world, the trader pointer and the objective always show. The status word
+  (FLYING / LANDED / WALKING...) is still written to `#hud-status` for the
+  capture rig and tests, but its row is hidden: the message in the middle
+  of the screen says it.
   `updateGame` carries the suit, the pack and hold counts, time warp and an
   empty tank; `setObjective` the objective line; `setInventory` the pack
   and the hold; `showNotice` short one-liners ("The pack is full").

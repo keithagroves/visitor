@@ -30,6 +30,7 @@ SOURCES="
     $SRC_DIR/core/trade.cpp
     $SRC_DIR/graphics/shader.cpp
     $SRC_DIR/graphics/renderer2d.cpp
+    $SRC_DIR/graphics/plume.cpp
     $SRC_DIR/world/planet.cpp
     $SRC_DIR/world/system_gen.cpp
     $SRC_DIR/world/nearfield.cpp

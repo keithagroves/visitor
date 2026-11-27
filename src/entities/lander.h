@@ -51,6 +51,21 @@ public:
     void crash();                      // disable controls, mark wrecked
     void liftOff(const Planet& planet);// reactivate, nudge clear, ride the orbit
 
+    // Lift-off is not instant, it is a rocket's: held on the pad the engine
+    // burns for a while first (big flames, the hull trembling), and when the
+    // ship lets go it climbs slowly at first, the push building from a little
+    // over its weight to full (see spool). ignite() is one frame of that burn
+    // on the pad; it returns true once the ship has burned there for
+    // `holdFrames` and should let go (the caller then calls liftOff).
+    // stopIgnition(): W let go before then, the engine goes out.
+    bool ignite(float timeScale, float holdFrames);
+    void stopIgnition();
+    // Is the engine lit, in flight or on the pad?
+    bool burning() const { return thrusting > 0.0f && fuel > 0.0f && (active || ignition > 0.0f); }
+    // How much bigger than in steady flight the flame is now (1 = as in
+    // flight): it flares on the pad and shrinks back as the climb builds.
+    float flameBoost() const;
+
     // Is the ship's "legs down" axis within LANDING_MAX_TILT of straight-up
     // (away from the planet)?
     bool isUpright(const Planet& planet) const;
@@ -127,6 +142,13 @@ public:
     float settleSpeed = 0.0f;
     float settleSlide = 0.0f;
     bool  liftingOff = false;
+    // The rocket start (see ignite): frames the engine has burned on the pad
+    // (0 = not lit); how far the push has built since the ship let go (0 at
+    // that moment .. 1 = full), and the weight it had to lift there (gravity,
+    // world units / frame^2), which is what the push starts a little over.
+    float ignition = 0.0f;
+    float spool = 1.0f;
+    float liftWeight = 0.0f;
     // Drawn this far from where it is (the caller sets it every frame): the
     // slow rise and fall of a ship riding on water. Zero on land.
     Vec2  bob;

@@ -104,3 +104,21 @@ float getWheelDelta() { return (float)wheelDelta; }
 void resetWheelDelta() { wheelDelta = 0; }
 
 } // namespace Input
+
+// ---- Touch (the page's on-screen controls, shell.html) ----------------------
+// A phone has no keyboard or mouse: its buttons press the same keys and its
+// finger on the world is the mouse, so the game reads one input either way.
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void inputKey(int keyCode, int down) {
+    if (keyCode >= 0 && keyCode < 256) Input::keys[keyCode] = down != 0;
+}
+// phase: 0 = moved, 1 = pressed, 2 = let go. x, y in canvas pixels.
+EMSCRIPTEN_KEEPALIVE void inputPointer(float x, float y, int phase) {
+    Input::mouseX = x;
+    Input::mouseY = y;
+    if (phase == 1) { Input::mouseDown = true; Input::clicked = true; }
+    else if (phase == 2) Input::mouseDown = false;
+}
+// Pinch and the zoom buttons: the same units as the mouse wheel (+ = out).
+EMSCRIPTEN_KEEPALIVE void inputWheel(float dy) { Input::wheelDelta += dy; }
+}

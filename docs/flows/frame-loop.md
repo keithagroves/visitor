@@ -57,6 +57,7 @@ sequenceDiagram
     Loop->>A: updateLaser() — aim at the cursor: harvest, or cut terrain (held off mid-swing)
     Loop->>P: updateEnemies() — crawlers after dark, bats in the caves: move, pounce / dive; a bite comes off the suit
     Loop->>P: NearField::update() — regrowth; updateWaterFx() — splashes, spray, bubbles, the floating ship; updateParticles()
+    Loop->>L: updatePlume() — the exhaust: feed the fluid at the nozzle, mark the ground under it, step it
 ```
 
 ## Render phase
