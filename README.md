@@ -3,7 +3,7 @@
 A 2D space-exploration game that runs in the browser. It's written in C++ and
 OpenGL ES 3.0, and compiled to WebAssembly and WebGL 2 with Emscripten.
 
-**[Play it here →](https://keithagroves.github.io/visitor/)**
+**[Play it here →](https://visitor.quest)**
 
 You fly a small lander through a procedurally generated solar system. Beam
 cows up from the home world, then step outside in a jetpack to dig into the
