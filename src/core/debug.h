@@ -125,11 +125,11 @@ struct Debug {
     // The suit lamp underground: how far its pool of light reaches (world
     // units, 0 = no lamp) and how bright it is at your feet (0..1).
     float caveLamp = 115.0f;
-    float caveLampBright = 1.0f;
+    float caveLampBright = 0.05f;
     // How brightly the drawn light sword lights the cave round you (0..1).
-    float caveSwordBright = 1.0f;
+    float caveSwordBright = 0.9f;
     // How far the drawn sword's light reaches (world units; a cut adds 40).
-    float caveSwordReach = 140.0f;
+    float caveSwordReach = 100.0f;
     // How far the jetpack's flame lights the cave while it fires (0 = none).
     float caveJetLight = 130.0f;
     // Lift-off like a rocket's: hold W on the pad and the engine burns this
