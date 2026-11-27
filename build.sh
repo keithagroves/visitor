@@ -75,18 +75,13 @@ VERSION=$(cat "$BUILD_DIR/game.js" "$BUILD_DIR/game.wasm" | cksum | cut -d' ' -f
 sed -e "s/__BUILD_VERSION__/$VERSION/" -e "s/src=game\.js>/src=game.js?v=$VERSION>/" \
     "$BUILD_DIR/game.html" > "$BUILD_DIR/game.html.tmp" && mv "$BUILD_DIR/game.html.tmp" "$BUILD_DIR/game.html"
 
-# Create index.html redirect for GitHub Pages
-cat > "$BUILD_DIR/index.html" << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-  <meta http-equiv="refresh" content="0; url=game.html">
-</head>
-<body>
-  <p>Redirecting to <a href="game.html">game.html</a>...</p>
-</body>
-</html>
-EOF
+# The site's front page is the game itself, not a redirect to it: link
+# previews (chat apps, social sites) read the page at / and don't follow a
+# meta refresh, so the share tags in shell.html have to be there.
+cp "$BUILD_DIR/game.html" "$BUILD_DIR/index.html"
+
+# The share image those tags point at.
+cp assets/social.jpg "$BUILD_DIR/social.jpg"
 
 echo ""
 echo "=== Build Complete ==="
