@@ -21,6 +21,10 @@ struct PlanetLook {
     float tones[5][3] = {
         {0.290f, 0.271f, 0.251f}, {0.431f, 0.412f, 0.392f}, {0.561f, 0.533f, 0.494f},
         {0.690f, 0.659f, 0.604f}, {0.930f, 0.950f, 0.980f}};
+    // The cap tone is snow: it is cold up there, and the locals who live in
+    // it dress for it (Planet::Outpost::snow). False where the peaks are
+    // capped with something else: pale sand, embers, bare airless rock.
+    bool snowCaps = true;
     // Sky: Rayleigh-style scatter color (what the day sky looks like; the
     // sunset hue falls out of it via extinction) + haze (Mie) scatter color.
     float skyBeta[3] = {0.0058f, 0.0135f, 0.0331f};
@@ -137,6 +141,8 @@ public:
     // CPU twin of the banding in kBodyFrag. What a cave's wall behind a
     // formation is a shade of.
     void groundTone(Vec2 world, float out[3]) const;
+    // ...and which of the five tones that is: 0 basin .. 4 cap.
+    int groundBand(Vec2 world) const;
 
     // Cut a circular bite out of the ground (see CarveMap). Returns the part
     // of the carve window that changed, for a partial texture upload; empty if
@@ -383,6 +389,9 @@ public:
         // for the drawing (the shutter comes down, the trader goes in).
         bool  closed = false;
         float shut = 0;
+        // It stands in the snow (the cap band of a world whose caps are
+        // snow): its people wear winter clothes.
+        bool  snow = false;
     };
     Folk folk;
     std::vector<Outpost> outposts;

@@ -241,8 +241,12 @@ computed sky.**
      scarf, a belt). Skin is any hue but the ground's or that accent's, so
      they read against both. Shorter and rounder than the astronaut, who
      must stay the one white figure in the scene. Where there is no air
-     they wear a glass bubble. They are in the hour's light like everything
-     on the ground (lifted at night, as the plants are).
+     they wear a glass bubble. At a post that stands in the snow they are
+     dressed for it instead: a coat and a bobble hat in the same dye
+     (eyes on stalks get a little hat each), trimmed with the pale cloth
+     of the awnings — a scarf, mittens, a hem, the tops of their boots.
+     Still one accent, no new hues. They are in the hour's light like
+     everything on the ground (lifted at night, as the plants are).
    - **A trading post is built in the same few colors.** The hut is the
      world's own pale rock (its crest tone, shaded with the one below);
      poles, counter and crates are one dark timber and one plank tone; the

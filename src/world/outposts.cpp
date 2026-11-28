@@ -168,6 +168,21 @@ void roundBox(Renderer2D& r, float x0, float y0, float x1, float y1, float rad) 
     r.circle(x0 + rad, y1 - rad, rad, 10);
 }
 
+// The part of an ellipse above (`upper`) or below the level y = cut: a dome,
+// a cap, the skirt of a coat.
+void ellipseCut(Renderer2D& r, float cx, float cy, float rx, float ry, float cut, bool upper) {
+    const int N = 18;
+    float a0 = asinf(clampf((cut - cy) / ry, -1.0f, 1.0f));
+    // (+y is down: the lower part runs a0 .. PI - a0, the upper the rest of the way round.)
+    float from = upper ? PI - a0 : a0, sweep = upper ? PI + 2.0f * a0 : PI - 2.0f * a0;
+    Vec2 pts[N];
+    for (int i = 0; i < N; i++) {
+        float a = from + sweep * (float)i / (N - 1);
+        pts[i] = Vec2(cx + cosf(a) * rx, cy + sinf(a) * ry);
+    }
+    r.convexPolygon(pts, N);
+}
+
 // One smooth halo: full at the middle, nothing at the rim. (Additive blend is
 // the caller's business.)
 void halo(Renderer2D& r, float x, float y, float radius, Rgb c, float a) {
@@ -201,11 +216,16 @@ void groundShadow(Renderer2D& r, float rx, float alpha) {
 // the planet, feet at y = 0). Drawn as a unit figure — one tall, facing +x —
 // scaled to its height and mirrored to the way it faces. Three body plans
 // (Folk::head): a one-piece gumdrop, a body with a head on a neck, and a low
-// dome with its eyes on stalks.
+// dome with its eyes on stalks. `snow`: dressed for the cold (the post stands
+// in the snow) — a coat and a bobble hat in their dye, trimmed with a pale
+// fleece, a scarf, mittens and fleece-topped boots.
 void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const Planet::Alien& a,
-               float t, bool talking, float shadow) {
+               float t, bool talking, float shadow, bool snow) {
     const Rgb skin = rgb(k.body), shade = mul(skin, 0.70f), accent = dye(k.accent);
     const Rgb dark{0.10f, 0.11f, 0.17f}, eyeWhite{0.97f, 0.96f, 0.90f};
+    // Winter clothes: the dye, its shade, and the pale cloth of the awnings.
+    const Rgb coat = accent, coatShade = mul(accent, 0.72f);
+    const Rgb fleece = mixc(rgb(k.accent), Rgb{1.0f, 0.97f, 0.90f}, 0.80f);
     float H = k.height * a.size;
     float bw = k.girth * 0.5f;                  // half the body's width, in heights
     float s = bw / 0.35f;                       // face features scale with the body
@@ -243,14 +263,24 @@ void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const P
         capsule(r, Vec2(x, hipY), Vec2(fx, fy - 0.03f), w);
         paint.lit(dark);
         r.ellipse(fx + 0.035f, fy, w * 0.85f, 0.045f, 10);
+        if (snow) {                                             // a boot's fleece top
+            paint.lit(fleece);
+            r.ellipse(fx + 0.008f, fy - 0.05f, w * 0.66f, 0.03f, 10);
+        }
     };
-    // An arm: hanging (swinging a little on the walk), or up and waving.
+    // An arm: hanging (swinging a little on the walk), or up and waving. In
+    // the cold it is a sleeve of the coat (the far one in its shade) with a
+    // mitten on the end.
     auto arm = [&](Vec2 sh, float side, Rgb c, float waveK) {
         Vec2 rest = sh + Vec2(0.05f * side - 0.07f * sw * m * side, 0.20f);
         Vec2 up = sh + Vec2(0.20f + 0.06f * sinf(t * 10.0f), -0.27f + 0.03f * cosf(t * 10.0f));
         Vec2 hand = rest + (up - rest) * waveK;
-        paint.lit(c);
+        paint.lit(snow ? (side > 0 ? coat : coatShade) : c);
         capsule(r, sh, hand, 0.085f);
+        if (snow) {
+            paint.lit(fleece);
+            r.circle(hand.x, hand.y, 0.06f, 12);
+        }
     };
     auto antennae = [&](float x0, float x1, float y) {
         for (int i = 0; i < k.antennae; i++) {
@@ -261,6 +291,36 @@ void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const P
             paint.lit(accent);
             r.circle(x + lean, y - 0.20f, 0.042f, 10);
         }
+    };
+    // A bobble hat: a dome of the dye standing `h` over its brim (a band of
+    // fleece `hw` either side of x at y), a fleece bobble on top.
+    auto hat = [&](float x, float y, float hw, float h) {
+        paint.lit(coatShade);
+        ellipseCut(r, x, y, hw, h, y, true);
+        paint.lit(coat);
+        ellipseCut(r, x + hw * 0.14f, y, hw * 0.84f, h * 0.90f, y, true);
+        paint.lit(fleece);
+        float bobble = std::fmin(hw * 0.30f + 0.012f, 0.075f);
+        r.circle(x, y - h - bobble * 0.35f, bobble, 12);
+        capsule(r, Vec2(x - hw * 0.98f, y), Vec2(x + hw * 0.98f, y), std::fmin(0.055f, hw * 0.45f));
+    };
+    // A coat over the lower part of a round body (the ellipse at cx, cy,
+    // let out a little): everything below `top`, with a fleece hem along the
+    // bottom, and a scarf wound round where it ends, one end hanging in front.
+    auto parka = [&](float cx, float cy, float rx, float ry, float top) {
+        float ox = rx * 1.06f, oy = ry + 0.015f;
+        paint.lit(coatShade);
+        ellipseCut(r, cx, cy, ox, oy, top, false);
+        paint.lit(coat);
+        ellipseCut(r, cx + rx * 0.10f, cy - 0.012f, rx * 0.93f, oy - 0.03f, top, false);
+        paint.lit(fleece);
+        float hemY = cy + oy - 0.04f;
+        r.ellipse(cx, hemY, ox * sqrtf(1.0f - (hemY - cy) * (hemY - cy) / (oy * oy)) + 0.035f, 0.036f, 14);
+        float tu = clampf((top - cy) / oy, -1.0f, 1.0f);
+        float half = ox * sqrtf(1.0f - tu * tu) - 0.02f;
+        capsule(r, Vec2(cx - half, top), Vec2(cx + half, top), 0.075f);
+        r.quad(cx + half * 0.30f, top, cx + half * 0.30f + 0.085f, top,
+               cx + half * 0.30f + 0.10f, top + 0.17f, cx + half * 0.30f + 0.025f, top + 0.17f);
     };
 
     Vec2 bubble;            // helmet center
@@ -278,8 +338,12 @@ void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const P
         r.ellipse(0, -0.55f, bw, 0.42f, 28);
         paint.lit(skin);
         r.ellipse(bw * 0.10f, -0.565f, bw * 0.86f, 0.385f, 28);
-        paint.lit(accent);                                      // a sash, shoulder to hip
-        r.quad(-bw * 0.83f, -0.33f, bw * 0.90f, -0.43f, bw * 0.86f, -0.50f, -bw * 0.79f, -0.40f);
+        if (snow) {
+            parka(0, -0.55f, bw, 0.42f, -0.49f);                // from under the mouth down
+        } else {
+            paint.lit(accent);                                  // a sash, shoulder to hip
+            r.quad(-bw * 0.83f, -0.33f, bw * 0.90f, -0.43f, bw * 0.86f, -0.50f, -bw * 0.79f, -0.40f);
+        }
         float ex = bw * 0.30f, ey = -0.72f;
         if (k.eyes == 1) eye(ex, ey, 0.13f * s);
         else if (k.eyes == 2) { eye(ex - 0.10f * s, ey, 0.08f * s); eye(ex + 0.10f * s, ey, 0.08f * s); }
@@ -287,6 +351,7 @@ void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const P
         paint.lit(dark);
         r.ellipse(ex + 0.02f, -0.575f, 0.07f * s, (0.012f + 0.03f * talk) * s, 10);
         antennae(-0.10f * s, 0.12f * s, -0.94f);
+        if (snow) hat(0, -0.885f, bw * 0.66f, 0.16f);           // (the antennae stick out of it)
         arm(Vec2(bw * 0.62f, -0.48f), 1.0f, skin, a.wave);
         bubble = Vec2(0.02f, -0.62f);
         bubbleR = std::fmax(bw, 0.34f) + 0.13f;
@@ -301,12 +366,24 @@ void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const P
         arm(Vec2(-bx * 0.45f, -0.60f), -1.0f, shade, 0.0f);
         paint.lit(shade);
         capsule(r, Vec2(0.03f, -0.64f), Vec2(0.09f, -0.80f), 0.11f);
-        r.ellipse(0, -0.48f, bx, 0.22f, 24);
-        paint.lit(skin);
-        r.ellipse(bx * 0.10f, -0.49f, bx * 0.86f, 0.20f, 24);
-        paint.lit(accent);                                      // a scarf, one end hanging
-        r.ellipse(0.04f, -0.675f, 0.13f, 0.045f, 14);
-        r.triangle(0.06f, -0.67f, 0.15f, -0.67f, 0.13f, -0.50f);
+        if (snow) {
+            // The whole body is in the coat; the scarf is thicker, and fleece.
+            paint.lit(coatShade);
+            r.ellipse(0, -0.48f, bx * 1.08f, 0.235f, 24);
+            paint.lit(coat);
+            r.ellipse(bx * 0.10f, -0.49f, bx * 0.94f, 0.21f, 24);
+            paint.lit(fleece);
+            r.ellipse(0, -0.28f, bx * 0.66f, 0.036f, 14);       // its hem
+            r.ellipse(0.045f, -0.68f, 0.15f, 0.058f, 14);
+            r.quad(0.065f, -0.67f, 0.16f, -0.67f, 0.155f, -0.47f, 0.085f, -0.47f);
+        } else {
+            r.ellipse(0, -0.48f, bx, 0.22f, 24);
+            paint.lit(skin);
+            r.ellipse(bx * 0.10f, -0.49f, bx * 0.86f, 0.20f, 24);
+            paint.lit(accent);                                  // a scarf, one end hanging
+            r.ellipse(0.04f, -0.675f, 0.13f, 0.045f, 14);
+            r.triangle(0.06f, -0.67f, 0.15f, -0.67f, 0.13f, -0.50f);
+        }
         paint.lit(shade);
         r.ellipse(0.11f, -0.87f, 0.20f, 0.13f, 22);
         paint.lit(skin);
@@ -318,6 +395,7 @@ void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const P
         paint.lit(dark);
         r.ellipse(0.22f, -0.795f, 0.05f, 0.008f + 0.02f * talk, 10);
         antennae(0.05f, 0.17f, -0.985f);
+        if (snow) hat(0.11f, -0.972f, 0.15f, 0.125f);           // perched on top, clear of the eyes
         arm(Vec2(bx * 0.50f, -0.58f), 1.0f, skin, a.wave);
         bubble = Vec2(0.12f, -0.90f);
         bubbleR = 0.31f;
@@ -338,14 +416,20 @@ void drawAlien(Renderer2D& r, const Paint& paint, const Planet::Folk& k, const P
             Vec2 tip(0.10f + off + sway + 0.03f * a.noticed, -0.90f - (n == 3 && i == 1 ? 0.07f : 0.0f));
             paint.lit(shade);
             r.line(root.x, root.y, tip.x, tip.y, 0.05f);
-            eye(tip.x, tip.y, n == 1 ? 0.10f : 0.078f);
+            float er = n == 1 ? 0.10f : 0.078f;
+            eye(tip.x, tip.y, er);
+            if (snow) hat(tip.x, tip.y - er * 0.62f, er * 0.90f, er * 0.95f);    // a little one on each eye
         }
         paint.lit(shade);
         r.ellipse(0, -0.40f, bx, 0.27f, 26);
         paint.lit(skin);
         r.ellipse(bx * 0.09f, -0.41f, bx * 0.87f, 0.245f, 26);
-        paint.lit(accent);                                      // a belt
-        r.quad(-bx * 0.77f, -0.235f, bx * 0.78f, -0.235f, bx * 0.90f, -0.30f, -bx * 0.89f, -0.30f);
+        if (snow) {
+            parka(0, -0.40f, bx, 0.27f, -0.335f);               // from under the mouth down
+        } else {
+            paint.lit(accent);                                  // a belt
+            r.quad(-bx * 0.77f, -0.235f, bx * 0.78f, -0.235f, bx * 0.90f, -0.30f, -bx * 0.89f, -0.30f);
+        }
         paint.lit(dark);
         r.ellipse(bx * 0.45f, -0.43f, 0.07f, 0.012f + 0.03f * talk, 10);
         arm(Vec2(bx * 0.66f, -0.36f), 1.0f, skin, a.wave);
@@ -432,6 +516,10 @@ void Planet::foundOutposts(const TerrainStyle& style) {
         Rng r(o.seed);
         o.rng = o.seed | 1u;
         o.keeper = keeperName(r);
+        // Up in the snow (where the caps are snow, and there is air to walk
+        // about in without a helmet), they dress for it.
+        o.snow = look.snowCaps && !folk.helmet &&
+                 groundBand(center + Vec2(cosd(o.angle), sind(o.angle)) * seedRadiusBase(o.angle)) == 4;
         Alien trader;
         trader.trader = true;
         trader.size = r.range(0.96f, 1.10f);
@@ -791,7 +879,7 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
             r.translate(b.x, b.y);
             r.rotate(a + 90.0f);
             r.translate(0, -TRADER_STEP);         // on the step behind the counter
-            drawAlien(r, paint, p.folk, o.folk[0], t, idx == active, 0.0f);
+            drawAlien(r, paint, p.folk, o.folk[0], t, idx == active, 0.0f, o.snow);
             r.popMatrix();
         }
 
@@ -894,7 +982,7 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
             r.pushMatrix();
             r.translate(b.x, b.y);
             r.rotate(a + 90.0f);
-            drawAlien(r, paint, p.folk, w, t, false, 1.0f - night);
+            drawAlien(r, paint, p.folk, w, t, false, 1.0f - night, o.snow);
             r.popMatrix();
         }
 

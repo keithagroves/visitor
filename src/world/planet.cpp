@@ -431,7 +431,7 @@ static float shFbm(float x, float y) {
     return v;
 }
 
-void Planet::groundTone(Vec2 world, float out[3]) const {
+int Planet::groundBand(Vec2 world) const {
     float lx = world.x - center.x, ly = world.y - center.y;
     float d = sqrtf(lx * lx + ly * ly);
     float n = shFbm(lx * 0.00005f, ly * 0.00005f);
@@ -440,7 +440,11 @@ void Planet::groundTone(Vec2 world, float out[3]) const {
     alt = alt < 0.0f ? 0.0f : (alt > 1.0f ? 1.0f : alt);
     float ragged = alt + (n - 0.5f) * 0.30f;
     // Same edges as the shader: basin | 0.18 | 0.44 | 0.62 | 0.78 | cap.
-    int k = ragged < 0.18f ? 0 : ragged < 0.44f ? 1 : ragged < 0.62f ? 2 : ragged < 0.78f ? 3 : 4;
+    return ragged < 0.18f ? 0 : ragged < 0.44f ? 1 : ragged < 0.62f ? 2 : ragged < 0.78f ? 3 : 4;
+}
+
+void Planet::groundTone(Vec2 world, float out[3]) const {
+    int k = groundBand(world);
     for (int c = 0; c < 3; c++) out[c] = look.tones[k][c];
 }
 

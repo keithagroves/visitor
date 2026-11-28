@@ -23,6 +23,8 @@
 // a shaded one per shape plus one accent, the world's own crystal color,
 // which is what its people wear and paint their stalls with. The lantern and
 // the hut's window are emitted light: one smooth halo each, on at dusk.
+// At a post that stands in the snow (Planet::Outpost::snow) they wear winter
+// clothes: a coat, a bobble hat, a scarf and mittens, in the same colors.
 namespace Outposts {
 
 // How close to the trader (world units) you have to be to trade.

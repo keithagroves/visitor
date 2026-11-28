@@ -239,7 +239,13 @@ flowchart TD
   the most level ground a couple of dozen looks turn up that is dry, clear
   of mesas (and so of caves) and well apart from the others. The home
   world's first post is always a short walk — 700 to 1500 units — from
-  where the ship drops in. Every world gets at least one. Its ground is
+  where the ship drops in. Every world gets at least one. A post whose
+  ground is in the cap band (`Planet::groundBand`, the CPU twin of the body
+  shader's banding) on a world whose caps are snow (`PlanetLook::snowCaps`:
+  not the desert's pale sand, the volcanic embers or airless rock) is
+  marked `Outpost::snow`, and everyone at it wears winter clothes — in the
+  world and in the trade panel's portrait (`folkSvg` in shell.html, which
+  mirrors `drawAlien`; change the two together). Its ground is
   paved (`Outposts::drawGround`, drawn flat on the strip before the ground
   shadows): four staggered courses of flagstones out to `PAVED` (=
   `NO_DIG`, 215) either side of the stall, a kerb in the people's paint at

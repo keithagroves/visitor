@@ -1655,15 +1655,19 @@
             }
             // The trader, from the waist up behind the counter: the same
             // figure outposts.cpp draws (drawAlien: three body plans, one to
-            // three eyes, antennae, a glass bubble where there is no air),
-            // standing still. In its units: one tall, feet at y = 0, facing
-            // right; the counter hides the legs, so they are not drawn.
+            // three eyes, antennae, a glass bubble where there is no air,
+            // winter clothes at a post in the snow), standing still. In its
+            // units: one tall, feet at y = 0, facing right; the counter hides
+            // the legs, so they are not drawn.
             function folkSvg(k) {
                 function col(c, m) { return 'rgb(' + Math.round(c[0] * m) + ',' + Math.round(c[1] * m) + ',' + Math.round(c[2] * m) + ')'; }
                 var skin = col(k.body, 1), shade = col(k.body, 0.70);
                 // What they wear is a deeper shade of their world's crystal (Outposts' dye).
                 var dyed = k.accent.map(function (v) { v /= 255; return v * (0.30 + 0.70 * v) * 255; });
                 var accent = col(dyed, 1), collar = col(dyed, 0.8);
+                // Winter clothes: the dye, its shade, and a pale fleece.
+                var snow = !!k.snow, coat = accent, coatShade = col(dyed, 0.72);
+                var fleece = col(k.accent.map(function (v, i) { return v + ([255, 247, 230][i] - v) * 0.80; }), 1);
                 var dark = 'rgb(26,28,43)', white = 'rgb(247,245,230)';
                 var bw = k.girth * 0.5, s = bw / 0.35, o = '';
                 function n(v) { return (+v).toFixed(3); }
@@ -1676,7 +1680,41 @@
                 }
                 function poly(pts, c) { o += '<path d="M' + pts.map(n).join(' ') + 'Z" fill="' + c + '"/>'; }
                 function eye(x, y, r) { ell(x, y, r, r, white); ell(x + r * 0.30, y + r * 0.06, r * 0.54, r * 0.54, dark); }
-                function arm(x, y, side, c) { cap(x, y, x + 0.05 * side, y + 0.20, 0.085, c); }
+                // In the cold an arm is a sleeve of the coat with a mitten on the end.
+                function arm(x, y, side, c) {
+                    cap(x, y, x + 0.05 * side, y + 0.20, 0.085, snow ? (side > 0 ? coat : coatShade) : c);
+                    if (snow) ell(x + 0.05 * side, y + 0.20, 0.06, 0.06, fleece);
+                }
+                // The part of an ellipse above (upper) or below the level y = cut (outposts.cpp's ellipseCut).
+                function ellCut(cx, cy, rx, ry, cut, upper, c) {
+                    var N = 18, a0 = Math.asin(Math.max(-1, Math.min(1, (cut - cy) / ry))), pts = [];
+                    var from = upper ? Math.PI - a0 : a0, sweep = upper ? Math.PI + 2 * a0 : Math.PI - 2 * a0;
+                    for (var i = 0; i < N; i++) {
+                        var a = from + sweep * i / (N - 1);
+                        pts.push(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry);
+                    }
+                    poly(pts, c);
+                }
+                // A bobble hat, and a coat over the lower part of a round body
+                // with a scarf round its top (drawAlien's hat and parka).
+                function hat(x, y, hw, h) {
+                    ellCut(x, y, hw, h, y, true, coatShade);
+                    ellCut(x + hw * 0.14, y, hw * 0.84, h * 0.90, y, true, coat);
+                    var bobble = Math.min(hw * 0.30 + 0.012, 0.075);
+                    ell(x, y - h - bobble * 0.35, bobble, bobble, fleece);
+                    cap(x - hw * 0.98, y, x + hw * 0.98, y, Math.min(0.055, hw * 0.45), fleece);
+                }
+                function parka(cx, cy, rx, ry, top) {
+                    var ox = rx * 1.06, oy = ry + 0.015;
+                    ellCut(cx, cy, ox, oy, top, false, coatShade);
+                    ellCut(cx + rx * 0.10, cy - 0.012, rx * 0.93, oy - 0.03, top, false, coat);
+                    var hemY = cy + oy - 0.04;
+                    ell(cx, hemY, ox * Math.sqrt(1 - (hemY - cy) * (hemY - cy) / (oy * oy)) + 0.035, 0.036, fleece);
+                    var tu = Math.max(-1, Math.min(1, (top - cy) / oy));
+                    var half = ox * Math.sqrt(1 - tu * tu) - 0.02, tx = cx + half * 0.30;
+                    cap(cx - half, top, cx + half, top, 0.075, fleece);
+                    poly([tx, top, tx + 0.085, top, tx + 0.10, top + 0.17, tx + 0.025, top + 0.17], fleece);
+                }
                 function antennae(x0, x1, y) {
                     for (var i = 0; i < k.ant; i++) {
                         var x = i === 0 ? x0 : x1, lean = i === 0 ? -0.09 : 0.11;
@@ -1692,10 +1730,18 @@
                     var bx = bw * 0.82;
                     arm(-bx * 0.45, -0.60, -1, shade);
                     cap(0.03, -0.64, 0.09, -0.80, 0.11, shade);
-                    ell(0, -0.48, bx, 0.22, shade);
-                    ell(bx * 0.10, -0.49, bx * 0.86, 0.20, skin);
-                    ell(0.04, -0.675, 0.13, 0.045, accent);
-                    poly([0.06, -0.67, 0.15, -0.67, 0.13, -0.50], accent);
+                    if (snow) {
+                        ell(0, -0.48, bx * 1.08, 0.235, coatShade);
+                        ell(bx * 0.10, -0.49, bx * 0.94, 0.21, coat);
+                        ell(0, -0.28, bx * 0.66, 0.036, fleece);
+                        ell(0.045, -0.68, 0.15, 0.058, fleece);
+                        poly([0.065, -0.67, 0.16, -0.67, 0.155, -0.47, 0.085, -0.47], fleece);
+                    } else {
+                        ell(0, -0.48, bx, 0.22, shade);
+                        ell(bx * 0.10, -0.49, bx * 0.86, 0.20, skin);
+                        ell(0.04, -0.675, 0.13, 0.045, accent);
+                        poly([0.06, -0.67, 0.15, -0.67, 0.13, -0.50], accent);
+                    }
                     ell(0.11, -0.87, 0.20, 0.13, shade);
                     ell(0.13, -0.875, 0.175, 0.115, skin);
                     var ex = 0.18, ey = -0.89;
@@ -1704,6 +1750,7 @@
                     else { eye(ex - 0.10, ey + 0.005, 0.04); eye(ex, ey - 0.03, 0.044); eye(ex + 0.10, ey + 0.005, 0.04); }
                     mouth(0.22, -0.795, 0.05, 0.008);
                     antennae(0.05, 0.17, -0.985);
+                    if (snow) hat(0.11, -0.972, 0.15, 0.125);
                     arm(bx * 0.50, -0.58, 1, skin);
                     bub = [0.12, -0.90]; bubR = 0.31;
                     frame = [0.08, -1.27, 0.88];
@@ -1715,11 +1762,14 @@
                         var off = k.eyes === 1 ? 0 : (i - (k.eyes - 1) * 0.5) * 0.17;
                         var tx = 0.10 + off, ty = -0.90 - (k.eyes === 3 && i === 1 ? 0.07 : 0);
                         cap(0.08 + off * 0.6, -0.60, tx, ty, 0.05, shade, false);
-                        eye(tx, ty, k.eyes === 1 ? 0.10 : 0.078);
+                        var er = k.eyes === 1 ? 0.10 : 0.078;
+                        eye(tx, ty, er);
+                        if (snow) hat(tx, ty - er * 0.62, er * 0.90, er * 0.95);
                     }
                     ell(0, -0.40, dx, 0.27, shade);
                     ell(dx * 0.09, -0.41, dx * 0.87, 0.245, skin);
-                    poly([-dx * 0.77, -0.235, dx * 0.78, -0.235, dx * 0.90, -0.30, -dx * 0.89, -0.30], accent);
+                    if (snow) parka(0, -0.40, dx, 0.27, -0.335);
+                    else poly([-dx * 0.77, -0.235, dx * 0.78, -0.235, dx * 0.90, -0.30, -dx * 0.89, -0.30], accent);
                     mouth(dx * 0.45, -0.43, 0.07, 0.012);
                     arm(dx * 0.66, -0.36, 1, skin);
                     bub = [0.10, -0.80]; bubR = 0.36;
@@ -1729,13 +1779,15 @@
                     arm(-bw * 0.55, -0.50, -1, shade);
                     ell(0, -0.55, bw, 0.42, shade);
                     ell(bw * 0.10, -0.565, bw * 0.86, 0.385, skin);
-                    poly([-bw * 0.83, -0.33, bw * 0.90, -0.43, bw * 0.86, -0.50, -bw * 0.79, -0.40], accent);
+                    if (snow) parka(0, -0.55, bw, 0.42, -0.49);
+                    else poly([-bw * 0.83, -0.33, bw * 0.90, -0.43, bw * 0.86, -0.50, -bw * 0.79, -0.40], accent);
                     var gx = bw * 0.30, gy = -0.72;
                     if (k.eyes === 1) eye(gx, gy, 0.13 * s);
                     else if (k.eyes === 2) { eye(gx - 0.10 * s, gy, 0.08 * s); eye(gx + 0.10 * s, gy, 0.08 * s); }
                     else { eye(gx - 0.14 * s, gy + 0.01, 0.062 * s); eye(gx, gy - 0.07, 0.07 * s); eye(gx + 0.14 * s, gy + 0.01, 0.062 * s); }
                     mouth(gx + 0.02, -0.575, 0.07 * s, 0.012 * s);
                     antennae(-0.10 * s, 0.12 * s, -0.94);
+                    if (snow) hat(0, -0.885, bw * 0.66, 0.16);
                     arm(bw * 0.62, -0.48, 1, skin);
                     bub = [0.02, -0.62]; bubR = Math.max(bw, 0.34) + 0.13;
                     frame = [0.02, -1.24, 1.12];

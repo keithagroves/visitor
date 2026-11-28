@@ -97,6 +97,7 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
         p.kind = "Desert world";
         hex3(L.tones[0], 0x5a3626); hex3(L.tones[1], 0x8a5236); hex3(L.tones[2], 0xb87a4a);
         hex3(L.tones[3], 0xd9a868); hex3(L.tones[4], 0xf0d9a8);
+        L.snowCaps = false;                           // pale sand up top, not snow
         set3(L.skyBeta, 0.0210f, 0.0135f, 0.0085f);   // butterscotch day, cool dusk
         set3(L.mieBeta, 0.0100f, 0.0080f, 0.0060f);
         L.skyGain = 1.0f; L.atmoScale = 0.6f; L.dragScale = 0.55f;
@@ -135,6 +136,7 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
         p.kind = "Volcanic world";
         hex3(L.tones[0], 0x1c1a1d); hex3(L.tones[1], 0x302a2c); hex3(L.tones[2], 0x4a3d3a);
         hex3(L.tones[3], 0x6b5850); hex3(L.tones[4], 0xd9643a);   // ember-capped peaks
+        L.snowCaps = false;
         set3(L.skyBeta, 0.0170f, 0.0080f, 0.0050f);   // smoggy red-brown
         set3(L.mieBeta, 0.0100f, 0.0070f, 0.0050f);
         L.skyGain = 0.8f; L.atmoScale = 1.1f; L.dragScale = 1.3f;
@@ -212,6 +214,7 @@ void applyArchetype(Planet& p, Arch a, Rng& rng, bool isMoon, TerrainStyle& styl
         hsv3(L.tones[2], h, s * 0.9f, 0.48f);
         hsv3(L.tones[3], h, s * 0.8f, 0.62f);
         hsv3(L.tones[4], h, s * 0.5f, 0.80f);
+        L.snowCaps = false;                           // no air, no snow: bare pale rock
         L.cloudCover = 0.0f; L.propDensity = 0.0f; L.frondFrac = 0.0f;
         hsv3(L.mineral, h + 150.0f, 0.38f, 0.92f);    // nothing grows; ore and crystal only
         L.floraDensity = 0.0f; L.mineralDensity = 0.70f;

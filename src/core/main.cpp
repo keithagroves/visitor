@@ -2472,15 +2472,16 @@ static void pushTrade() {
          num(FLARE_MAKE) + ",\"carbon\":" + num(FLARE_CARBON) + ",\"ferrite\":" + num(FLARE_FERRITE) +
          ",\"cr\":" + num(FLARE_CREDITS) + ",\"can\":" + num(canMakeFlares(hold) ? 1 : 0) + "}";
     // How full the pack and the hold are, and what the trader looks like
-    // (Planet::Folk), for the panel's portrait.
+    // (Planet::Folk, and whether this post is one in the snow), for the
+    // panel's portrait.
     j += ",\"pack\":[" + num(itemTotal(app.pack)) + "," + num(packSize()) + "],\"holdN\":[" +
          num(itemTotal(app.hold)) + "," + num(holdSize()) + "]";
     {
         const Planet::Folk& k = p.folk;
         auto c255 = [](float v) { return std::to_string((int)lroundf(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
-        char shape[96];
-        snprintf(shape, sizeof(shape), "\"girth\":%.3f,\"eyes\":%d,\"head\":%d,\"ant\":%d,\"helmet\":%d",
-                 k.girth, k.eyes, k.head, k.antennae, k.helmet ? 1 : 0);
+        char shape[112];
+        snprintf(shape, sizeof(shape), "\"girth\":%.3f,\"eyes\":%d,\"head\":%d,\"ant\":%d,\"helmet\":%d,\"snow\":%d",
+                 k.girth, k.eyes, k.head, k.antennae, k.helmet ? 1 : 0, o.snow ? 1 : 0);
         j += ",\"folk\":{\"body\":[" + c255(k.body[0]) + "," + c255(k.body[1]) + "," + c255(k.body[2]) +
              "],\"accent\":[" + c255(k.accent[0]) + "," + c255(k.accent[1]) + "," + c255(k.accent[2]) + "]," +
              shape + "}";
