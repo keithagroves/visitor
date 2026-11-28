@@ -13,8 +13,8 @@ struct Debug {
     // harness, straight-up burns from the home surface): ~83 to climb to the
     // moon's distance, ~89 to escape the home world, then ~40 more to land in
     // another planet's gravity well. 160 is about 1.7x an ideal moon trip —
-    // the moon with room to spare, not another planet in one hop (though the
-    // moon, where the tank refills, is a stepping stone for a good pilot).
+    // the moon with room to spare, not another planet in one hop. (Nothing
+    // refills it for free: fuel is made from carbon, see startFuel.)
     // The fuel-tank upgrades multiply it (Trade::fuelScale). It was 250,
     // which reached anywhere.
     float maxFuel = 160.0f;
@@ -22,7 +22,13 @@ struct Debug {
     // enough to climb out of the home atmosphere (which alone took more than a
     // whole tank at the old 0.2), cross to a neighboring world, and land.
     float fuelBurn = 0.05f;
-    float refuelRate = 0.25f;      // fuel per frame regained while landed (0 = off)
+    // Fuel is made, not given (docs/gameplay.md, decision 10): the ship drops
+    // in with a little over what a shaky landing takes (an autopilot burns
+    // ~2.5 coming down from the drop, the atmosphere does most of the
+    // braking), and F aboard turns carbon into fuel, this much a piece.
+    float startFuel = 20.0f;
+    float fuelPerCarbon = 8.0f;
+    float refuelRate = 0.0f;       // fuel per frame regained while landed (0 = off; it was 0.25, free fuel)
     float beamRange = 300.0f;
     float beamWidth = 20.0f;
     float planetDensity = 0.025f;  // applied live via Planet::setDensity

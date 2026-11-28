@@ -151,7 +151,12 @@ flowchart TD
   `hazardRate`): drains by the kind of world (no air, cold, heat, toxic
   air), the sun at the player's spot and shelter underground, divided by
   Seals; refills in the ship and at a trader's stall; F burns 5 carbon for
-  a quarter; at 0 the player blacks out. **Scanner** (C, `scanPulse` /
+  a quarter; at 0 the player blacks out. **Fuel** (decision 10): the ship
+  starts a run on `gDebug.startFuel` and nothing refills it for free; F
+  aboard (`makeFuel`) turns carbon into `gDebug.fuelPerCarbon` fuel apiece,
+  pack first, then hold. Parked on under `LANDED_DRY` (`landedDry`), R calls
+  `rescue`, which `rescueSpot` keeps off worlds with no plants. The tank is
+  the last number in the save (tenths); older saves load full. **Scanner** (C, `scanPulse` /
   `drawScan`, from `Deposits::scan`), **time warp** (T: 4 or 16 simulation
   steps a frame in open space, out of the air; steering cancels it), **the
   jump** (J with a star drive, clear of every world: `tryJump` /
@@ -371,7 +376,8 @@ flowchart TD
   `EM_ASM(window.updateHUD(...))`, the current world / system / chart progress
   via `updateNav` (only on change), and event banners via `showEvent`.
   The page shows only what the moment needs (`#hud[data-mode]`, set in
-  `updateHUD`): **fly** — fuel, altitude, velocity, time warp, the hold;
+  `updateHUD`): **fly** — fuel, the carbon carried (what F would make of
+  it), altitude, velocity, time warp, the hold;
   **land** (in the ship, on the ground) — the same without the flight
   numbers; **foot** — the suit, the jetpack, the pack and the hand tool
   instead of the ship's readouts, and no system / chart lines. Credits, the

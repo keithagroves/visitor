@@ -17,8 +17,11 @@ Mobile view sucks right now. I think we should ask the user to rotate their scre
 
 High:
 
+instead of time warp, we should have a warp feature that can only be used in space, that increase their velocity but then reduces it back to what it was before the warp started. Ideally it takes them along their current trajectory faster rather than increasing their velocity. 
 
 Med:
+
+I think the player should follow the mouse so you can see where they're about to swing their sword. I guess this mean that the player would sometimes walk backward if they were pointing their sword behind them.
 
 Bad guys respawn a little too quickly in the cave.
 
@@ -34,3 +37,5 @@ We should add shelters.
 Water resistance for the suit should be something you buy. Once you get water resistance you get access to more advanced minerals or something. This kind of unlock could make the game play more interesting.
 
 The shop people should probably talk. Once you buy a translator. Maybe that's the first thing you buy. 
+
+when enemies reach the village border, they should burrow.

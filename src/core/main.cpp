@@ -1395,6 +1395,7 @@ struct App {
     // have jumped through. All of it goes in the save.
     enum Flag : unsigned int {
         F_LANDED = 1u, F_POST = 2u, F_SOLD = 4u, F_MOON = 8u, F_PLANET = 16u, F_JUMPED = 32u,
+        F_FUELED = 64u,      // made fuel from carbon (F aboard)
     };
     unsigned int flags = 0;
     unsigned int everHeld = 0;
@@ -1714,7 +1715,7 @@ static void setMyHue(int hue) {
 // or arriving in a new system after a jump. Moves things; owns nothing.
 static void startRun() {
     app.lander.reset();
-    app.lander.fuel = maxFuel();
+    app.lander.fuel = std::min(gDebug.startFuel, maxFuel());     // enough to get down, no more
     int post;
     float drop = dropSpot(post);
     app.lander.spawnOnPlanet(homePlanet(), drop);
@@ -2568,7 +2569,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int tradeBuyUpgrade(int id) {
     addCredits(-r.credits);
     app.upgrades[id] = level + 1;
     applyUpgrades();
-    if (id == Trade::FuelTank && app.state == LANDED) app.lander.fuel = maxFuel();
+    // (A bigger tank is room for fuel, not fuel: that is made from carbon.)
     EM_ASM({ if (window.notifyUpgrade) window.notifyUpgrade($0, $1, $2); }, id, level + 1,
            Trade::effect(id, level + 1));
     dealDone(12);
@@ -2650,12 +2651,15 @@ extern "C" EMSCRIPTEN_KEEPALIVE int invMove(int item, int from, int to, int coun
 static constexpr int SAVE_VERSION = 1;
 
 // Where a rescue sets you down: by the last post you traded at, or the home
-// world's first post if you never have.
+// world's first post if you never have — or if that post is on a world with
+// nothing growing (a moon): you are set down with only startFuel, and with no
+// carbon to be had there, you could never leave.
 static void rescueSpot(int& planet, float& angle) {
     planet = app.lastPostPlanet;
     int post = app.lastPostIdx;
     if (planet < 0 || planet >= (int)app.planets.size() || post < 0 ||
-        post >= (int)app.planets[planet].outposts.size()) {
+        post >= (int)app.planets[planet].outposts.size() ||
+        app.planets[planet].look.floraDensity <= 0.0f) {
         planet = app.homeIdx;
         post = app.planets[planet].outposts.empty() ? -1 : 0;
     }
@@ -2704,6 +2708,9 @@ static std::string saveText(unsigned int seed, bool arriving) {
             }
         }
         v.push_back(app.flares);            // (after the worlds: older saves just end there)
+        // The tank, in tenths (fuel is made now, so it is kept; a save from
+        // before ends at the flares and loads with a full tank).
+        v.push_back((long long)lroundf((park >= 0 && app.state == LANDED ? app.lander.fuel : gDebug.startFuel) * 10.0f));
     }
     std::string s = "[";
     for (size_t i = 0; i < v.size(); i++) s += (i ? "," : "") + std::to_string(v[i]);
@@ -2732,8 +2739,8 @@ static bool readSave() {
 }
 
 // Put the ship down, parked, on a world at an angle — on the ground, or
-// afloat — with a full tank, the player aboard.
-static void parkShip(int idx, float angle) {
+// afloat — with `fuel` in the tank, the player aboard.
+static void parkShip(int idx, float angle, float fuel) {
     if (idx < 0 || idx >= (int)app.planets.size() || app.planets[idx].isSun) { idx = app.homeIdx; angle = -90.0f; }
     Planet& p = app.planets[idx];
     Vec2 out(cosd(angle), sind(angle));
@@ -2741,7 +2748,7 @@ static void parkShip(int idx, float angle) {
     app.spacewalking = false;
     app.astronaut.active = false;
     app.lander.reset();
-    app.lander.fuel = maxFuel();
+    app.lander.fuel = std::clamp(fuel, 0.0f, maxFuel());
     app.lander.pos = p.center + out * (p.visibleRadius(angle) + 6.0f);
     app.dominantIdx = app.stuckIdx = idx;
     updateActiveField();                      // the surface below comes from the live grid
@@ -2799,11 +2806,15 @@ static void applySave() {
         }
         app.flares = std::clamp((int)at(i++), 0, (int)App::FLARES_MAX);
     }
+    // The tank (tenths), if the save has it; one from before fuel was made
+    // from carbon had it refill on every landing, so it gets a full one.
+    bool hasFuel = EM_ASM_INT({ var a = window.SAVE_ARR; return a && $0 < a.length ? 1 : 0; }, i) != 0;
+    float fuel = hasFuel ? at(i++) / 10.0f : 1e9f;
     app.cargo = std::clamp(app.cargo, 0, maxCargo());
     app.inventoryDirty = true;
     app.creditsDirty = true;
     applyUpgrades();
-    if (park >= 0) parkShip(park, angle);
+    if (park >= 0) parkShip(park, angle, fuel);
     else startRun();                          // just arrived in this system
 }
 
@@ -2852,14 +2863,15 @@ static void onCrashed() {
     saveGame();          // saved where the rescue will set you down: no reloading out of it
 }
 
-// R after a crash, or adrift with an empty tank: set down by the last post
-// you traded at.
+// R after a crash, adrift with an empty tank, or landed on too little to
+// lift off: set down by the last post you traded at, on a world where carbon
+// grows, with fuel enough for a hop.
 static void rescue() {
     if (app.state != CRASHED) { loseCargo(); app.lander.crash(); }
     int planet;
     float angle;
     rescueSpot(planet, angle);
-    parkShip(planet, angle);
+    parkShip(planet, angle, gDebug.startFuel);
     const Planet& p = app.planets[planet];
     showEvent("Rescued", "The locals set you down on " + p.name + ". Your cargo is gone; your equipment is not.");
     saveGame();
@@ -2920,6 +2932,38 @@ static void useCarbon() {
     app.inventoryDirty = true;
     app.suit = std::min(1.0f, app.suit + 0.25f);
     notice("Suit recharged with carbon");
+}
+
+// F aboard: the ship makes fuel from carbon (gDebug.fuelPerCarbon a piece),
+// as much as the tank has room for — from the pack, then the hold. Parked or
+// adrift alike: carbon carried is fuel in reserve.
+static void makeFuel() {
+    if (app.spacewalking || app.state == CRASHED) return;
+    float room = maxFuel() - app.lander.fuel;
+    float per = std::max(0.1f, gDebug.fuelPerCarbon);
+    if (room < 0.5f) { notice("The tank is full"); return; }
+    int have = haveItem(Trade::CARBON, true);
+    if (have <= 0) {
+        notice("No carbon to make fuel from: cut plants with the mining laser");
+        return;
+    }
+    int use = std::min(have, (int)std::ceil(room / per));
+    takeItem(Trade::CARBON, use, true);
+    app.inventoryDirty = true;
+    float made = std::min(room, use * per);
+    app.lander.fuel += made;
+    app.flags |= App::F_FUELED;
+    bool full = app.lander.fuel >= maxFuel() - 0.5f;
+    notice("Made " + std::to_string((int)lroundf(made)) + " fuel from " + std::to_string(use) + " carbon" +
+           (full ? ": the tank is full" : use == have ? " (all you had)" : ""));
+    if (app.state == LANDED) saveGame();
+}
+
+// Landed with less than this in the tank, the ship cannot get anywhere: R
+// calls for a rescue, as it does adrift with an empty one.
+static constexpr float LANDED_DRY = 6.0f;
+static bool landedDry() {
+    return app.state == LANDED && !app.spacewalking && app.lander.fuel < LANDED_DRY;
 }
 
 static void updateSuit(float dt) {
@@ -3489,6 +3533,7 @@ static std::string objective() {
     if (!(app.flags & App::F_LANDED)) return "Land the ship: slow, upright, on level ground";
     if (!(app.flags & App::F_POST)) return "Step out (E) and walk to the trading post";
     if (!(app.flags & App::F_SOLD)) return "Sell something at the trading post";
+    if (!(app.flags & App::F_FUELED)) return "Make fuel: cut plants for carbon, then F in the ship";
     if (!hasCutter()) return "Buy the terrain cutter (10 ferrite: mine rocks with the laser)";
     if (!((app.everHeld >> Trade::CALCITE) & 1u)) return "Bring back calcite from a cave (under a mesa)";
     if (app.upgrades[Trade::Seals] < 1) return "Get Seals I at a trader, for worlds without air";
@@ -7091,6 +7136,8 @@ static void syncDebugFromJS() {
     // Newer knobs: fall back to the built-in default when the page predates them.
     gDebug.fuelBurn         = EM_ASM_DOUBLE({ return window.DBG.fuelBurn !== undefined ? window.DBG.fuelBurn : $0; }, gDebug.fuelBurn);
     gDebug.refuelRate       = EM_ASM_DOUBLE({ return window.DBG.refuelRate !== undefined ? window.DBG.refuelRate : $0; }, gDebug.refuelRate);
+    gDebug.startFuel        = EM_ASM_DOUBLE({ return window.DBG.startFuel !== undefined ? window.DBG.startFuel : $0; }, gDebug.startFuel);
+    gDebug.fuelPerCarbon    = EM_ASM_DOUBLE({ return window.DBG.fuelPerCarbon !== undefined ? window.DBG.fuelPerCarbon : $0; }, gDebug.fuelPerCarbon);
     gDebug.cameraHorizon    = EM_ASM_DOUBLE({ return window.DBG.cameraHorizon !== undefined ? window.DBG.cameraHorizon : $0; }, gDebug.cameraHorizon);
     gDebug.horizonHaze      = EM_ASM_DOUBLE({ return window.DBG.horizonHaze !== undefined ? window.DBG.horizonHaze : $0; }, gDebug.horizonHaze);
     gDebug.foreground       = EM_ASM_DOUBLE({ return window.DBG.foreground !== undefined ? window.DBG.foreground : $0; }, gDebug.foreground);
@@ -7722,6 +7769,13 @@ static void mainLoop() {
         }
     }
 
+    // F aboard makes fuel from carbon (on foot the same key breathes it).
+    if (!app.spacewalking) {
+        bool fuelKey = live && Input::isKeyDown(KEY_F);
+        if (fuelKey && !app.prevAirKey) makeFuel();
+        app.prevAirKey = fuelKey;
+    }
+
     // Advance the solar system, then re-pick the body the ship answers to.
     // While landed/spacewalking the dominant body is frozen: you're ON it, and
     // letting it flip (e.g. tidal tug-of-war on a moon) would teleport the
@@ -7835,7 +7889,13 @@ static void mainLoop() {
             app.lander.pos = body.center + app.lander.landingOffset;
             app.lander.vel = body.orbitVel;
             updateContact();                 // keep altitude readout fresh
-            // A safe landing is a pit stop: the tank tops itself back up.
+            // Too little in the tank to get anywhere: R calls for a rescue.
+            if (step == 0 && restartPressed && landedDry()) {
+                rescue();
+                break;
+            }
+            // (Off by default: fuel is made from carbon. The knob is kept for
+            // trying the old pit-stop refill.)
             if (gDebug.refuelRate > 0.0f && app.lander.fuel < maxFuel()) {
                 app.lander.fuel += gDebug.refuelRate * timeScale;
                 if (app.lander.fuel > maxFuel()) app.lander.fuel = maxFuel();
@@ -8231,13 +8291,14 @@ static void mainLoop() {
         int hazard = 0;
         float rate = suitRate(&hazard);
         float left = rate > 1e-6f ? app.suit / rate : -1.0f;
-        bool dry = app.state == PLAYING && app.lander.active && app.lander.fuel <= 0.0f;
+        // (Dry: adrift with an empty tank, or parked on too little to lift off.)
+        bool dry = (app.state == PLAYING && app.lander.active && app.lander.fuel <= 0.0f) || landedDry();
         EM_ASM({
-            if (window.updateGame) window.updateGame($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+            if (window.updateGame) window.updateGame($0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
         }, app.suit, left, hazard, (int)app.spacewalking, itemTotal(app.pack), packSize(), itemTotal(app.hold),
            holdSize(), app.cargo, maxCargo(), app.warp,
            app.astronaut.jetpackMax > 0.0f ? app.astronaut.jetpackFuel / app.astronaut.jetpackMax : 0.0f, (int)dry,
-           app.flares);
+           app.flares, haveItem(Trade::CARBON, true));
         std::string obj = app.titleOpen ? std::string() : objective();
         if (obj != app.objectiveShown) {
             app.objectiveShown = obj;

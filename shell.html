@@ -175,6 +175,14 @@
             background: rgba(255, 255, 255, 0.10);
             color: #fff;
         }
+        /* It goes by itself (showToast): it fades out, and a thin bar along
+           the bottom runs down until it does. */
+        #toast { transition: opacity 0.6s ease; overflow: hidden; }
+        #toast.fading { opacity: 0; }
+        #toast .timer { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%;
+                        background: rgba(143, 255, 224, 0.55); transform-origin: left; }
+        #toast.timed .timer { animation: toast-timer var(--toast-ms, 15000ms) linear forwards; }
+        @keyframes toast-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
         /* ---- Event banner (discoveries, first landings) ---- */
         #event {
@@ -760,8 +768,10 @@
         /* (Between the HUD and the right thumb's buttons, under the row.) */
         body.touch #toast { top: calc(58px + env(safe-area-inset-top)); right: auto; left: calc(190px + env(safe-area-inset-left));
                             max-width: min(300px, calc(100vw - 460px)); font-size: 12px; padding: 8px 36px 8px 11px;
-                            pointer-events: none; }
-        body.touch #toast-close { pointer-events: auto; }
+                            pointer-events: auto; cursor: pointer; }
+        /* (A tap anywhere on it closes it; the x is a proper thumb-sized button.) */
+        body.touch #toast-close { top: 4px; right: 4px; width: 36px; height: 36px; border-radius: 50%;
+                                  background: rgba(255, 255, 255, 0.12); color: #fff; font-size: 22px; line-height: 34px; }
         body.touch #pickups { right: calc(12px + env(safe-area-inset-right)); bottom: auto; top: calc(58px + env(safe-area-inset-top)); flex-direction: column; }
         body.touch #chat { left: calc(170px + env(safe-area-inset-left)); bottom: 10px; width: min(340px, calc(100vw - 440px)); }
         body.touch #chat-key { display: none; }
@@ -803,6 +813,7 @@
             <div class="label">FUEL <span id="hud-fuel">0/0</span></div>
             <div class="gauge"><div id="hud-fuel-fill" class="gauge-fill"></div></div>
         </div>
+        <div class="row in-ship"><span class="label">Carbon (F)</span><span id="hud-carbon">none</span></div>
         <div class="row in-flight"><span class="label">Altitude</span><span id="hud-alt">0</span></div>
         <div class="row in-flight"><span class="label">Velocity</span><span id="hud-vel">0.0</span></div>
         <div class="row in-flight" id="hud-warp-row" style="display:none"><span class="label">Time warp (T)</span><span id="hud-warp"></span></div>
@@ -925,6 +936,7 @@
             <button class="t-foot" data-key="71">Flare<span class="k">G</span></button>
             <button class="t-foot" data-key="67">Scan<span class="k">C</span></button>
             <button class="t-foot" data-key="70">Breathe<span class="k">F</span></button>
+            <button class="t-ship" data-key="70">Fuel<span class="k">F</span></button>
             <button class="t-fly" data-key="84">Warp<span class="k">T</span></button>
             <button data-key="77">Map<span class="k">M</span></button>
             <button data-act="bag">Bag<span class="k">Tab</span></button>
@@ -963,6 +975,7 @@
         <button id="toast-close" type="button" aria-label="Dismiss">&times;</button>
         <div class="title" id="toast-title"></div>
         <div class="body" id="toast-body"></div>
+        <div class="timer"></div>
     </div>
 
     <button id="debug-toggle">&#9776; Debug</button>
@@ -1055,7 +1068,7 @@
             var DEFAULTS = {
                 // thrust 0.15 = the original game's tuning: thrust-to-weight
                 // ~1.25 at the home surface, enough to climb out to space.
-                thrust: 0.15, maxFuel: 160, fuelBurn: 0.05, refuelRate: 0.25,
+                thrust: 0.15, maxFuel: 160, fuelBurn: 0.05, refuelRate: 0, startFuel: 20, fuelPerCarbon: 8,
                 beamRange: 300, beamWidth: 20,
                 planetDensity: 0.025, atmosphereScale: 0.4, atmosphereDrag: 0.015,
                 atmRayleighH: 1.5, atmRimH: 7.5, atmMieH: 2.0, atmSunIntensity: 44.0, atmExtinction: 4.5,
@@ -1073,7 +1086,9 @@
                 { key: 'thrust',           label: 'Thrust',               min: 0.01,  max: 0.5,  step: 0.005 },
                 { key: 'maxFuel',          label: 'Stock Fuel Tank',      min: 25,    max: 1000, step: 5 },
                 { key: 'fuelBurn',         label: 'Fuel Burn (per frame)', min: 0.01, max: 0.3,  step: 0.01 },
-                { key: 'refuelRate',       label: 'Refuel While Landed',  min: 0,     max: 2.0,  step: 0.05 },
+                { key: 'refuelRate',       label: 'Refuel While Landed (old free fuel)', min: 0, max: 2.0, step: 0.05 },
+                { key: 'startFuel',        label: 'Fuel at the Start',    min: 0,     max: 400,  step: 5 },
+                { key: 'fuelPerCarbon',    label: 'Fuel per Carbon (F)',  min: 1,     max: 40,   step: 1 },
                 { key: 'beamRange',        label: 'Beam Range',           min: 50,    max: 800,  step: 10 },
                 { key: 'beamWidth',        label: 'Beam Width',           min: 5,     max: 200,  step: 1 },
                 { key: 'planetDensity',    label: 'Gravity (all bodies)', min: 0.005, max: 0.2, step: 0.005 },
@@ -1131,7 +1146,7 @@
             // every slider whenever any one was touched — so it is dropped and
             // the current default takes over. Add an entry here whenever a
             // default changes.
-            var SUPERSEDED = { cameraGroundZoom: [0.2], frontVeil: [0.55], maxFuel: [250] };
+            var SUPERSEDED = { cameraGroundZoom: [0.2], frontVeil: [0.55], maxFuel: [250], refuelRate: [0.25] };
 
             var DBG = Object.assign({}, DEFAULTS);
             if (DEBUG_MODE) try {
@@ -1269,15 +1284,39 @@
                 toastTitle = document.getElementById('toast-title');
                 toastBody = document.getElementById('toast-body');
                 toastClose = document.getElementById('toast-close');
-                toastClose.addEventListener('click', function () {
+                function dismiss(e) {
+                    if (e) { e.preventDefault(); e.stopPropagation(); }
                     spacewalkToastDismissed = true;
-                    toastEl.style.display = 'none';
+                    hideToast();
+                }
+                toastClose.addEventListener('click', dismiss);
+                // On a phone the whole card is the close button.
+                toastEl.addEventListener('pointerdown', function (e) {
+                    if (document.body.classList.contains('touch')) dismiss(e);
                 });
             }
-            function showToast(title, body) {
+            // A toast goes by itself after ms: it fades, then it is gone. Closing
+            // it by hand (or a new one) cancels that.
+            var toastTimer = null, toastFade = null;
+            function hideToast() {
+                clearTimeout(toastTimer); clearTimeout(toastFade);
+                toastEl.classList.remove('timed', 'fading');
+                toastEl.style.display = 'none';
+            }
+            function showToast(title, body, ms) {
+                hideToast();
                 toastTitle.textContent = title;
                 toastBody.textContent = body;
                 toastEl.style.display = 'block';
+                if (ms) {
+                    toastEl.style.setProperty('--toast-ms', ms + 'ms');
+                    void toastEl.offsetWidth;           // (restart the bar)
+                    toastEl.classList.add('timed');
+                    toastTimer = setTimeout(function () {
+                        toastEl.classList.add('fading');
+                        toastFade = setTimeout(hideToast, 600);
+                    }, ms);
+                }
             }
             // "Where am I": the world the ship answers to, plus chart progress.
             window.updateNav = function (world, kind, system, found, total, seed) {
@@ -1989,7 +2028,7 @@
                 document.getElementById('hud-obj-text').textContent = text;
             };
             var HAZARDS = ['Breathable', 'No air', 'Cold', 'Heat', 'Toxic air'];
-            window.updateGame = function (suit, left, hazard, onFoot, packN, packMax, holdN, holdMax, cows, cowMax, warp, jet, dry, flares) {
+            window.updateGame = function (suit, left, hazard, onFoot, packN, packMax, holdN, holdMax, cows, cowMax, warp, jet, dry, flares, carbon) {
                 document.getElementById('hud-hold').textContent = holdN + '/' + holdMax + '  ·  cows ' + cows + '/' + cowMax;
                 var foot = document.getElementById('hud-foot');
                 foot.style.display = onFoot ? 'block' : 'none';
@@ -2012,6 +2051,11 @@
                 wr.style.display = warp > 1 ? 'flex' : 'none';
                 document.getElementById('hud-warp').textContent = '×' + warp;
                 dryTank = !!dry;
+                document.body.classList.toggle('dry', dryTank && !onFoot);
+                // Aboard: the carbon you carry is fuel in reserve (F makes it).
+                var cb = document.getElementById('hud-carbon');
+                cb.textContent = carbon > 0 ? carbon + '  \u2192 ' + Math.round(carbon * (window.DBG.fuelPerCarbon || 8)) + ' fuel' : 'none';
+                cb.style.color = carbon > 0 ? '' : '#8a96a3';
             };
             var dryTank = false;
 
@@ -2234,14 +2278,14 @@
             window.updateHUD = function (fuel, maxFuel, altitude, velocity, state, cargo, maxCargo, score, spacewalking) {
                 if (!fuelEl) cache();
                 var enteredSpacewalk = !!spacewalking && !wasSpacewalking;
-                if (!spacewalking && wasSpacewalking) {
-                    spacewalkToastDismissed = false;
-                    toastEl.style.display = 'none';
-                }
+                // The on-foot help: it shows each time you step out, until you
+                // close it yourself (then not again this session), and goes by
+                // itself after a while either way.
+                if (!spacewalking && wasSpacewalking) hideToast();
                 if (enteredSpacewalk && !spacewalkToastDismissed && document.body.classList.contains('touch')) {
-                    showToast('On foot', 'Left stick: walk. Flick it up to jump, hold it up for the jetpack. Right stick: aim the tool, push it right over to fire. Tool switches laser, cutter and sword. Use trades at a stall and boards the ship. Breathe tops the SUIT up with carbon.');
+                    showToast('On foot', 'Left stick: walk. Flick it up to jump, hold it up for the jetpack. Right stick: aim the tool, push it right over to fire. Tool switches laser, cutter and sword. Use trades at a stall and boards the ship. Breathe tops the SUIT up with carbon.', 10000);
                 } else if (enteredSpacewalk && !spacewalkToastDismissed) {
-                    showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor. Q switches the hand tool (or 1, 2, 3): mining laser, terrain cutter once you own one, and the light sword, which cuts toward the cursor with each click. Draw it when something comes for you: crawlers at night, bats in the caves. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.');
+                    showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor. Q switches the hand tool (or 1, 2, 3): mining laser, terrain cutter once you own one, and the light sword, which cuts toward the cursor with each click. Draw it when something comes for you: crawlers at night, bats in the caves. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.', 20000);
                 }
                 wasSpacewalking = !!spacewalking;
                 // On foot the pointer aims the hand tool, and the HUD says which mode it is in.
@@ -2271,8 +2315,11 @@
                         msgEl.style.display = 'none';
                     } else {
                         statusEl.textContent = 'LANDED';
-                        msgEl.innerHTML = onPad ? 'LANDED SAFELY<div class="sub">Out to step out &nbsp;·&nbsp; push the stick up to lift off</div>'
-                                                : 'LANDED SAFELY<div class="sub">E exit ship &nbsp;·&nbsp; hold W to lift off</div>';
+                        msgEl.innerHTML = dryTank
+                            ? (onPad ? 'TANK EMPTY<div class="sub">Fuel turns carbon into fuel &nbsp;·&nbsp; Rescue costs your cargo</div>'
+                                     : 'TANK EMPTY<div class="sub">F turns carbon into fuel &nbsp;·&nbsp; E to go and cut plants for it &nbsp;·&nbsp; R to call a rescue (your cargo is lost)</div>')
+                            : (onPad ? 'LANDED SAFELY<div class="sub">Out to step out &nbsp;·&nbsp; push the stick up to lift off</div>'
+                                     : 'LANDED SAFELY<div class="sub">E exit ship &nbsp;·&nbsp; F makes fuel from carbon &nbsp;·&nbsp; hold W to lift off</div>');
                     }
                 } else if (state === 2) {
                     statusEl.textContent = 'CRASHED';
@@ -2284,8 +2331,8 @@
                     statusEl.textContent = 'NO FUEL';
                     statusEl.style.color = '#ff7a6c';
                     msgEl.style.display = 'block';
-                    msgEl.innerHTML = onPad ? 'OUT OF FUEL<div class="sub">a rescue costs you your cargo</div>'
-                                            : 'OUT OF FUEL<div class="sub">R to call for a rescue (your cargo is lost)</div>';
+                    msgEl.innerHTML = onPad ? 'OUT OF FUEL<div class="sub">Fuel turns carbon into fuel &nbsp;&middot;&nbsp; Rescue costs your cargo</div>'
+                                            : 'OUT OF FUEL<div class="sub">F turns carbon you carry into fuel &nbsp;&middot;&nbsp; R to call for a rescue (your cargo is lost)</div>';
                 } else {
                     statusEl.textContent = 'FLYING';
                     statusEl.style.color = '#e8eef5';
@@ -2859,7 +2906,9 @@
                 pad.classList.toggle('panel', panel);
                 ebtn.classList.toggle('ready', prompt.classList.contains('show'));
                 // Crashed or out of fuel: the Rescue button (the keyboard's R).
-                pad.classList.toggle('stranded', /CRASHED|NO FUEL/.test(document.getElementById('hud-status').textContent));
+                // (Or parked on too little to lift off: body.dry, from updateGame.)
+                pad.classList.toggle('stranded', /CRASHED|NO FUEL/.test(document.getElementById('hud-status').textContent) ||
+                                                 document.body.classList.contains('dry'));
             }
             setInterval(sync, 150);
             sync();

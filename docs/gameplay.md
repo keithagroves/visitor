@@ -106,10 +106,18 @@ is not saved in the first version; what you built is.
 world and landing on it first pay credits (the locals buy your survey), in
 place of the old score bonuses.
 
-**10. Fuel stays free on the ground.** The tank refills while landed, as
-now. Fuel is a limit on one hop — can I get there and get down — not a thing
-to buy or mine. Landing is already hard; being broke and stranded is not the
-kind of hard we want. *Revisit* once the loop is fun.
+**10. Fuel is made from carbon.** (Changed 2026-11-27: it used to refill
+for free on every landing.) The ship drops in with a little over what a shaky
+landing takes (20 of the stock 160) and landing no longer tops it up. **F
+aboard** turns carbon into fuel, 8 a piece, as much as the tank has room for:
+from the pack, then the hold, parked or adrift. Carbon comes from cutting
+plants, and from crawlers and bats. So mining feeds flying, the carbon you
+carry is both your air and your range, and a world with nothing growing (a
+moon) is somewhere you bring your way home to. What keeps it from stranding
+anyone: landed on under 6 fuel, **R calls a rescue** (as adrift with an empty
+tank: the cargo is lost), and a rescue always sets you down on a world where
+plants grow, with 20 fuel. Arriving in a new system after a jump starts on 20
+too. The tank is saved; a bigger tank is room, not fuel.
 
 **11. The terrain cutter is the first thing you buy.** You start with the
 mining laser only. Natural caves are the way underground until the cutter;
@@ -399,9 +407,10 @@ Good ideas that wait until the loop above is fun. Parked, not dropped:
 
 ## Keys
 
-Ship: W thrust, A/D turn, Space tractor beam, E step out, M map, **T time
-warp** (open space only), **J jump** (star drive, clear of every world), **R
-rescue** (after a crash, or adrift with an empty tank). On foot: A/D walk,
+Ship: W thrust, A/D turn, Space tractor beam, E step out, **F make fuel
+from carbon**, M map, **T time warp** (open space only), **J jump** (star
+drive, clear of every world), **R rescue** (after a crash, adrift with an
+empty tank, or parked on too little to lift off). On foot: A/D walk,
 W jump, Space jetpack, mouse fires the tool (with the sword out, each click
 is a cut), **Q laser / cutter / sword, or 1 / 2 / 3**, **F breathe carbon**,
 **C scan**, E trade / board, Tab pack and hold. The right mouse button is
@@ -415,10 +424,11 @@ transmits** (global chat).
   climb to the moon's distance, ~89 to escape the home world, ~40 more to
   land in another planet's gravity well, 4-8 for a careful landing. The
   stock tank is 160: the moon with room to spare, not another planet in one
-  hop. But the tank refills on any landing, and the moon sits high in the
-  home world's gravity well, so a good pilot can hop home -> moon -> planet
-  on the stock tank. That is a skill shortcut, not a bug; the suit and the
-  recipes still gate what you can do when you get there.
+  hop. Fuel is made from carbon at 8 a piece (decision 10), so a full tank is
+  20 carbon and the moon trip about 11; the moon grows none, so the way home
+  has to be carried there. Coming down from the drop takes ~2.5 with a
+  perfect burn (the atmosphere does most of the braking), and 6 or so in a
+  headless test of the autopilot; the ship starts with 20.
 - **Never played through end to end.** Every step is tested on its own in
   the browser (title, recipes, pack and hold, suit and blackout, gold wall,
   scanner, crash and rescue, warp, jump into a new system with everything
@@ -468,8 +478,9 @@ after playing, because each changes how the whole game feels:
 
 - **The suit meter** (5). The biggest change: it adds pressure to walking
   around, which is calm today. The home world stays calm either way.
-- **Free fuel** (10). The safe choice. The braver one — fuel made from
-  carbon — ties mining to flying and makes dead worlds dangerous to visit.
+- **Fuel made from carbon** (10). Built 2026-11-27, in place of free fuel on
+  every landing: ties mining to flying and makes dead worlds dangerous to
+  visit. Worth watching how long the first trip off the home world takes.
 - **Trading from the hold only when parked close** (6). Rewards a precise
   landing; punishes a sloppy one with walking.
 - **Leaving as the goal** (1), rather than building something where you are.

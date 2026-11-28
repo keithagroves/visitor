@@ -38,7 +38,7 @@ sequenceDiagram
         Loop->>L: updateBeam(planet) — build tractor cone
         Loop->>Cows: runBeamGrab() + cow.update() → cargo/score
     else state == LANDED
-        Loop->>L: stick to body, share its velocity, refuel; thrust key → liftOff()
+        Loop->>L: stick to body, share its velocity (no free refuel: F makes fuel from carbon); R rescues when the tank is dry; thrust key → liftOff()
         Loop->>Cows: cow.update() — a cow over a fresh hole falls in
     else state == CRASHED
         Loop->>L: wreck stays on the body; R key → resetGame()
