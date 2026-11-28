@@ -837,7 +837,7 @@
         <div class="row in-ship"><span class="label">Charted</span><span id="hud-charted">0/0</span></div>
         <div class="row" id="hud-trader-row" style="display:none"><span class="label">Trader</span><span id="hud-trader"></span></div>
         <div class="row" id="hud-online-row" style="display:none"><span class="label">Online</span><span id="hud-online"></span></div>
-        <div class="keys"><span><b>M</b> map</span><span class="in-flight"><b>T</b> time warp</span><span class="on-foot"><b>Q</b> tool</span><span class="on-foot"><b>F</b> breathe</span><span class="on-foot"><b>G</b> flare</span><span><b>Tab</b> inventory</span><span><b>Wheel</b> zoom</span><span id="chat-key"><b>Enter</b> transmit</span></div>
+        <div class="keys"><span><b>M</b> map</span><span class="in-flight"><b>T</b> time warp</span><span class="on-foot"><b>Shift</b> slide</span><span class="on-foot"><b>Q</b> tool</span><span class="on-foot"><b>F</b> breathe</span><span class="on-foot"><b>G</b> flare</span><span><b>Tab</b> inventory</span><span><b>Wheel</b> zoom</span><span id="chat-key"><b>Enter</b> transmit</span></div>
     </div>
 
     <div id="nav-labels"></div>
@@ -958,12 +958,12 @@
             <div class="title-note" id="title-note"></div>
             <div class="title-keys">
                 <div><b>Ship</b> W thrust &middot; A/D turn &middot; Space tractor beam &middot; E step out &middot; M map &middot; T time warp &middot; Enter transmit</div>
-                <div><b>On foot</b> A/D walk &middot; W jump &middot; Space jetpack &middot; mouse fires the tool &middot; Q (or 1/2/3) laser / cutter / sword &middot; F breathe carbon &middot; C scan &middot; E trade / board &middot; Tab inventory</div>
+                <div><b>On foot</b> A/D walk &middot; W jump &middot; Space jetpack &middot; Shift slide &middot; mouse fires the tool &middot; Q (or 1/2/3) laser / cutter / sword &middot; F breathe carbon &middot; C scan &middot; E trade / board &middot; Tab inventory</div>
                 <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
             </div>
             <div class="title-keys touch-keys">
                 <div><b>Ship</b> left stick turns &middot; push it up, or hold <b>Thrust</b>, to burn &middot; <b>Beam</b> tractor beam &middot; <b>Out</b> step out</div>
-                <div><b>On foot</b> left stick walks &middot; flick it up to jump, hold it up for the jetpack &middot; right stick aims the tool, pushed right over it fires &middot; <b>Tool</b> laser / cutter / sword &middot; <b>Use</b> trade / board &middot; pinch to zoom</div>
+                <div><b>On foot</b> left stick walks &middot; flick it up to jump, hold it up for the jetpack, pull it down to slide &middot; right stick aims the tool, pushed right over it fires &middot; <b>Tool</b> laser / cutter / sword &middot; <b>Use</b> trade / board &middot; pinch to zoom</div>
                 <div>Land gently: slow, upright, on level ground. The game saves when you land and when you trade.</div>
             </div>
         </div>
@@ -1075,7 +1075,7 @@
                 cloudHeight: 0.8, cloudCoverage: 1.0, cloudFalloff: 0.65, cloudGroundClear: 200, spaceHaze: 1.0,
                 nightDarkness: 0.16, nightSoftness: 0.30,
                 cameraGroundZoom: 1.8, cameraFraming: 0.4, cameraHorizon: 0.14, cameraSpeedLook: 2.2,
-                walkSpeed: 2.4, jumpSpeed: 3.0, jetpackThrust: 0.115,
+                walkSpeed: 2.4, jumpSpeed: 3.0, jetpackThrust: 0.115, slideGrip: 0.99,
                 crawlers: 1.0, bats: 1.0, bite: 0.12, plume: 1.0, flameBlue: 0, caveDark: 1.0, caveLamp: 115, caveLampBright: 0.05, caveSwordBright: 0.9, caveSwordReach: 100, caveJetLight: 130, liftDelay: 1.0, liftSpool: 1.5,
                 horizonHaze: 0.7, foreground: 1.0, vignette: 0.35, motes: 0, frontVeil: 0.45,
                 holeFloor: 0.34, holeDepth: 150, oreRichness: 1.0, oreBurn: 3.0,
@@ -1113,6 +1113,7 @@
                 { key: 'walkSpeed',        label: 'Walk Speed',           min: 0.5,   max: 18.0, step: 0.1 },
                 { key: 'jumpSpeed',        label: 'Jump Speed',           min: 0.5,   max: 10.0, step: 0.1 },
                 { key: 'jetpackThrust',    label: 'Jetpack Thrust (home gravity 0.1)', min: 0.0, max: 0.4, step: 0.005 },
+                { key: 'slideGrip',        label: 'Slide: speed kept per frame (walking 0.85)', min: 0.9, max: 1.0, step: 0.001 },
                 { key: 'crawlers',         label: 'Night crawlers (0 = none, 1 = 2-4 at a time)', min: 0.0, max: 3.0, step: 0.1 },
                 { key: 'bats',             label: 'Cave bats (0 = none, 1 = beside a third of the stalactites)', min: 0.0, max: 3.0, step: 0.1 },
                 { key: 'bite',             label: 'Crawler bite, share of the suit meter (a bat: 2/3)', min: 0.0, max: 0.5, step: 0.01 },
@@ -2283,9 +2284,9 @@
                 // itself after a while either way.
                 if (!spacewalking && wasSpacewalking) hideToast();
                 if (enteredSpacewalk && !spacewalkToastDismissed && document.body.classList.contains('touch')) {
-                    showToast('On foot', 'Left stick: walk. Flick it up to jump, hold it up for the jetpack. Right stick: aim the tool, push it right over to fire. Tool switches laser, cutter and sword. Use trades at a stall and boards the ship. Breathe tops the SUIT up with carbon.', 10000);
+                    showToast('On foot', 'Left stick: walk. Flick it up to jump, hold it up for the jetpack, pull it down to slide. Right stick: aim the tool, push it right over to fire. Tool switches laser, cutter and sword. Use trades at a stall and boards the ship. Breathe tops the SUIT up with carbon.', 10000);
                 } else if (enteredSpacewalk && !spacewalkToastDismissed) {
-                    showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Hold the mouse button to fire the mining laser at the cursor. Q switches the hand tool (or 1, 2, 3): mining laser, terrain cutter once you own one, and the light sword, which cuts toward the cursor with each click. Draw it when something comes for you: crawlers at night, bats in the caves. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.', 20000);
+                    showToast('On foot', 'A/D walk, W jump, Space jetpack (in water W swims up, S dives). Shift slides: down a hill it carries you, and off a run it keeps going. Hold the mouse button to fire the mining laser at the cursor. Q switches the hand tool (or 1, 2, 3): mining laser, terrain cutter once you own one, and the light sword, which cuts toward the cursor with each click. Draw it when something comes for you: crawlers at night, bats in the caves. Your pack is small: Tab shows it, and boarding the ship (E) puts it in the hold. Watch the SUIT bar on worlds without good air; F breathes carbon to top it up. E at a stall trades with the locals.', 20000);
                 }
                 wasSpacewalking = !!spacewalking;
                 // On foot the pointer aims the hand tool, and the HUD says which mode it is in.

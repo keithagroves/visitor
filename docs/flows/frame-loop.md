@@ -46,7 +46,7 @@ sequenceDiagram
     opt spacewalking
         Loop->>A: carry by the body's orbitStep
         Loop->>P: focusCarve() — keep the fine dig layer around the player
-        Loop->>In: pollInputAstronaut() (walk/jump/jetpack, swim up / dive in water), Q switches tool
+        Loop->>In: pollInputAstronaut() (walk/jump/jetpack, Shift or down slides, swim up / dive in water), Q switches tool
         Loop->>A: update(planet, timeScale)
     end
     Loop->>P: Outposts::update() — the locals wander, look, wave; which trader is in reach (E trades)

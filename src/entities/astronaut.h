@@ -50,6 +50,11 @@ public:
     static constexpr float SWIM_LIFT        = 1.15f;
     static constexpr float SWIM_DIVE        = 0.9f;
     static constexpr float WET_FULL         = 20.0f;  // water this far over the feet = fully in
+    // Sliding (Shift, or down on dry ground): feet first, nearly no friction,
+    // so a slope carries you down it and a run carries on a long way. The
+    // friction kept per frame is gDebug.slideGrip; walking does nothing while
+    // you slide. Not in water over the shins (SLIDE_WET).
+    static constexpr float SLIDE_WET        = 0.35f;
 
     void spawn(Vec2 position);
 
@@ -77,6 +82,8 @@ public:
     bool  jetting     = false;
     bool  active      = false;
     bool  aiming      = false;   // set by the caller while the tool (laser / cutter) fires
+    bool  slideHeld   = false;   // set by the caller each frame: the slide is asked for
+    bool  sliding     = false;   // ...and we are on the ground sliding (update)
     Vec2  aimWorld;              // what the laser is pointed at (world space)
     // The light sword (main.cpp, updateSword). swordOut: it is the tool in
     // hand (held lit at a guard; put away, the hilt hangs at the hip).
@@ -103,6 +110,7 @@ public:
     float stride      = 0.0f;
     float air         = 0.0f;
     float aim         = 0.0f;
+    float slidePose   = 0.0f;    // 0..1 into the slide's pose
     float jumpGrace   = 0.0f;    // frames left in which a fresh jump can't be re-grounded
     // Water: how far in (0 = dry .. 1 = over the chest), how deep the chest
     // is under the surface (negative: that far above it; only meaningful

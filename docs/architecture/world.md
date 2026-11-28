@@ -239,8 +239,13 @@ flowchart TD
   the most level ground a couple of dozen looks turn up that is dry, clear
   of mesas (and so of caves) and well apart from the others. The home
   world's first post is always a short walk — 700 to 1500 units — from
-  where the ship drops in. Every world gets at least one. Plants and stones
-  are cleared off the ground a post stands on. A post is a domed hut, a
+  where the ship drops in. Every world gets at least one. Its ground is
+  paved (`Outposts::drawGround`, drawn flat on the strip before the ground
+  shadows): four staggered courses of flagstones out to `PAVED` (=
+  `NO_DIG`, 215) either side of the stall, a kerb in the people's paint at
+  each end and a small stone lamp just inside it, lit at night. That is
+  the ground the cutter won't cut (it says so) and the edge the night
+  crawlers dig back in at. Plants and stones are cleared off it. A post is a domed hut, a
   market stall with the **trader** behind its counter, a mast with a
   lantern, a crate and a pot, standing on the strip of ground just behind
   the walking line (so the ship and the astronaut pass in front), and one

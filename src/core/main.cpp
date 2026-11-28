@@ -1431,6 +1431,8 @@ struct App {
     int crawlerPlanet = -1;
     float crawlerSpawnIn = 2.5f;    // seconds until the next one may come up
     bool crawlersMet = false;       // the first one has been announced (this session)
+    bool pavingSeen = false;        // ...and the first to give up at a post's paving
+    float pavedNoticeIn = 0.0f;     // seconds before the cutter says again that paving won't cut
     bool bittenOnce = false;        // ...and the first bite
     bool batsMet = false;           // ...and the first bat waking
     float swordT = -1.0f;           // seconds into the current swing (< 0 = not swinging)
@@ -2997,9 +2999,10 @@ static void updateSuit(float dt) {
 // click is a cut across the line to the cursor, any direction. A hit freezes
 // the fight for an instant and pushes you back; cutting DOWN onto one in
 // mid-air bounces you off it (a pogo). Two cuts kill a crawler, one a bat;
-// each leaves a little carbon — air for the suit. Crawlers will not come near
-// a trading post's lantern, don't come up under you when you are
-// underground, and dig back in when the sun reaches them.
+// each leaves a little carbon — air for the suit. Crawlers don't come up
+// near a trading post and dig back in at the edge of its paving, don't come
+// up under you when you are underground, and dig back in when the sun
+// reaches them.
 // ============================================================================
 static constexpr float NIGHT_SPAWN = -0.12f;        // sun height (dot) below which they come up
 static constexpr float SWORD_CUT = 0.17f;           // seconds the blade takes across the arc
@@ -3279,6 +3282,7 @@ static void updateEnemies(float dt, float timeScale, bool live) {
     app.biteCooldown = std::max(0.0f, app.biteCooldown - dt);
     app.hurtFlash = std::max(0.0f, app.hurtFlash - dt / 0.6f);
     app.equipHintIn = std::max(0.0f, app.equipHintIn - dt);
+    app.pavedNoticeIn = std::max(0.0f, app.pavedNoticeIn - dt);
     if (!live) return;
     // A sword hit has the fight frozen for an instant.
     if (app.hitStop > 0.0f) { app.hitStop -= dt; return; }
@@ -3304,7 +3308,7 @@ static void updateEnemies(float dt, float timeScale, bool live) {
                     app.crawlersMet = true;
                     showEvent("Something is coming up out of the ground",
                               "Night crawlers hunt after dark. Q (or 3) draws your light sword; click to cut. "
-                              "They keep away from the lanterns at a trading post.");
+                              "They won't cross the paving round a trading post.");
                 }
                 app.crawlerSpawnIn = (5.0f + 4.0f * fxRand()) / std::max(0.2f, gDebug.crawlers);
             }
@@ -3324,7 +3328,16 @@ static void updateEnemies(float dt, float timeScale, bool live) {
     for (Crawler& c : app.crawlers) {
         Crawler::State before = c.state;
         bool pouncing = c.update(p, s, dt, timeScale);
-        if (before != Crawler::State::Burrowing && c.state == Crawler::State::Burrowing) crawlerDirt(p, c.local, 6);
+        if (before != Crawler::State::Burrowing && c.state == Crawler::State::Burrowing) {
+            crawlerDirt(p, c.local, 6);
+            // The first time one gives up at the edge of a post's paving
+            // (while you can see it): say so.
+            if (!app.pavingSeen && app.spacewalking && Outposts::onPaving(p, p.center + c.local, 40.0f) &&
+                (c.local - me).length() < 600.0f) {
+                app.pavingSeen = true;
+                notice("The crawler dug back in: they won't cross a trading post's paving");
+            }
+        }
         if (c.alive() && c.state != Crawler::State::Burrowing && (c.local - me).length() < 380.0f) engaged = true;
         if (!pouncing || !app.spacewalking || app.biteCooldown > 0.0f) continue;
         if ((chest - c.bodyCenter()).length() > c.radius() + 11.0f) continue;
@@ -4664,8 +4677,13 @@ static void updateLaser(float dt, float time) {
             // Not under the ship: it stands on the terrain's outline, and
             // would be left hanging over the hole. Nor under a trading post,
             // for the same reason (and it would be rude).
-            bool nearShip = dist(hit.x, hit.y, app.lander.pos.x, app.lander.pos.y) < 90.0f ||
-                            Outposts::blocksDig(p, hit, CUT_RADIUS);
+            bool paved = Outposts::blocksDig(p, hit, CUT_RADIUS);
+            bool nearShip = dist(hit.x, hit.y, app.lander.pos.x, app.lander.pos.y) < 90.0f || paved;
+            // (Say why, now and then, while the cutter is held on it.)
+            if (paved && app.pavedNoticeIn <= 0.0f) {
+                notice("The ground round a trading post is paved: the cutter won't cut it");
+                app.pavedNoticeIn = 4.0f;
+            }
             Vec2 c = hit - dir * (CUT_RADIUS - CUT_BITE);
             // Ore stops the cutter: a bite that would cut into a clump is
             // refused, and leaves it showing in the wall for the mining
@@ -5757,7 +5775,11 @@ static void pollInputAstronaut(float timeScale) {
     if (jumpKey && a.grounded) a.jump(p);
     // In water the same key swims up (and holds you at the surface); S dives.
     else if (jumpKey) a.swim(p, timeScale, +1);
-    if (Input::isKeyDown(Input::KEY_S) || Input::isKeyDown(Input::KEY_DOWN)) a.swim(p, timeScale, -1);
+    bool downKey = Input::isKeyDown(Input::KEY_S) || Input::isKeyDown(Input::KEY_DOWN);
+    if (downKey) a.swim(p, timeScale, -1);
+    // Shift slides (and so does down, on dry ground: the touch pad's stick
+    // pulled down). Read by Astronaut::update.
+    a.slideHeld = Input::isKeyDown(Input::KEY_SHIFT) || downKey;
 
     a.jetting = false;
     // On the touch pad's stick up is the jump, and held on once you are off
@@ -5769,6 +5791,22 @@ static void pollInputAstronaut(float timeScale) {
     bool stickJet = app.stickAir > (a.wet > 0.0f ? STICK_JET_WET : STICK_JET_AFTER);
     if (Input::isKeyDown(Input::KEY_SPACE) || stickJet) a.jetpack(p, timeScale);
 
+}
+
+// Sliding fast kicks up the ground in front of the boots (clods of it, in its colour).
+static void slideDust(float timeScale) {
+    const Astronaut& a = app.astronaut;
+    if (!a.sliding) return;
+    float speed = a.vel.length();
+    if (speed < 0.8f || fxRand() > std::min(1.0f, (speed - 0.6f) * 0.35f) * timeScale) return;
+    const Planet& p = dominantPlanet();
+    Vec2 up = (a.pos - p.center).normalize(), fwd = Vec2(-up.y, up.x) * (float)a.facing;
+    Vec2 at = a.pos - up * NearField::WALK_DROP + fwd * 15.0f;
+    float g[3];
+    p.groundTone(a.pos - up * 6.0f, g);
+    const float col[3] = {g[0] * 0.85f, g[1] * 0.85f, g[2] * 0.85f};
+    Vec2 v = fwd * (speed * (0.7f + 0.5f * fxRand())) + up * (0.35f + 0.6f * fxRand());
+    spawnParticle(at, v, 0.35f + 0.25f * fxRand(), 0.7f + 0.7f * fxRand(), col, 7);
 }
 
 // One step for the herd; a cow that reaches the hatch is cargo.
@@ -7154,6 +7192,7 @@ static void syncDebugFromJS() {
     gDebug.walkSpeed        = EM_ASM_DOUBLE({ return window.DBG.walkSpeed !== undefined ? window.DBG.walkSpeed : $0; }, gDebug.walkSpeed);
     gDebug.jumpSpeed        = EM_ASM_DOUBLE({ return window.DBG.jumpSpeed !== undefined ? window.DBG.jumpSpeed : $0; }, gDebug.jumpSpeed);
     gDebug.jetpackThrust    = EM_ASM_DOUBLE({ return window.DBG.jetpackThrust !== undefined ? window.DBG.jetpackThrust : $0; }, gDebug.jetpackThrust);
+    gDebug.slideGrip        = EM_ASM_DOUBLE({ return window.DBG.slideGrip !== undefined ? window.DBG.slideGrip : $0; }, gDebug.slideGrip);
     gDebug.crawlers         = EM_ASM_DOUBLE({ return window.DBG.crawlers !== undefined ? window.DBG.crawlers : $0; }, gDebug.crawlers);
     gDebug.bats             = EM_ASM_DOUBLE({ return window.DBG.bats !== undefined ? window.DBG.bats : $0; }, gDebug.bats);
     gDebug.bite             = EM_ASM_DOUBLE({ return window.DBG.bite !== undefined ? window.DBG.bite : $0; }, gDebug.bite);
@@ -7944,6 +7983,7 @@ static void mainLoop() {
         if (app.hitStop <= 0.0f) {
             pollInputAstronaut(timeScale);
             app.astronaut.update(dominantPlanet(), timeScale);
+            slideDust(timeScale);
         }
 
         // Q cycles the hand tool: mining laser, terrain cutter (once you
@@ -8145,8 +8185,10 @@ static void mainLoop() {
     // 2a) Long cast shadows from peaks, darkening the valleys behind them.
     drawTerrainShadows(viewMat);
 
-    // 2b) Ground shadows + cows, on top of the shaded body.
+    // 2b) The paving round the trading posts, flat on the ground; then the
+    //     ground shadows + cows, on top of the shaded body.
     app.renderer.begin(viewMat, app.width, app.height);
+    Outposts::drawGround(app.renderer, dominantPlanet(), nearFrame(shaderTime));
     drawEntityShadows();
     for (const Cow& cow : app.cows) cow.draw(app.renderer, homePlanet());
     app.renderer.end();

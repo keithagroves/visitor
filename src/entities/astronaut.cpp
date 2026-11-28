@@ -89,6 +89,9 @@ void Astronaut::spawn(Vec2 position) {
     swimAnim      = 0.0f;
     swimGo        = 0.0f;
     stroking      = false;
+    slideHeld     = false;
+    sliding       = false;
+    slidePose     = 0.0f;
     muzzleWorld   = position;
     swing         = -1.0f;
     blade         = 0.0f;           // stepping out with the sword drawn, it lights up
@@ -104,7 +107,10 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     // where, so gravity nudging us into a slope and the collision nudging us
     // back out can't add up to a slow creep downhill.
     bool wasGrounded = grounded;
-    bool resting = wasGrounded && !walkRequested && !jetting && jumpGrace <= 0.0f;
+    // Sliding: asked for, on the ground and not wading. (No standing still:
+    // a slope is meant to take you.)
+    bool slide = slideHeld && wasGrounded && wet < SLIDE_WET && !jetting;
+    bool resting = wasGrounded && !walkRequested && !jetting && jumpGrace <= 0.0f && !slide;
     Vec2 restPos = pos;
 
     // 1/r² gravity toward planet center (same formula as the cow's Falling state).
@@ -171,8 +177,10 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     // Stay on the ground when it falls away gently (walking downhill, over a
     // crest): if we were standing and there is floor just below, step down
     // onto it instead of going airborne for a frame at a time.
+    // (Sliding fast, the ground falls away further in a frame: reach further.)
     if (!contact && wasGrounded && !jetting && jumpGrace <= 0.0f) {
-        for (float k = 1.0f; k <= STEP_DOWN; k += 1.0f) {
+        float reach = STEP_DOWN + (slide ? vel.length() * 1.5f : 0.0f);
+        for (float k = 1.0f; k <= reach; k += 1.0f) {
             if (planet.rockAt(pos - up * k) > -FOOT_R) {
                 pos = pos - up * (k - 1.0f);
                 float outward = vel.x * up.x + vel.y * up.y;
@@ -192,7 +200,7 @@ void Astronaut::update(const Planet& planet, float timeScale) {
         // Surface friction damps tangential drift. WALK_DAMP is the factor for
         // one 60 fps frame; raise it to the frame's length so friction (and
         // with it the walking speed) is the same at 30, 60 or 120 fps.
-        float damp = powf(WALK_DAMP, timeScale);
+        float damp = powf(slide ? gDebug.slideGrip : WALK_DAMP, timeScale);
         vel.x *= damp;
         vel.y *= damp;
 
@@ -201,6 +209,12 @@ void Astronaut::update(const Planet& planet, float timeScale) {
         jetpackFuel = charged < jetpackMax ? charged : jetpackMax;
     }
 
+    sliding = slide && grounded;
+    if (sliding) {
+        // Facing the way we are going (feet first).
+        float along = -vel.x * outY + vel.y * outX;
+        if (fabsf(along) > 0.3f) facing = along > 0.0f ? 1 : -1;
+    }
     walking = grounded && walkRequested;
     if (walking) {
         // Advance the run cycle (4 units per cycle) by the ground actually
@@ -222,6 +236,7 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     ease(stride, walking ? 1.0f : 0.0f, 0.30f);
     ease(air, grounded ? 0.0f : 1.0f, 0.28f);
     ease(aim, aiming ? 1.0f : 0.0f, 0.40f);
+    ease(slidePose, sliding ? 1.0f : 0.0f, sliding ? 0.35f : 0.18f);
     // The light sword's blade: out when it is drawn, in when it is put away
     // (at once if the laser is already firing: that hand is busy).
     if (swordOut || swing >= 0.0f) blade = std::min(1.0f, blade + timeScale / (60.0f * SWORD_IGNITE));
@@ -274,6 +289,7 @@ void Astronaut::move(const Planet& planet, float timeScale, int dir) {
     // This tangent resolves to screen-right after the camera rolls gravity down.
     float tx = -dy / d;
     float ty =  dx / d;
+    if (grounded && slideHeld && wet < SLIDE_WET) return;   // sliding: the legs are out in front
     facing = dir;
     if (grounded) {
         // Each frame friction removes (1 - damp) of the velocity; putting
@@ -350,7 +366,13 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     Pose jet{-6.0f, -18.0f, -15.0f, -32.0f, 16.0f, 42.0f, -12.0f, 8.0f, 7.0f};
 
     float airW = air;
+    // Sliding, feet first: the near leg out straight ahead, the far one
+    // tucked under, leaning back on the near arm with the other up for
+    // balance.
+    Pose slidePoseP{80.0f, 86.0f, 34.0f, -62.0f, -48.0f, -30.0f, 62.0f, 112.0f, -26.0f};
+
     Pose pose = mix(idle, run, stride);
+    pose = mix(pose, slidePoseP, slidePose);
     pose = mix(pose, jetting ? jet : jump, airW);
     // In the water: treading it upright (legs pedalling, arms sculling out
     // to the sides), or — travelling along — stretched out forward in a

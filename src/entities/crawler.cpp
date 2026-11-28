@@ -21,9 +21,9 @@ constexpr float POUNCE_APEX = 20.0f;    // how high a pounce goes, world units
 constexpr float HOP_HEIGHT = 30.0f;     // over a step it can't walk up
 constexpr float LOSE_INTEREST = 5.0f;   // seconds with nobody to hunt before it digs in
 constexpr float GIVE_UP = 1800.0f;      // along the ground: too far to bother
-// The lantern at a trading post keeps them off: they won't come nearer to
-// the stall than this, along the ground.
-constexpr float POST_KEEPOUT = 320.0f;
+// A trading post's paving (Outposts::PAVED) is where their ground ends: one
+// that comes this near its kerb, going that way, digs back in.
+constexpr float PAVING_EDGE = 14.0f;
 constexpr float WALK_DAMP = 0.85f;
 
 Vec2 upOf(Vec2 v) {
@@ -217,17 +217,20 @@ bool Crawler::update(const Planet& p, const Senses& s, float dt, float timeScale
         return false;
     }
 
-    // Hold back where going on would take it into a post's lantern light or
-    // into the water.
-    bool hold = false;
+    // At a trading post's paving it gives up and digs back in (on the earth
+    // just short of the kerb: it can't dig the stone). So it does if it
+    // finds itself on the paving at all — knocked or leapt onto it.
     {
         float toPost = 0.0f;
-        if (Outposts::nearest(p, p.center + local, &toPost) >= 0) {
+        if (Outposts::nearest(p, p.center + local, &toPost) >= 0 && grounded) {
             float ahead = toPost * (float)dir;            // > 0: the post lies the way it is going
-            if (ahead > 0.0f && fabsf(toPost) < POST_KEEPOUT + 20.0f) hold = true;
-            // Caught inside it (the player led it there): back out.
-            if (fabsf(toPost) < POST_KEEPOUT - 10.0f) { dir = toPost > 0.0f ? -1 : 1; hold = false; }
+            float edge = fabsf(toPost) - Outposts::PAVED;
+            if ((ahead > 0.0f && edge < PAVING_EDGE) || edge < 0.0f) { retreat(); return false; }
         }
+    }
+    // Hold back where going on would take it into the water.
+    bool hold = false;
+    {
         if (p.waterDepth(p.center + local + tangent * (16.0f * (float)dir) + up * 2.0f) > 4.0f) hold = true;
     }
 

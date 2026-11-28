@@ -30,6 +30,11 @@ constexpr float TRADE_REACH = 85.0f;
 // The cutter leaves the ground around a post alone (the post stands on the
 // terrain's outline, like the ship, and would be left hanging over a hole).
 constexpr float NO_DIG = 215.0f;
+// ...and that ground is paved, so you can see where it ends: flagstones out
+// this far either side of the stall (along the ground), a kerb in the
+// people's paint and a stone lamp at each end. It is also where the night
+// crawlers' ground ends: one that reaches the kerb digs back in.
+constexpr float PAVED = NO_DIG;
 // The wanderers keep within this far of the stall, along the ground.
 constexpr float WANDER = 170.0f;
 
@@ -47,6 +52,9 @@ int nearest(const Planet& p, Vec2 world, float* along);
 int inReach(const Planet& p, Vec2 world);
 // Would a cutter bite (a circle, world space) cut into a post's ground?
 bool blocksDig(const Planet& p, Vec2 world, float radius);
+// Is a world point on (or over) a post's paving, along the ground? (`margin`
+// widens it.)
+bool onPaving(const Planet& p, Vec2 world, float margin = 0.0f);
 
 // A post closes for the night: when the sun at it is this far below the
 // horizon (the dot of "up" there with the way to the sun), and opens again
@@ -67,6 +75,9 @@ void update(Planet& p, float dt, Vec2 visitor, bool present, Vec2 toSun);
 // air. `active` is the post whose trader can be traded with right now (-1 =
 // none): it gets a little speech bubble.
 void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPerUnit, int active);
+// The paving, flat on the ground strip: drawn before anything stands or
+// casts a shadow on it (after the body pass, before the ground shadows).
+void drawGround(Renderer2D& r, const Planet& p, const NearField::Frame& f);
 
 // A few words in the trader's own tongue (the same every visit).
 std::string phrase(const Planet::Outpost& o);

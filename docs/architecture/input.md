@@ -46,7 +46,7 @@ flowchart TD
   allows (Android).
   - **Left stick** (moves): the thumb comes down anywhere in the lower left
     and that is the stick's middle. Past a threshold a direction is its key —
-    A / D, W (thrust, or jump), S (dive) — pressed through the exported
+    A / D, W (thrust, or jump), S (slide on the ground, dive in water) — pressed through the exported
     `inputKey(code, down)` (each press held at least 110 ms so a quick flick
     still lands on a frame). `inputStick(x, y)` also says how far it is
     pushed (`Input::stickX/Y`): the ship turns by that, so a small push is a

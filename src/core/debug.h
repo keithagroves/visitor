@@ -71,6 +71,11 @@ struct Debug {
     // there (net 0.015 against 0.15): a full tank climbs ~430 in ~4 s, where
     // 0.25 went up thousands. Under 0.1 it would only slow a fall at home.
     float jetpackThrust = 0.115f;
+    // Sliding (Shift): the share of speed kept each frame on the ground
+    // (walking keeps 0.85). At 0.99 a slope of 20 degrees at home gravity
+    // settles near 3.4 units/frame, 35 degrees near 5.7; a 2.4 run slides on
+    // ~240 units over flat ground.
+    float slideGrip = 0.99f;
     // How far below screen center the ship sits when on the ground (fraction of
     // screen height): puts the horizon on the lower third so the sky gets the
     // frame. Eases back to centered as the ship climbs.

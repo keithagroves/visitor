@@ -233,8 +233,10 @@ is my call, not yet confirmed.
 - **A kill leaves carbon** — 2 from a crawler, 1 from a bat. Carbon is air
   (decision 5): fighting pays back a little of what it costs.
 - **Shelter.** None come up near a trading post (450 along the ground),
-  and none come nearer to its lantern than 320: a post is safe ground at
-  night. None come up while you are underground (they will follow you into
+  and one that reaches the edge of its paving (215 either side of the
+  stall, a kerb in the locals' paint and a lamp at each end) digs back in:
+  a post is safe ground at night. The paving is also why the cutter won't
+  dig there. None come up while you are underground (they will follow you into
   a hole they can drop into). They stop at the water's edge. In the ship
   you are out of reach; they give up after a few seconds.
 - **Dawn.** When the sun reaches a crawler it digs back in.

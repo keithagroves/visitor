@@ -122,6 +122,14 @@ flowchart TD
   jetpack works as in air. Flooded tunnels are the same water. The `swim`
   pose blend takes over off the bottom: treading upright (legs pedalling,
   arms sculling) or, travelling, stretched forward in a crawl.
+  **Sliding** (`slideHeld`, set by the core loop from Shift or down on
+  dry ground): on the ground and not wading (`SLIDE_WET`), friction drops
+  to `gDebug.slideGrip` (0.99 kept per frame, against walking's 0.85) and
+  the stand-still lock is off, so gravity takes you down a slope and a run
+  carries on ~200 units on the flat; walking does nothing meanwhile, and
+  the step-down reaches further with speed so a fast slide keeps to the
+  ground. Feet-first `slidePose`; the core loop kicks dirt off the boots
+  (`slideDust`).
   Mirrored by `facing`. Palette: off-white suit, one
   shade tone, dark boots/gloves/visor, one orange accent, the ship's teal in
   the visor.
@@ -136,9 +144,10 @@ flowchart TD
   (`update()` returns true; the core loop tests the bite). Then
   `Recovering` (0.55 s standing there: the opening), back to prowling.
   A sword hit knocks it back (`Staggered`); the second kills it (`Dying`).
-  It holds back at the edge of a trading post's lantern light
-  (`POST_KEEPOUT`, 320 along the ground) and at the water's edge, and digs
-  back in (`Burrowing` → `Gone`) when the sun reaches it, when it has had
+  It holds back at the water's edge, and digs back in (`Burrowing` →
+  `Gone`) when it reaches a trading post's paving (`Outposts::PAVED`,
+  within `PAVING_EDGE` of the kerb, going that way — or if it finds itself
+  on it), when the sun reaches it, when it has had
   nobody to hunt for five seconds, or when you are 1800 away. Physics is
   the astronaut's recipe — gravity, the rock itself (`rockAt`), a step down
   — with one body circle, but kept **planet-local** (`local` = feet

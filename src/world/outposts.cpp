@@ -84,6 +84,13 @@ const float MAST_X = 52.0f,   MAST_DEPTH = -13.0f;
 const float TRADER_DEPTH = -11.0f;
 const float STALL_DEPTH = -6.0f;
 const float CRATE_DEPTH = -3.0f;
+const float EDGE_LAMP_DEPTH = -12.0f;
+// The paving's courses (rows of flagstones), by depth: from the terrain
+// line at the back (groundDrop = 0 at -20.3) to a front edge out on the
+// strip. Each a little deeper than the one behind it, as a nearer row would be.
+const float COURSES[] = {-19.5f, -8.0f, 4.0f, 17.0f, 31.0f};
+const int N_COURSES = 4;
+const float KERB = 7.0f;            // the kerb's width, along the ground, at each end
 // The stall: how high its counter and its awning's back edge stand, and the
 // step the trader stands on behind the counter (so more than a pair of eyes
 // shows over it).
@@ -498,11 +505,11 @@ void Planet::foundOutposts(const TerrainStyle& style) {
         if (best < 1e8f) add(bestA);
     }
 
-    // Nothing grows where they have built.
+    // Nothing grows where they have built: the paving and a little past it.
     if (!outposts.empty() && !harvest.empty()) {
         harvest.erase(std::remove_if(harvest.begin(), harvest.end(), [&](const Harvestable& h) {
             for (const Outpost& o : outposts)
-                if (std::fabs(wrapDeg(h.angle - o.angle)) * perDeg < 150.0f) return true;
+                if (std::fabs(wrapDeg(h.angle - o.angle)) * perDeg < Outposts::PAVED + 12.0f) return true;
             return false;
         }), harvest.end());
     }
@@ -554,6 +561,11 @@ bool blocksDig(const Planet& p, Vec2 world, float radius) {
         if (dist(world.x, world.y, g.x, g.y) < NO_DIG + radius) return true;
     }
     return false;
+}
+
+bool onPaving(const Planet& p, Vec2 world, float margin) {
+    float along = 0.0f;
+    return nearest(p, world, &along) >= 0 && std::fabs(along) < PAVED + margin;
 }
 
 void update(Planet& p, float dt, Vec2 visitor, bool present, Vec2 toSun) {
@@ -655,13 +667,40 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
         // Which side the sun is on, for the hut's lit face.
         float sunSide = (-sind(o.angle) * f.toSun.x + cosd(o.angle) * f.toSun.y) >= 0.0f ? 1.0f : -1.0f;
         // Points that glow, collected for one additive pass at the end.
-        Vec2 glowAt[2];
-        float glowR[2], glowA[2];
+        Vec2 glowAt[4];
+        float glowR[4], glowA[4];
         int glows = 0;
         auto toWorld = [&](Vec2 base, float ang, float lx, float ly) {
             float c = cosd(ang + 90.0f), s = sind(ang + 90.0f);
             return Vec2(base.x + lx * c - ly * s, base.y + lx * s + ly * c);
         };
+
+        // ---- The edge of town: a stone lamp at each end of the paving ----------
+        // (Behind the walking line, so you walk past in front of it.)
+        for (int side = -1; side <= 1; side += 2) {
+            const float LH = 21.0f, LW = 3.6f;
+            Vec2 b = basePoint(p, o, side * (PAVED - KERB - 12.0f), EDGE_LAMP_DEPTH, 0.0f, &a);   // (just inside the kerb)
+            if (p.overWater(a)) continue;
+            r.pushMatrix();
+            r.translate(b.x, b.y);
+            r.rotate(a + 90.0f);
+            paint.lit(wallShade);
+            r.quad(-LW - 1.2f, 0, LW + 1.2f, 0, LW, -LH, -LW, -LH);
+            paint.lit(wall);
+            r.quad(-LW * 0.2f + sunSide * 0.8f, 0, LW + 1.2f * (sunSide > 0 ? 1.0f : 0.0f), 0,
+                   LW * (sunSide > 0 ? 1.0f : 0.2f), -LH, -LW * 0.2f, -LH);
+            paint.lit(accent);                                  // a painted band
+            r.quad(-LW - 0.6f, -LH * 0.42f, LW + 0.6f, -LH * 0.42f, LW + 0.5f, -LH * 0.58f, -LW - 0.5f, -LH * 0.58f);
+            // The lamp on top: lit glass under a dark cap.
+            paint.lit(ink);
+            r.quad(-LW - 0.8f, -LH - 6.5f, LW + 0.8f, -LH - 6.5f, LW - 0.6f, -LH - 8.5f, -LW + 0.6f, -LH - 8.5f);
+            paint.raw(mixc(mul(lamp, 0.75f), lamp, night));
+            r.quad(-LW + 0.6f, -LH, LW - 0.6f, -LH, LW - 0.2f, -LH - 6.5f, -LW + 0.2f, -LH - 6.5f);
+            r.popMatrix();
+            glowAt[glows] = toWorld(b, a, 0.0f, -LH - 3.5f);
+            glowR[glows] = 16.0f;
+            glowA[glows++] = (0.05f + 0.36f * night) * (0.86f + 0.14f * sinf(t * 1.3f + side + o.angle));
+        }
 
         // ---- The hut: a dome of the world's pale rock --------------------------
         {
@@ -884,6 +923,75 @@ void draw(Renderer2D& r, const Planet& p, const NearField::Frame& f, float pxPer
             r.setBlend(Renderer2D::Blend::Additive);
             for (int g = 0; g < glows; g++) halo(r, glowAt[g].x, glowAt[g].y, glowR[g], lamp, glowA[g] * f.strength);
             r.setBlend(Renderer2D::Blend::Normal);
+        }
+    }
+}
+
+void drawGround(Renderer2D& r, const Planet& p, const NearField::Frame& f) {
+    if (p.outposts.empty() || f.strength <= 0.01f) return;
+    float perDeg = p.baseRadius * DEG2RAD;
+    float span = f.halfSpanDeg + (PAVED + 40.0f) / perDeg;
+    // Flat on the ground in the hour's light, like the ground itself (not
+    // lifted at night, as what stands on it is).
+    Paint paint{r, Rgb{f.light[0], f.light[1], f.light[2]}, f.strength};
+    const Rgb stone = mixc(rgb(p.look.tones[3]), Rgb{0.86f, 0.82f, 0.74f}, 0.45f);
+    const Rgb stoneB = mul(stone, 0.91f);                    // every so often a darker one
+    const Rgb joint = mixc(mul(stone, 0.58f), rgb(p.look.tones[1]), 0.35f);
+    const Rgb kerb = dye(p.folk.accent);
+    const Rgb kerbTop = mixc(kerb, Rgb{1.0f, 1.0f, 1.0f}, 0.22f);
+
+    // A point on the ground plane: `x` along the ground from the stall, at a depth.
+    auto at = [&](const Planet::Outpost& o, float x, float depth) {
+        float a = o.angle + x / perDeg;
+        float rr = p.surfaceRadius(a) - NearField::groundDrop(depth);
+        return Vec2(p.center.x + cosd(a) * rr, p.center.y + sind(a) * rr);
+    };
+    // A patch of it, x0..x1 by d0..d1, in pieces no longer than ~20 along
+    // so it follows the ground's curve.
+    auto patch = [&](const Planet::Outpost& o, float x0, float x1, float d0, float d1) {
+        int n = std::max(1, (int)std::ceil((x1 - x0) / 20.0f));
+        for (int i = 0; i < n; i++) {
+            float u0 = x0 + (x1 - x0) * i / n, u1 = x0 + (x1 - x0) * (i + 1) / n;
+            Vec2 a0 = at(o, u0, d0), a1 = at(o, u1, d0), b1 = at(o, u1, d1), b0 = at(o, u0, d1);
+            r.quad(a0.x, a0.y, a1.x, a1.y, b1.x, b1.y, b0.x, b0.y);
+        }
+    };
+    const float GAP = 1.3f;                                  // the joints, along the ground
+    const float GAP_D = 1.6f;                                // ...and between courses (depth)
+    for (const Planet::Outpost& o : p.outposts) {
+        if (std::fabs(wrapDeg(o.angle - f.viewAngle)) > span) continue;
+        float lo = -PAVED, hi = PAVED;
+        // The bed the stones are set in: the joints' color.
+        paint.lit(joint);
+        patch(o, lo, hi, COURSES[0], COURSES[N_COURSES]);
+        // The stones, course by course, staggered, each its own length.
+        for (int c = 0; c < N_COURSES; c++) {
+            unsigned int h = o.seed * 2654435761u + (unsigned int)c * 40503u + 17u;
+            auto rnd = [&h]() { h ^= h << 13; h ^= h >> 17; h ^= h << 5; return (h & 0xffffu) / 65536.0f; };
+            float d0 = COURSES[c] + (c == 0 ? 0.0f : GAP_D * 0.5f);
+            float d1 = COURSES[c + 1] - (c == N_COURSES - 1 ? 0.0f : GAP_D * 0.5f);
+            float x = lo + KERB - rnd() * 22.0f;
+            while (x < hi - KERB) {
+                float len = 22.0f + rnd() * 18.0f;
+                float x0 = std::max(x, lo + KERB) + GAP * 0.5f, x1 = std::min(x + len, hi - KERB) - GAP * 0.5f;
+                bool dark = rnd() < 0.3f;
+                x += len;
+                if (x1 - x0 < 3.0f) continue;
+                if (p.overWater(o.angle + (x0 + x1) * 0.5f / perDeg)) continue;
+                paint.lit(dark ? stoneB : stone);
+                patch(o, x0, x1, d0, d1);
+            }
+        }
+        // The kerbs, in the people's paint: where their ground ends.
+        for (int side = -1; side <= 1; side += 2) {
+            float x0 = side < 0 ? lo : hi - KERB, x1 = side < 0 ? lo + KERB : hi;
+            if (p.overWater(o.angle + (x0 + x1) * 0.5f / perDeg)) continue;
+            paint.lit(kerb);
+            patch(o, x0, x1, COURSES[0], COURSES[N_COURSES]);
+            // ...lit along its top edge.
+            float xi = side < 0 ? x1 - 2.2f : x0, xo = side < 0 ? x1 : x0 + 2.2f;
+            paint.lit(kerbTop);
+            patch(o, std::min(xi, xo), std::max(xi, xo), COURSES[0], COURSES[N_COURSES]);
         }
     }
 }
