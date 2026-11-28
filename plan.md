@@ -21,6 +21,10 @@ Decisions already made:
 
 Each stage leaves the game playable.
 
+**The big universe** — a galaxy map of all 999,998 systems, jumping where
+you choose, and naming the worlds you chart — is planned (not built) in
+[docs/universe.md](docs/universe.md) (2026-11-27).
+
 **What the game IS** — goal, loop, the equipment ladder, what failing costs —
 is decided in [docs/gameplay.md](docs/gameplay.md) (2026-11-22), and all of
 its build order was built on 2026-11-23: saving, the equipment ladder, pack
