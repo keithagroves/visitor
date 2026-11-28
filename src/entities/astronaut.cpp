@@ -95,6 +95,10 @@ void Astronaut::spawn(Vec2 position) {
     muzzleWorld   = position;
     swing         = -1.0f;
     blade         = 0.0f;           // stepping out with the sword drawn, it lights up
+    swordAng      = SWORD_REST;
+    swingDir      = 1;
+    faceAim       = false;
+    backpedal     = 0.0f;
 }
 
 void Astronaut::update(const Planet& planet, float timeScale) {
@@ -216,11 +220,14 @@ void Astronaut::update(const Planet& planet, float timeScale) {
         if (fabsf(along) > 0.3f) facing = along > 0.0f ? 1 : -1;
     }
     walking = grounded && walkRequested;
+    bool backing = false;
     if (walking) {
         // Advance the run cycle (4 units per cycle) by the ground actually
-        // covered along the surface.
-        float along = fabsf(-vel.x * outY + vel.y * outX);
-        walkAnim += along * timeScale * (4.0f / STRIDE_CYCLE);
+        // covered along the surface. Facing what the tool points at and
+        // going the other way, the cycle runs in reverse: backing off.
+        float along = -vel.x * outY + vel.y * outX;
+        backing = faceAim && along * (float)facing < -0.05f;
+        walkAnim += (backing ? -fabsf(along) : fabsf(along)) * timeScale * (4.0f / STRIDE_CYCLE);
     } else {
         walkAnim += timeScale * 0.05f;
     }
@@ -237,6 +244,7 @@ void Astronaut::update(const Planet& planet, float timeScale) {
     ease(air, grounded ? 0.0f : 1.0f, 0.28f);
     ease(aim, aiming ? 1.0f : 0.0f, 0.40f);
     ease(slidePose, sliding ? 1.0f : 0.0f, sliding ? 0.35f : 0.18f);
+    ease(backpedal, backing ? 1.0f : 0.0f, 0.25f);
     // The light sword's blade: out when it is drawn, in when it is put away
     // (at once if the laser is already firing: that hand is busy).
     if (swordOut || swing >= 0.0f) blade = std::min(1.0f, blade + timeScale / (60.0f * SWORD_IGNITE));
@@ -290,7 +298,7 @@ void Astronaut::move(const Planet& planet, float timeScale, int dir) {
     float tx = -dy / d;
     float ty =  dx / d;
     if (grounded && slideHeld && wet < SLIDE_WET) return;   // sliding: the legs are out in front
-    facing = dir;
+    if (!faceAim) facing = dir;
     if (grounded) {
         // Each frame friction removes (1 - damp) of the velocity; putting
         // exactly that share of walkSpeed back makes the speed settle at
@@ -339,6 +347,11 @@ void Astronaut::jetpack(const Planet& planet, float timeScale) {
     jetting = true;
 }
 
+float Astronaut::swordHeld() const {
+    float ahead = fmodf(swordAng * (float)facing - 90.0f + 900.0f, 360.0f) - 180.0f;   // off straight ahead
+    return (90.0f + std::clamp(ahead, -HOLD_TURN, HOLD_TURN)) * (float)facing;
+}
+
 void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     if (!active) return;
 
@@ -371,6 +384,7 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
     // balance.
     Pose slidePoseP{80.0f, 86.0f, 34.0f, -62.0f, -48.0f, -30.0f, 62.0f, 112.0f, -26.0f};
 
+    run.lean -= 13.0f * backpedal;     // backing off: upright, a touch back on the heels
     Pose pose = mix(idle, run, stride);
     pose = mix(pose, slidePoseP, slidePose);
     pose = mix(pose, jetting ? jet : jump, airW);
@@ -415,15 +429,17 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
         pose.lean *= 1.0f - aim;
     }
 
-    // The light sword. Drawn (swordOut), it is held lit in the near hand at
-    // a guard: arm forward, blade up and forward. A swing is a chop across
-    // the line from the shoulder to where it was swung, from well above it
-    // to well below (SWING_HALF either side), fast at first and easing out
-    // (swing 0..1, the arm and blade in one line, the far arm coming across,
-    // the body leaning in); then straight back to the guard (1..1+SWORD_BACK).
-    // The blade flares while it cuts and settles back to its held glow.
-    const float SWING_HALF = 75.0f, BLADE = 40.0f;
-    const float GUARD_ARM = 30.0f, GUARD_FORE = 80.0f, GUARD_BLADE = 150.0f;
+    // The light sword. Drawn (swordOut), it is held lit in the near hand and
+    // pointed where swordAng says (at the cursor): the elbow bent, the fist
+    // near that line, the blade along it. A swing is a short chop across the
+    // line at swingAng, from SWING_HALF one side of it to SWING_HALF the
+    // other, fast at first and easing out (swing 0..1, the arm and blade in
+    // one line, the far arm coming across, the body leaning in); then
+    // straight back to where it is held (1..1+SWORD_BACK). The blade flares
+    // while it cuts and settles back to its held glow.
+    const float SWING_HALF = 40.0f, BLADE = 40.0f;
+    const float HOLD_ARM = -30.0f, HOLD_FORE = 26.0f;    // the arm's two halves, off the blade's line
+    const float CUT_STRETCH = 0.25f;                     // how much longer the blade burns mid-cut
     bool swinging = swing >= 0.0f;
     bool bladeOut = swordOut || swinging || blade > 0.0f;
     // Lit, the blade shoots out of the hilt fast and slows to its full
@@ -432,38 +448,45 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
                                      : blade * blade;     // going in: from the first frame
     float bladeLen = BLADE * ext;
     float ignite = swordOut && blade < 1.0f ? 1.0f - blade : 0.0f;
-    float swingAt = 90.0f;                 // the line to the target (from straight down, + forward)
-    auto sweep = [&](float k) {
-        float e = 1.0f - (1.0f - k) * (1.0f - k);
-        return swingAt + SWING_HALF - 2.0f * SWING_HALF * e;
-    };
     auto towards = [](float from, float to, float k) {   // angles, the short way round
         float d = fmodf(to - from + 540.0f, 360.0f) - 180.0f;
         return from + d * k;
     };
-    float bladeDeg = GUARD_BLADE;          // which way the blade points
+    // Into the figure's own frame (from straight down, + forward).
+    float holdDeg = swordHeld() * (float)facing;
+    float swingAt = swingAng * (float)facing;            // the line the cut crosses
+    auto sweep = [&](float k) {
+        float e = 1.0f - (1.0f - k) * (1.0f - k);
+        return swingAt + (float)swingDir * SWING_HALF * (1.0f - 2.0f * e);
+    };
+    float bladeDeg = holdDeg;              // which way the blade points
     float flare = 0.0f;                    // 0 held .. 1 cutting: how bright it burns
-    float back = 0.0f;                     // 0..1 through the return to the guard
+    float back = 0.0f;                     // 0..1 through the return to the hold
     if (bladeOut) {
-        pose.armN = GUARD_ARM;
-        pose.foreN = GUARD_FORE;
+        pose.armN = holdDeg + HOLD_ARM;
+        pose.foreN = holdDeg + HOLD_FORE;
     }
     if (swinging) {
-        Vec2 v = swingAim - pos;
-        float ca = cosd(-standAngle), sa = sind(-standAngle);
-        Vec2 local((v.x * ca - v.y * sa) / SCALE * (float)facing, (v.x * sa + v.y * ca) / SCALE - drop);
-        swingAt = atan2d(local.x - shoulder.x, local.y - shoulder.y);
         float cutDeg = sweep(swing < 1.0f ? swing : 1.0f);
         back = swing > 1.0f ? std::min(1.0f, (swing - 1.0f) / SWORD_BACK) : 0.0f;
         float e = back * back * (3.0f - 2.0f * back);
-        pose.armN = towards(cutDeg, GUARD_ARM, e);
-        pose.foreN = towards(cutDeg, GUARD_FORE, e);
-        bladeDeg = towards(cutDeg, GUARD_BLADE, e);
+        pose.armN = towards(cutDeg, holdDeg + HOLD_ARM, e);
+        pose.foreN = towards(cutDeg, holdDeg + HOLD_FORE, e);
+        bladeDeg = towards(cutDeg, holdDeg, e);
         float w = 1.0f - e;
         pose.armF += (cutDeg - 25.0f - pose.armF) * 0.7f * w;
         pose.foreF += (cutDeg - 5.0f - pose.foreF) * 0.7f * w;
         pose.lean += (8.0f - pose.lean) * w;
         flare = 1.0f - e;
+        bladeLen *= 1.0f + CUT_STRETCH * flare;      // the cut reaches out
+    }
+    // The arm hangs off the leaning upper body: take the lean back out, so
+    // the blade points where it was told to whatever the body is doing.
+    const float swordLean = bladeOut ? pose.lean : 0.0f;
+    if (bladeOut) {
+        pose.armN += swordLean;
+        pose.foreN += swordLean;
+        bladeDeg += swordLean;
     }
     flare = std::max(flare, ignite * 0.8f);
 
@@ -613,7 +636,7 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
             const int SEG = 10;
             for (int i = 0; i < SEG && fade > 0.0f; i++) {
                 float ka = k0 + (k1 - k0) * (float)i / SEG, kb = k0 + (k1 - k0) * (float)(i + 1) / SEG;
-                Vec2 da = dirDown(sweep(ka)), db = dirDown(sweep(kb));
+                Vec2 da = dirDown(sweep(ka) + swordLean), db = dirDown(sweep(kb) + swordLean);
                 float aA = 0.6f * fade * (float)i / SEG, aB = 0.6f * fade * (float)(i + 1) / SEG;
                 Renderer2D::Color ca{livery.glow[0], livery.glow[1], livery.glow[2], aA};
                 Renderer2D::Color cb{livery.glow[0], livery.glow[1], livery.glow[2], aB};
@@ -622,6 +645,11 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
                 Vec2 ib = shoulder + db * (armLen + 4.0f), ob = shoulder + db * (armLen + bladeLen);
                 r.triangleV(ia, c0, oa, ca, ob, cb);
                 r.triangleV(ia, c0, ob, cb, ib, c0);
+                // The line the tip drew: a thin white edge on the fan.
+                Vec2 ra = shoulder + da * (armLen + bladeLen - 4.0f), rb = shoulder + db * (armLen + bladeLen - 4.0f);
+                Renderer2D::Color wa{1.0f, 1.0f, 1.0f, aA}, wb{1.0f, 1.0f, 1.0f, aB}, w0{1.0f, 1.0f, 1.0f, 0.0f};
+                r.triangleV(ra, w0, oa, wa, ob, wb);
+                r.triangleV(ra, w0, ob, wb, rb, w0);
             }
         }
         Vec2 d = dirDown(bladeDeg);
@@ -629,11 +657,11 @@ void Astronaut::draw(Renderer2D& r, const Planet& planet) const {
         bool lit = bladeLen > 3.0f;
         if (lit) {
             fillc(r, livery.glow, 0.16f + 0.40f * flare);
-            r.line(base.x, base.y, tip.x, tip.y, 7.0f + 6.0f * flare);
-            r.circle(tip.x, tip.y, 3.5f + 3.5f * flare, 12);
+            r.line(base.x, base.y, tip.x, tip.y, 7.0f + 3.0f * flare);
+            r.circle(tip.x, tip.y, 3.5f + 1.5f * flare, 12);
             if (flare > 0.0f) {
                 r.fill(1.0f, 1.0f, 1.0f, 0.30f * flare);       // the white heat of the cut
-                r.line(base.x, base.y, tip.x, tip.y, 5.0f);
+                r.line(base.x, base.y, tip.x, tip.y, 4.5f);
             }
             if (ignite > 0.0f) {
                 // Igniting: a burst at the emitter, and the tip running out

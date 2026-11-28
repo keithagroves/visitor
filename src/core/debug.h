@@ -139,8 +139,12 @@ struct Debug {
     float caveLampBright = 0.05f;
     // How brightly the drawn light sword lights the cave round you (0..1).
     float caveSwordBright = 0.9f;
-    // How far the drawn sword's light reaches (world units; a cut adds 40).
+    // How far the drawn sword's light reaches (world units; a cut adds a
+    // little).
     float caveSwordReach = 100.0f;
+    // How much of that light goes the way the blade points (0 = the same
+    // all round .. 0.9): that much further ahead, that much less far behind.
+    float caveSwordAim = 0.4f;
     // How far the jetpack's flame lights the cave while it fires (0 = none).
     float caveJetLight = 130.0f;
     // Lift-off like a rocket's: hold W on the pad and the engine burns this

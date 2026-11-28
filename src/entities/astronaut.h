@@ -86,11 +86,16 @@ public:
     bool  sliding     = false;   // ...and we are on the ground sliding (update)
     Vec2  aimWorld;              // what the laser is pointed at (world space)
     // The light sword (main.cpp, updateSword). swordOut: it is the tool in
-    // hand (held lit at a guard; put away, the hilt hangs at the hip).
+    // hand: held lit and pointed along swordAng (put away, the hilt hangs at
+    // the hip). Sword angles here are degrees from straight down, + toward
+    // screen right, so they mean the same whichever way the figure faces.
+    // The caller brings swordAng round after the cursor.
     // swing: how far through a swing we are, in units of the cut — 0..1 the
-    // cut across the line to `swingAim` (a world point), 1..1+SWORD_BACK the
-    // arm coming back to the guard; < 0 = not swinging.
+    // cut across the line at swingAng, 1..1+SWORD_BACK the arm coming back
+    // to where it is held; < 0 = not swinging. swingDir: +1 the cut comes
+    // down across the line, -1 back up it (the second of two quick cuts).
     static constexpr float SWORD_BACK = 0.6f;
+    static constexpr float SWORD_REST = 115.0f;   // held with nothing to point at: forward and a little up
     bool  swordOut    = false;
     // How far the blade is out of the hilt: 0 = off .. 1 = full length. Eased
     // in update(): it shoots out when the sword is drawn (SWORD_IGNITE
@@ -99,7 +104,19 @@ public:
     static constexpr float SWORD_RETRACT = 0.15f;
     float blade       = 0.0f;
     float swing       = -1.0f;
-    Vec2  swingAim;
+    float swordAng    = SWORD_REST;
+    // Which way the held blade is drawn pointing (same measure): swordAng,
+    // kept in front of the figure — it goes no further round behind than
+    // HOLD_TURN from straight ahead, so turning round, the blade comes over
+    // the top with us instead of reaching back over the pack.
+    static constexpr float HOLD_TURN = 115.0f;
+    float swordHeld() const;
+    float swingAng    = 90.0f;
+    int   swingDir    = 1;
+    // Set by the caller while the tool turns us to face what it points at:
+    // walking then does not turn us round (walk away from it and you back
+    // off, still facing it).
+    bool  faceAim     = false;
     Livery livery;               // the player's colour: the suit's trim and lights
     // Tip of the mining laser in world space, as last drawn — the caller
     // starts the beam here so it leaves the gun whatever the pose.
@@ -111,6 +128,7 @@ public:
     float air         = 0.0f;
     float aim         = 0.0f;
     float slidePose   = 0.0f;    // 0..1 into the slide's pose
+    float backpedal   = 0.0f;    // 0..1 walking backwards (facing one way, going the other)
     float jumpGrace   = 0.0f;    // frames left in which a fresh jump can't be re-grounded
     // Water: how far in (0 = dry .. 1 = over the chest), how deep the chest
     // is under the surface (negative: that far above it; only meaningful

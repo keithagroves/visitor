@@ -1009,6 +1009,7 @@ uniform float u_dark;           // 0 (on the surface) .. 1 (down a hole)
 const int MAX_LIGHTS = 24;
 uniform vec4 u_light[MAX_LIGHTS];   // xy, radius, strength
 uniform vec3 u_lightCol[MAX_LIGHTS];
+uniform vec2 u_lightAim[MAX_LIGHTS];  // which way it throws its light, times how much (0 = all round)
 uniform int u_lightCount;
 out vec4 fragColor;
 
@@ -1039,9 +1040,11 @@ void main() {
   for (int k = 0; k < MAX_LIGHTS; k++) {
     if (k >= u_lightCount) break;
     vec2 ld = world - u_light[k].xy;
-    float rr = u_light[k].z;
+    float dist = length(ld);
+    // A light that is aimed reaches further that way and less far behind.
+    float rr = u_light[k].z * (1.0 + dot(ld, u_lightAim[k]) / max(dist, 0.001));
     // Brightest at the light, falling off smoothly all the way out.
-    float t = 1.0 - clamp(length(ld) / rr, 0.0, 1.0);
+    float t = 1.0 - clamp(dist / rr, 0.0, 1.0);
     float f = u_light[k].w * t * t * (3.0 - 2.0 * t);
     lit += f;
     tint += u_lightCol[k] * f;
@@ -1439,6 +1442,8 @@ struct App {
     bool swordQueued = false;       // clicked mid-cut: swing again as soon as it ends
     int swingId = 0;                // numbers each swing: a crawler is hit at most once per swing
     Vec2 swordLocal;                // planet-local point the swing was aimed at
+    float swordRest = 9.0f;         // seconds since the last swing ended
+    float swordGlow = 0.0f;         // 0..1: the sword's light underground swelling on a cut, eased
     float biteCooldown = 0.0f;      // a moment after a bite in which another can't land
     float hurtFlash = 0.0f;         // 1 -> 0: red at the screen's edges after a bite
     float hitStop = 0.0f;           // seconds the fight freezes on a sword hit (the world goes on)
@@ -1535,6 +1540,7 @@ struct App {
     float stickAir = 0.0f;          // frames the left stick has been held up off the ground (then: jetpack)
     GLuint caveDarkProgram = 0;
     float jetGlow = 0.0f;   // the jetpack's light underground, eased 0..1
+    float fetchT = 0.0f;    // seconds left of the ship being lowered beside a post (tradeFetchShip)
     double plumeMs[3] = {0, 0, 0};  // dev: ms spent stepping it, ms drawing it, frames it was live (debugDump)
 
     // Previous-frame key states for edge-triggered actions (lift off / restart).
@@ -2318,7 +2324,7 @@ static void addCredits(int amount) {
 
 // The ship is parked on the world you are on, within `reach` of a point.
 static bool shipParkedNear(Vec2 world, float reach) {
-    return app.state == LANDED && app.stuckIdx == app.dominantIdx &&
+    return app.state == LANDED && app.stuckIdx == app.dominantIdx && app.fetchT <= 0.0f &&
            dist(world.x, world.y, app.lander.pos.x, app.lander.pos.y) < reach;
 }
 // A trader deals with the whole hold when the ship is parked this close to
@@ -2333,8 +2339,9 @@ static bool holdAtPost(int post) {
 static bool atShip() {
     if (app.state != LANDED) return false;
     if (!app.spacewalking) return true;
-    return dist(app.astronaut.pos.x, app.astronaut.pos.y, app.lander.pos.x, app.lander.pos.y) <
-           app.lander.radius * 4.0f;
+    return app.fetchT <= 0.0f &&
+           dist(app.astronaut.pos.x, app.astronaut.pos.y, app.lander.pos.x, app.lander.pos.y) <
+               app.lander.radius * 4.0f;
 }
 static int haveItem(int id, bool withHold) {
     return app.pack[id] + (withHold ? app.hold[id] : 0);
@@ -2413,6 +2420,24 @@ static bool canMakeFlares(bool hold) {
     return app.flares < App::FLARES_MAX && app.credits >= FLARE_CREDITS &&
            haveItem(Trade::CARBON, hold) >= FLARE_CARBON && haveItem(Trade::FERRITE, hold) >= FLARE_FERRITE;
 }
+// Your ship, brought to the post (the user, 2026-11-27: "You should be able
+// to pay to retrieve your ship from a station"). When it is parked out of
+// reach of the stall, a trader has it fetched for FETCH_CREDITS: the locals
+// lower it out of the sky onto the open end of the post's paving (FETCH_PAD
+// along from the stall, past the lantern mast: in view from the stall),
+// over FETCH_TIME seconds, with everything aboard as it was — the hold, the
+// cows, the fuel.
+static constexpr int FETCH_CREDITS = 40;
+static constexpr float FETCH_TIME = 3.2f;
+static constexpr float FETCH_HEIGHT = 520.0f;       // how far up it starts
+static constexpr float FETCH_PAD = 135.0f;          // along the ground from the stall to where it is set down
+static constexpr float POST_PARK = 330.0f;          // ...and to where a rescue sets you down (the other side, clear of the paving)
+// Is the ship somewhere it can be fetched from (parked on this world, you
+// out on foot, not already in reach of the post or on its way)?
+static bool shipToFetch(int post) {
+    return app.spacewalking && app.state == LANDED && app.stuckIdx == app.dominantIdx && app.fetchT <= 0.0f &&
+           !holdAtPost(post);
+}
 // Send the open panel its contents: who you are dealing with, whether the
 // hold is in reach, what they pay for each thing you have, the equipment
 // they can build (recipes with have / need), the goods they sell, and where
@@ -2471,6 +2496,10 @@ static void pushTrade() {
     j += ",\"flares\":{\"n\":" + num(app.flares) + ",\"max\":" + num(App::FLARES_MAX) + ",\"make\":" +
          num(FLARE_MAKE) + ",\"carbon\":" + num(FLARE_CARBON) + ",\"ferrite\":" + num(FLARE_FERRITE) +
          ",\"cr\":" + num(FLARE_CREDITS) + ",\"can\":" + num(canMakeFlares(hold) ? 1 : 0) + "}";
+    // Fetching the ship: is it away, is it on its way, what it costs.
+    j += ",\"fetch\":{\"away\":" + num(shipToFetch(app.tradePost) ? 1 : 0) + ",\"coming\":" +
+         num(app.fetchT > 0.0f ? 1 : 0) + ",\"cr\":" + num(FETCH_CREDITS) + ",\"can\":" +
+         num(shipToFetch(app.tradePost) && app.credits >= FETCH_CREDITS ? 1 : 0) + "}";
     // How full the pack and the hold are, and what the trader looks like
     // (Planet::Folk, and whether this post is one in the snow), for the
     // panel's portrait.
@@ -2619,6 +2648,30 @@ extern "C" EMSCRIPTEN_KEEPALIVE int tradeMakeFlares() {
     return got;
 }
 
+// Have the ship brought to the post whose panel is open (see FETCH_CREDITS).
+// It is moved to its place beside the post at once and held up in the sky;
+// the LANDED step lowers it (app.fetchT). Returns 1 if it is on its way.
+extern "C" EMSCRIPTEN_KEEPALIVE int tradeFetchShip() {
+    if (app.tradePost < 0) return 0;
+    Planet& p = dominantPlanet();
+    if (app.tradePost >= (int)p.outposts.size()) return 0;
+    if (!shipToFetch(app.tradePost) || app.credits < FETCH_CREDITS) return 0;
+    const Planet::Outpost& o = p.outposts[app.tradePost];
+    float angle = o.angle + FETCH_PAD / (p.baseRadius * DEG2RAD);
+    Vec2 out(cosd(angle), sind(angle));
+    Lander& l = app.lander;
+    l.stopIgnition();
+    l.pos = p.center + out * (p.visibleRadius(angle) + 6.0f);
+    l.rotation = l.targetRotation = angle + 90.0f;
+    l.vel = p.orbitVel;
+    l.land(p);
+    app.fetchT = FETCH_TIME;
+    addCredits(-FETCH_CREDITS);
+    notice(o.keeper + "'s people are bringing your ship over");
+    dealDone(8);
+    return 1;
+}
+
 extern "C" EMSCRIPTEN_KEEPALIVE void tradeClose() { closeTrade(); }
 
 // The inventory panel's buttons: move `count` (<= 0: all) of an item from
@@ -2667,7 +2720,7 @@ static void rescueSpot(int& planet, float& angle) {
         post = app.planets[planet].outposts.empty() ? -1 : 0;
     }
     const Planet& p = app.planets[planet];
-    angle = post >= 0 ? p.outposts[post].angle - 330.0f / (p.baseRadius * DEG2RAD) : -90.0f;
+    angle = post >= 0 ? p.outposts[post].angle - POST_PARK / (p.baseRadius * DEG2RAD) : -90.0f;
 }
 
 static std::string saveText(unsigned int seed, bool arriving) {
@@ -2748,6 +2801,7 @@ static void parkShip(int idx, float angle, float fuel) {
     Planet& p = app.planets[idx];
     Vec2 out(cosd(angle), sind(angle));
     closeTrade();
+    app.fetchT = 0.0f;
     app.spacewalking = false;
     app.astronaut.active = false;
     app.lander.reset();
@@ -2864,6 +2918,51 @@ static void onCrashed() {
     app.warp = 1;
     loseCargo();
     saveGame();          // saved where the rescue will set you down: no reloading out of it
+}
+
+// The fetched ship is down: dust off the ground under it, the word, and the
+// open panel sees the hold.
+static void fetchLanded(const Planet& p) {
+    Vec2 up = app.lander.landingOffset.normalize(), side(-up.y, up.x);
+    Vec2 feet = app.lander.pos - up * (app.lander.radius * 0.9f);
+    float g[3];
+    p.groundTone(feet - up * 6.0f, g);
+    const float col[3] = {g[0] * 0.85f, g[1] * 0.85f, g[2] * 0.85f};
+    for (int i = 0; i < 16; i++) {
+        float s = i % 2 ? 1.0f : -1.0f;
+        Vec2 v = side * (s * (0.8f + 1.8f * fxRand())) + up * (0.3f + 0.7f * fxRand());
+        spawnParticle(feet + side * (s * app.lander.radius * (0.3f + 0.6f * fxRand())), v, 0.5f + 0.4f * fxRand(),
+                      0.9f + 1.0f * fxRand(), col, 7);
+    }
+    notice("Your ship is down on the paving");
+    saveGame();
+    if (app.tradePost >= 0) pushTrade();
+}
+
+// The light the locals lower a fetched ship in: a shaft of their colour from
+// high above, down to the hull, fading as it nears the ground. Inside an
+// active world-space batch.
+static void drawFetchBeam(Renderer2D& r) {
+    if (app.fetchT <= 0.0f || app.state != LANDED) return;
+    using Color = Renderer2D::Color;
+    const Planet& p = app.planets[app.stuckIdx];
+    const float* c = p.folk.accent;
+    Vec2 at = app.lander.pos, up = (at - p.center).normalize(), side(-up.y, up.x);
+    float k = std::min(1.0f, app.fetchT / 0.5f) * std::min(1.0f, (FETCH_TIME - app.fetchT) / 0.3f);
+    float hw = app.lander.radius * 1.5f;
+    Vec2 top = at + up * 1400.0f, base = at - up * (app.lander.radius * 0.6f);
+    r.setBlend(Renderer2D::Blend::Additive);
+    Color clear{c[0], c[1], c[2], 0.0f};
+    // (A cone from far overhead, widening down to the hull: dim up there,
+    // brightest round the ship, clear at its edges.)
+    auto shaft = [&](float w, float aTop, float aBase) {
+        Color hi{c[0], c[1], c[2], aTop * k}, lo{c[0], c[1], c[2], aBase * k};
+        r.triangleV(top, hi, base + side * w, clear, base, lo);
+        r.triangleV(top, hi, base, lo, base - side * w, clear);
+    };
+    shaft(hw * 1.9f, 0.05f, 0.16f);      // the soft outside
+    shaft(hw, 0.10f, 0.34f);             // the shaft itself
+    r.setBlend(Renderer2D::Blend::Normal);
 }
 
 // R after a crash, adrift with an empty tank, or landed on too little to
@@ -3012,7 +3111,10 @@ static constexpr float SWORD_CUT = 0.17f;           // seconds the blade takes a
 // is kept and starts the next as soon as it ends.
 static constexpr float SWORD_DONE = SWORD_CUT * (1.0f + Astronaut::SWORD_BACK);
 static constexpr float SWORD_REACH = 46.0f;         // from the chest to a target's edge
-static constexpr float SWORD_HALF = 80.0f;          // degrees either side of the aim it catches
+static constexpr float SWORD_HALF = 48.0f;          // degrees either side of the aim it catches (to a target's edge)
+static constexpr float SWORD_FOLLOW = 26.0f;        // how fast the held blade comes round to the cursor (per second)
+static constexpr float SWORD_COMBO = 0.25f;         // a cut this soon after the last one comes back the other way
+static constexpr float SWORD_LIGHT_CUT = 12.0f;     // how much further the sword's light reaches on a cut (world units)
 static constexpr float HIT_STOP = 0.06f;            // seconds the fight freezes on a hit
 static constexpr float CRAWLER_POST_CLEAR = 450.0f; // none come up this near a post (along the ground)
 static constexpr int CRAWLER_CARBON = 2;            // what one leaves
@@ -3093,42 +3195,84 @@ static bool spawnCrawler(const Planet& p, Vec2 playerLocal) {
     return false;
 }
 
-// The light sword (the hand tool's third mode): a click swings it at the
-// cursor.
+// The light sword (the hand tool's third mode). Drawn, it points at the
+// cursor and you turn to face it; a click cuts across that line.
 static void updateSword(float dt, bool live) {
     Astronaut& a = app.astronaut;
     bool click = Input::takeClick();     // (taken every frame: a click made with the laser out is not saved up)
     a.swordOut = app.spacewalking && app.toolMode == TOOL_SWORD;
+    a.faceAim = false;
     if (!a.swordOut) app.swordQueued = false;
-    if (!app.spacewalking) { app.swordT = -1.0f; a.swing = -1.0f; return; }
+    if (!app.spacewalking) { app.swordT = -1.0f; a.swing = -1.0f; app.swordGlow = 0.0f; return; }
     const Planet& p = dominantPlanet();
     if (app.swordT >= 0.0f) {
         app.swordT += dt;
-        if (app.swordT >= SWORD_DONE) app.swordT = -1.0f;
+        if (app.swordT >= SWORD_DONE) { app.swordT = -1.0f; app.swordRest = 0.0f; }
+    } else {
+        app.swordRest += dt;
+    }
+    // Its light underground swells a little on a cut: up quickly, down
+    // slowly, so cut after cut it holds instead of pulsing.
+    {
+        bool lit = app.swordT >= 0.0f && app.swordT < SWORD_CUT;
+        app.swordGlow += ((lit ? 1.0f : 0.0f) - app.swordGlow) * (1.0f - expf(-dt * (lit ? 14.0f : 3.5f)));
     }
     float mx = Input::getMouseX(), my = Input::getMouseY();
     bool ready = app.swordT < 0.0f || app.swordT >= SWORD_CUT;
     bool can = live && a.swordOut && mx >= 0.0f && !app.mapMode && app.tradePost < 0;
+    bool cutting = app.swordT >= 0.0f && app.swordT < SWORD_CUT;
+
+    // Where the cursor is from the shoulder (as drawn), as the figure
+    // measures the blade: degrees from straight down, + toward screen right.
+    Vec2 up = (a.pos - p.center).normalize(), tangent(-up.y, up.x);
+    Vec2 cursor = can ? screenToWorld(mx, my) : a.pos;
+    float pointAt = a.swordAng;
+    if (can) {
+        Vec2 v = cursor - (a.pos + up * 4.25f);
+        if (v.length() > 5.0f) pointAt = atan2d(v.dot(tangent), -v.dot(up));    // (closer than that, it can't say)
+        // Turn to face it. Walking the other way then backs you off (not
+        // mid-cut: a cut stays the way it was made; nor sliding: that goes
+        // feet first).
+        a.faceAim = true;
+        float side = (cursor - a.pos).dot(tangent);
+        if (!cutting && !a.sliding && fabsf(side) > 3.0f) a.facing = side > 0.0f ? 1 : -1;
+    } else {
+        // Nothing to point at (a phone with the aim stick let go): held
+        // forward, turning with you.
+        if (a.swordAng * (float)a.facing < 0.0f) a.swordAng = -a.swordAng;
+        pointAt = Astronaut::SWORD_REST * (float)a.facing;
+    }
+    // The held blade comes round after it, the short way — but a big move
+    // that would take it down through the body goes over the top instead.
+    {
+        float d = fmodf(pointAt - a.swordAng + 540.0f, 360.0f) - 180.0f;
+        float to = a.swordAng + d;
+        if (fabsf(d) > 100.0f && to > -180.0f && to < 180.0f && (to > 0.0f) != (a.swordAng > 0.0f))
+            d += d > 0.0f ? -360.0f : 360.0f;
+        a.swordAng += d * (1.0f - expf(-dt * SWORD_FOLLOW));
+        a.swordAng = fmodf(a.swordAng + 540.0f, 360.0f) - 180.0f;
+    }
+
     if (click && can && !ready) app.swordQueued = true;
     if ((click || app.swordQueued) && can && ready) {
+        // Straight after another cut, this one comes back the other way.
+        a.swingDir = (app.swordT >= 0.0f || app.swordRest < SWORD_COMBO) ? -a.swingDir : 1;
         app.swordQueued = false;
         app.swordT = 0.0f;
         app.swingId++;
-        app.swordLocal = screenToWorld(mx, my) - p.center;
-        // Turn to face the cut.
-        Vec2 up = (a.pos - p.center).normalize(), tangent(-up.y, up.x);
-        float side = (app.swordLocal - (a.pos - p.center)).dot(tangent);
-        if (fabsf(side) > 3.0f) a.facing = side > 0.0f ? 1 : -1;
+        app.swordLocal = cursor - p.center;
+        a.swingAng = pointAt;
+        // Turn to face the cut (sliding, you keep going feet first and cut
+        // over your shoulder).
+        float side = (cursor - a.pos).dot(tangent);
+        if (!a.sliding && fabsf(side) > 3.0f) a.facing = side > 0.0f ? 1 : -1;
     }
     if (app.swordT < 0.0f) { a.swing = -1.0f; return; }
     a.swing = app.swordT / SWORD_CUT;
-    a.swingAim = p.center + app.swordLocal;         // (the world moved: re-place it)
     if (app.swordT > SWORD_CUT * 0.85f) return;      // the blade has gone past
 
     // What the blade catches: within reach of the chest, inside the arc.
     // The cursor is a drawn point; physically it is WALK_DROP above that.
-    Vec2 up = (a.pos - p.center).normalize();
-    Vec2 tangent(-up.y, up.x);
     Vec2 chest = a.pos - p.center + up * Astronaut::BODY_UP;
     Vec2 aim = app.swordLocal + up * NearField::WALK_DROP - chest;
     if (aim.length() < 1.0f) aim = tangent * (float)a.facing;
@@ -3139,7 +3283,11 @@ static void updateSword(float dt, bool live) {
         Vec2 rel = center - chest;
         float d = rel.length();
         if (d > SWORD_REACH + radius) return false;
-        if (d > 14.0f && acosf(std::clamp(rel.dot(aim) / d, -1.0f, 1.0f)) * RAD2DEG > SWORD_HALF) return false;
+        // (Off the aim by more than the arc, less how wide the target
+        // looks from here: its near edge is what the blade has to reach.)
+        if (d > 14.0f && acosf(std::clamp(rel.dot(aim) / d, -1.0f, 1.0f)) * RAD2DEG -
+                             asinf(std::min(1.0f, radius / d)) * RAD2DEG > SWORD_HALF)
+            return false;
         push = d > 1.0f ? rel * (1.0f / d) : aim;
         return true;
     };
@@ -4176,24 +4324,32 @@ static void drawCaveDark() {
 
     // The lights.
     const int MAX_LIGHTS = 24;
-    float L[MAX_LIGHTS * 4] = {0}, C[MAX_LIGHTS * 3] = {0};
+    float L[MAX_LIGHTS * 4] = {0}, C[MAX_LIGHTS * 3] = {0}, A[MAX_LIGHTS * 2] = {0};
     int n = 0;
-    auto add = [&](Vec2 at, float radius, float strength, float r, float g, float b) {
+    // (`aim`: which way it throws its light, times how much of it — under 1.)
+    auto add = [&](Vec2 at, float radius, float strength, float r, float g, float b, Vec2 aim = Vec2(0, 0)) {
         if (n >= MAX_LIGHTS || radius <= 1.0f || strength <= 0.0f) return;
         L[n * 4] = at.x; L[n * 4 + 1] = at.y; L[n * 4 + 2] = radius; L[n * 4 + 3] = strength;
         C[n * 3] = r; C[n * 3 + 1] = g; C[n * 3 + 2] = b;
+        A[n * 2] = aim.x; A[n * 2 + 1] = aim.y;
         n++;
     };
     const Astronaut& a = app.astronaut;
     Vec2 up = (a.pos - p.center).normalize();
     // The suit's lamp: just round you.
     add(a.pos + up * 8.0f, gDebug.caveLamp, std::clamp(gDebug.caveLampBright, 0.0f, 1.0f), 1.0f, 0.93f, 0.80f);
-    // The light sword, drawn: a wider pool in its colour, flaring on a cut.
+    // The light sword, drawn: a wider pool in its colour, from the blade
+    // and thrown the way it points — further ahead, less far behind (the
+    // way it is held: a cut goes by too fast to swing the light with it) —
+    // and reaching a little further on a cut.
     if (a.blade > 0.0f) {
-        float cut = a.swing >= 0.0f && a.swing < 1.0f ? 1.0f : 0.0f;
         const float* gl = a.livery.glow;
         float reach = std::max(0.0f, gDebug.caveSwordReach);
-        add(a.pos + up * 14.0f, (reach + 40.0f * cut) * a.blade, std::clamp(gDebug.caveSwordBright, 0.0f, 1.0f), gl[0], gl[1], gl[2]);
+        float held = a.swordHeld();
+        Vec2 dir = Vec2(-up.y, up.x) * sind(held) - up * cosd(held);
+        add(a.pos + up * 4.0f + dir * 16.0f, (reach + SWORD_LIGHT_CUT * app.swordGlow) * a.blade,
+            std::clamp(gDebug.caveSwordBright, 0.0f, 1.0f), gl[0], gl[1], gl[2],
+            dir * std::clamp(gDebug.caveSwordAim, 0.0f, 0.9f));
     }
     float time = (float)emscripten_get_now() * 0.001f;
     // The jetpack's flame: a warm, flickering pool at the nozzle (behind and
@@ -4223,6 +4379,7 @@ static void drawCaveDark() {
     }
     glUniform4fv(glGetUniformLocation(pr, "u_light"), MAX_LIGHTS, L);
     glUniform3fv(glGetUniformLocation(pr, "u_lightCol"), MAX_LIGHTS, C);
+    glUniform2fv(glGetUniformLocation(pr, "u_lightAim"), MAX_LIGHTS, A);
     glUniform1i(glGetUniformLocation(pr, "u_lightCount"), n);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -7203,6 +7360,7 @@ static void syncDebugFromJS() {
     gDebug.caveLampBright   = EM_ASM_DOUBLE({ return window.DBG.caveLampBright !== undefined ? window.DBG.caveLampBright : $0; }, gDebug.caveLampBright);
     gDebug.caveSwordBright  = EM_ASM_DOUBLE({ return window.DBG.caveSwordBright !== undefined ? window.DBG.caveSwordBright : $0; }, gDebug.caveSwordBright);
     gDebug.caveSwordReach   = EM_ASM_DOUBLE({ return window.DBG.caveSwordReach !== undefined ? window.DBG.caveSwordReach : $0; }, gDebug.caveSwordReach);
+    gDebug.caveSwordAim     = EM_ASM_DOUBLE({ return window.DBG.caveSwordAim !== undefined ? window.DBG.caveSwordAim : $0; }, gDebug.caveSwordAim);
     gDebug.caveJetLight     = EM_ASM_DOUBLE({ return window.DBG.caveJetLight !== undefined ? window.DBG.caveJetLight : $0; }, gDebug.caveJetLight);
     gDebug.flameBlue        = EM_ASM_DOUBLE({ return window.DBG.flameBlue !== undefined ? window.DBG.flameBlue : $0; }, gDebug.flameBlue);
     gDebug.liftDelay        = EM_ASM_DOUBLE({ return window.DBG.liftDelay !== undefined ? window.DBG.liftDelay : $0; }, gDebug.liftDelay);
@@ -7369,7 +7527,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int debugVisitOutpost(int idx, float offset) {
     if (idx < 0 || idx >= n) return n;
     float perDeg = p.baseRadius * DEG2RAD;
     float a = p.outposts[idx].angle;
-    debugParkAt(a - 330.0f / perDeg);
+    debugParkAt(a - POST_PARK / perDeg);
     debugTeleportAngle(a + offset / perDeg);
     return n;
 }
@@ -7626,7 +7784,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE void debugDump() {
     }
     items += "],\"inHole\":" + std::to_string(app.inHole) + ",\"hitStop\":" + std::to_string(app.hitStop);
     items += ",\"sunHere\":" + std::to_string(sunHeight(dominantPlanet(), playerPos() - dominantPlanet().center)) +
-             ",\"sword\":" + std::to_string(app.swordT);
+             ",\"sword\":" + std::to_string(app.swordT) +
+             ",\"swordAng\":" + std::to_string(app.astronaut.swordAng) +
+             ",\"facing\":" + std::to_string(app.astronaut.facing) +
+             ",\"walkAnim\":" + std::to_string(app.astronaut.walkAnim);
     // The exhaust: is the fluid live, and what it has cost (ms stepping, ms
     // drawing, over how many frames; reading it starts the count again).
     items += ",\"plume\":[" + std::to_string(app.plume.live() ? 1 : 0) + "," + std::to_string(app.plumeMs[0]) + "," +
@@ -7790,7 +7951,7 @@ static void mainLoop() {
         } else if (app.spacewalking) {
             float enterDist = dist(app.astronaut.pos.x, app.astronaut.pos.y,
                                    app.lander.pos.x,   app.lander.pos.y);
-            if (enterDist < app.lander.radius * 4.0f) {
+            if (enterDist < app.lander.radius * 4.0f && app.fetchT <= 0.0f) {
                 app.astronaut.active = false;
                 app.spacewalking     = false;
                 // Aboard: the pack goes in the hold (all but the carbon).
@@ -7928,6 +8089,23 @@ static void mainLoop() {
             app.lander.settle(body, timeScale);
             app.lander.pos = body.center + app.lander.landingOffset;
             app.lander.vel = body.orbitVel;
+            // Being brought to a post (tradeFetchShip): lowered out of the
+            // sky, fast at first and slowing onto the ground, where the
+            // legs take it up.
+            if (app.fetchT > 0.0f) {
+                Vec2 up = app.lander.landingOffset.normalize();
+                app.fetchT -= timeScale / 60.0f;
+                if (app.fetchT <= 0.0f) {
+                    app.fetchT = 0.0f;
+                    app.lander.vel = body.orbitVel - up * 1.6f;
+                    app.lander.land(body);
+                    app.lander.vel = body.orbitVel;
+                    fetchLanded(body);
+                } else {
+                    float k = app.fetchT / FETCH_TIME;
+                    app.lander.pos = app.lander.pos + up * (FETCH_HEIGHT * k * k);
+                }
+            }
             updateContact();                 // keep altitude readout fresh
             // Too little in the tank to get anywhere: R calls for a rescue.
             if (step == 0 && restartPressed && landedDry()) {
@@ -8243,6 +8421,7 @@ static void mainLoop() {
     // The other players at this world: behind your own ship and you.
     Net::draw(app.renderer);
     app.lander.drawBeam(app.renderer);
+    drawFetchBeam(app.renderer);
     app.lander.draw(app.renderer);   // always draw the actual ship
     drawFlares(shaderTime);
     // Night crawlers and cave bats, on the walking line: behind the astronaut.

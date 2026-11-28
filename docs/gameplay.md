@@ -88,7 +88,18 @@ and what makes "how close can I land to that?" matter.
 number of items. Boarding the ship empties the pack into the hold (carbon
 stays with you — it is your air). A trader deals with the **whole hold** if
 the ship is parked within about 600 units of the post, and only with your
-pack if it is not: a good landing saves you ten walks.
+pack if it is not: a good landing saves you ten walks. *Added 2026-11-27*
+(the user: "You should be able to pay to retrieve your ship from a
+station"): when the ship is parked out of reach, any trader will **have it
+brought to the post for 40 credits** (the Sell & buy tab). The locals lower
+it out of the sky in a shaft of their colour onto the open end of the
+post's paving, about three seconds, with everything aboard as it was (the
+hold, the cows, the fuel); from then on the hold is in reach. So a bad
+landing, or a long walk from where you left the ship, now costs money
+instead of the walk back. Calls of mine, unconfirmed: the flat 40, that it
+lands on the paving (in view from the stall) rather than beside it, that
+the fuel comes as it is, and that it is only for a ship parked on the
+world you are standing on.
 *Not:* the bottomless inventory there is now.
 
 **7. Failing costs what you are carrying, never what you have built.**
@@ -218,14 +229,25 @@ is my call, not yet confirmed.
   it should be always out and should be brighter when it swings"). Drawing
   it ignites it like a light saber (the user: "it should extend out like a
   light saber"): the blade shoots out of the hilt in 0.22 s; putting it
-  away slides it back in. Each
-  click of the mouse button is one cut across the line to the cursor, any
-  direction, flaring bright: 0.17 s across the arc, then 0.1 s back to the
-  guard. A click during the return cuts again at once; a click during the
-  cut is kept and cuts again the moment it ends (no dead time after a
-  swing — the user saw a delay there). It reaches about 46 units past your
-  chest and catches anything within 80 degrees either side of the aim. A
-  cut knocks a crawler back; the second kills it.
+  away slides it back in. 2026-11-27, the user: "make the sword a bit
+  better and maybe follow the mouse. And even turn around when you're
+  facing the opposite way. Also the swinging of the sword should be more
+  narrow." So, held, **the blade points at the mouse** (it comes round
+  after it quickly, over the top on a big move), and **you turn to face
+  the mouse**: walk away from it and you back off, still facing it (not
+  while sliding, which goes feet first). Each click of the mouse button is
+  one cut across the line to the cursor, any direction, flaring bright: a
+  short chop, 40 degrees either side of the line (it was 75), 0.17 s
+  across, then 0.1 s back to pointing at the mouse. A click during the
+  return cuts again at once; a click during the cut is kept and cuts again
+  the moment it ends (no dead time after a swing — the user saw a delay
+  there); the second of two quick cuts comes back up the way the first
+  went down. It reaches about 46 units past your chest and catches what
+  is within 48 degrees either side of the aim, measured to the target's
+  edge (it was 80 to its middle: you now have to point at what you cut).
+  A cut knocks a crawler back; the second kills it. Calls of mine,
+  unconfirmed: the narrower catch as well as the narrower look, backing
+  off instead of turning, the alternating cuts, the slimmer cutting blade.
 - **The Hollow Knight feel.** A hit freezes the fight for an instant
   (0.06 s: you, the crawlers and the bats; the world goes on) and pushes you
   back off what you hit. Cutting **down** onto something while you are in
@@ -250,7 +272,11 @@ Tunable on the debug panel: *Night crawlers* (0 = none, 1 = as above),
 surroundings and more by your light sword … some material to buy some kind
 of light source … maybe flares"). Underground you see only what your lights
 reach: the suit lamp (a small pool), the light sword when drawn (a wider
-one), what glows down there, and **flares**. Any trader makes them to order:
+one, thrown the way the blade points: further ahead of it, less far behind
+— the user, 2026-11-27: "it should light more in the direction you're
+pointing the sword, and less on the other side"; it swells only a little on
+a cut, eased, after the user found the bigger swell "flickery"), what glows
+down there, and **flares**. Any trader makes them to order:
 3 for 2 carbon, 1 ferrite and 10 credits, up to 12 carried (saved with the
 game). **G** throws one toward the aim; it bounces to rest and burns red for
 about half a minute, lighting a wide stretch of cave; at most 8 burn at
@@ -484,5 +510,6 @@ after playing, because each changes how the whole game feels:
   every landing: ties mining to flying and makes dead worlds dangerous to
   visit. Worth watching how long the first trip off the home world takes.
 - **Trading from the hold only when parked close** (6). Rewards a precise
-  landing; punishes a sloppy one with walking.
+  landing; punishes a sloppy one with walking — or, since 2026-11-27, with
+  40 credits to have the ship brought to the post. Is 40 the right price?
 - **Leaving as the goal** (1), rather than building something where you are.

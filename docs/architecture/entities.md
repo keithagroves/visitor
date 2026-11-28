@@ -98,14 +98,22 @@ flowchart TD
   pack), `aim` (both arms swing onto the line to `aimWorld` and a stubby tool
   appears in the near hand; `draw()` publishes the emitter's world position
   as `muzzleWorld` for the beam), and `swing` (0–1 through a cut of the
-  **light sword** at `swingAim`: the near arm carries a glowing blade
-  across the line to the target, from 75° above it to 75° below, easing
-  out, leaving a fading fan in the player's colour, then straight back to a
-  guard). With the sword the tool in hand (`swordOut`) the blade is always
-  out, held lit at the guard (arm forward, blade up and forward, the core
-  tinted the player's colour); it flares — wider, brighter halo, white-hot
-  core, a bloom at the tip — while it cuts, and settles as the arm comes
-  back. Drawn, it ignites like a light saber (`blade` 0 → 1 over
+  **light sword** across the line at `swingAng`: the near arm carries a
+  glowing blade from 40° one side of that line to 40° the other, easing
+  out, leaving a fading fan in the player's colour with a white edge where
+  the tip went, then straight back to where it is held; `swingDir` says
+  which way it crosses, so the second of two quick cuts comes back up the
+  first). With the sword the tool in hand (`swordOut`) the blade is always
+  out, held lit and pointed along `swordAng` — the cursor, which the core
+  loop eases it after — with the elbow bent and the core tinted the
+  player's colour; it flares — brighter halo, white-hot core, a quarter
+  longer — while it cuts, and settles as the arm comes back. Sword angles
+  are degrees from straight down, + toward screen right, so they mean the
+  same whichever way the figure faces; `draw()` keeps the held blade in
+  front, so when the figure turns round the blade comes over the top with
+  it. While the tool is turning the figure to face what it points at
+  (`faceAim`), walking does not turn it: going the other way runs the
+  cycle in reverse (`backpedal`), backing off. Drawn, it ignites like a light saber (`blade` 0 → 1 over
   `SWORD_IGNITE`, 0.22 s): a burst at the emitter, the blade shooting out
   fast and slowing to full length with a bright tip running ahead, burning
   bright until it is all the way out; put away, it slides back into the

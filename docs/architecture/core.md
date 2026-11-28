@@ -235,9 +235,17 @@ flowchart TD
   else on Sell & buy; after that the tab is the player's until they leave. When the ship is in reach too, E does whichever is
   nearer (`wouldTrade`). A post deals with the ship's hold, cows included,
   only when the ship is parked within `HOLD_REACH` (600) of the stall
-  (`holdAtPost`); otherwise with the pack alone. The panel's buttons call
+  (`holdAtPost`); otherwise with the pack alone — and then the panel
+  offers to have the ship brought over (`tradeFetchShip`, `FETCH_CREDITS`):
+  the ship is moved at once to the open end of the post's paving
+  (`FETCH_PAD` along from the stall) and held up in the sky, and the LANDED
+  step lowers it over `App::fetchT` seconds (`FETCH_TIME`, from
+  `FETCH_HEIGHT`, slowing onto the ground; `drawFetchBeam` is the shaft of
+  the locals' colour it comes down in, `fetchLanded` the dust, the notice
+  and the panel's refresh). Until it is down it cannot be boarded and its
+  hold is not in reach. The panel's buttons call
   back into `tradeSell`, `tradeBuyUpgrade` (builds the next level from its
-  recipe), `tradeBuyGoods`, `tradeClose` and, from the inventory panel,
+  recipe), `tradeBuyGoods`, `tradeMakeFlares`, `tradeFetchShip`, `tradeClose` and, from the inventory panel,
   `invMove` (pack <-> hold at the ship, or drop); every deal records the
   post for rescues and saves. The rules are
   [trade.cpp](../../src/core/trade.cpp): prices are an item's base value
@@ -352,7 +360,12 @@ flowchart TD
   by `inHole` and `gDebug.caveDark`), deeper = darker, with up to 24 lights
   cut out of it: the suit lamp (reach `gDebug.caveLamp`, brightness
   `gDebug.caveLampBright`), the light sword while drawn (brightness
-  `gDebug.caveSwordBright`, reach `gDebug.caveSwordReach`), the jetpack's
+  `gDebug.caveSwordBright`, reach `gDebug.caveSwordReach`; it sits on the
+  blade and is thrown the way the blade is held, `gDebug.caveSwordAim` of
+  its reach further ahead and that much less behind — a light's
+  `u_lightAim` in the shader — and a cut adds `SWORD_LIGHT_CUT` to the
+  reach, eased by `App::swordGlow` so cut after cut it holds instead of
+  pulsing), the jetpack's
   flame while it fires (`gDebug.caveJetLight`, eased by `App::jetGlow`), flares, the
   laser's end, hot burns and `CaveField::lights`. "Below the ground line" is
   `Planet::surfaceRadius` sampled 64 times across the view, so dug shafts

@@ -33,7 +33,8 @@ flowchart TD
   pixels) and `isMouseDown` (primary button, pressed on the canvas; released
   anywhere in the window) aim and fire the mining laser; `takeClick`
   (latched, so a click shorter than a frame still counts) swings the light
-  sword once per click. `isRightMouseDown` / `takeRightClick` track the
+  sword once per click (drawn, the blade points at the mouse and the figure
+  turns to face it). `isRightMouseDown` / `takeRightClick` track the
   secondary button, kept for interacting with things (chests, later; unused
   so far — the page turns off the canvas's context menu). The core loop reads these each frame
   in `pollInput`, `pollInputAstronaut`, `updateZoom`, `updateAimStick`,
@@ -59,7 +60,8 @@ flowchart TD
     little it only aims (a mark shows what the tool would reach), pushed past
     `AIM_FIRE` it fires. The laser takes the nearest thing to mine along the
     line, the cutter runs at full reach and snaps to level and plumb, the
-    sword cuts that way and again as each cut ends.
+    sword points that way, and cuts that way and again as each cut ends
+    (let go, it is held forward).
   - **Buttons** hold a key while pressed: in the ship a big Thrust where the
     aim stick rests, Beam, and Out once landed; on foot Tool (it names the
     tool in hand) and Use; Rescue (R) when crashed or out of fuel. A row

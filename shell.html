@@ -1076,7 +1076,7 @@
                 nightDarkness: 0.16, nightSoftness: 0.30,
                 cameraGroundZoom: 1.8, cameraFraming: 0.4, cameraHorizon: 0.14, cameraSpeedLook: 2.2,
                 walkSpeed: 2.4, jumpSpeed: 3.0, jetpackThrust: 0.115, slideGrip: 0.99,
-                crawlers: 1.0, bats: 1.0, bite: 0.12, plume: 1.0, flameBlue: 0, caveDark: 1.0, caveLamp: 115, caveLampBright: 0.05, caveSwordBright: 0.9, caveSwordReach: 100, caveJetLight: 130, liftDelay: 1.0, liftSpool: 1.5,
+                crawlers: 1.0, bats: 1.0, bite: 0.12, plume: 1.0, flameBlue: 0, caveDark: 1.0, caveLamp: 115, caveLampBright: 0.05, caveSwordBright: 0.9, caveSwordReach: 100, caveSwordAim: 0.4, caveJetLight: 130, liftDelay: 1.0, liftSpool: 1.5,
                 horizonHaze: 0.7, foreground: 1.0, vignette: 0.35, motes: 0, frontVeil: 0.45,
                 holeFloor: 0.34, holeDepth: 150, oreRichness: 1.0, oreBurn: 3.0,
                 waterLevel: 0, waterTint: 0.42,
@@ -1123,6 +1123,7 @@
                 { key: 'caveLampBright',   label: 'Caves: your lamp brightness', min: 0.0, max: 1.0, step: 0.05 },
                 { key: 'caveSwordBright',  label: 'Caves: light sword brightness', min: 0.0, max: 1.0, step: 0.05 },
                 { key: 'caveSwordReach',   label: 'Caves: light sword reach', min: 0, max: 400, step: 5 },
+                { key: 'caveSwordAim',     label: 'Caves: sword light thrown ahead', min: 0.0, max: 0.9, step: 0.05 },
                 { key: 'caveJetLight',     label: 'Caves: jetpack light reach (0 = none)', min: 0, max: 400, step: 5 },
                 { key: 'flameBlue',        label: 'Flame colour (0 = red-orange, 1 = blue)', min: 0.0, max: 1.0, step: 0.05 },
                 { key: 'liftDelay',        label: 'Lift-off: seconds burning on the pad (0 = at once)', min: 0.0, max: 4.0, step: 0.1 },
@@ -1426,6 +1427,11 @@
                     body = '<path d="M7 31 L26 12 L30 16 L11 35 Z" fill="' + d + '"/>' +
                            '<circle cx="29" cy="11" r="8" fill="' + c + '" opacity="0.45"/>' +
                            '<circle cx="29" cy="11" r="4.5" fill="' + c + '"/><circle cx="29" cy="11" r="2" fill="#fff4e8"/>';
+                } else if (item.icon === 'ship') {
+                    body = '<path d="M13 21 L3 34 L13 31 Z" fill="' + d + '"/><path d="M27 21 L37 34 L27 31 Z" fill="' + d + '"/>' +
+                           '<path d="M20 2 L28 16 L28 31 L12 31 L12 16 Z" fill="' + c + '"/>' +
+                           '<path d="M20 2 L28 16 L28 31 L20 31 Z" fill="' + d + '"/>' +
+                           '<circle cx="20" cy="17" r="3.6" fill="#0f1628"/><path d="M15 31 L25 31 L23 37 L17 37 Z" fill="' + d + '"/>';
                 } else if (item.icon === 'nugget') {
                     body = '<path d="M6 30 L10 16 L22 9 L33 15 L35 28 L24 35 L12 35 Z" fill="' + d + '"/>' +
                            '<path d="M12 18 L22 11 L31 16 L25 23 L15 25 Z" fill="' + c + '"/>';
@@ -1934,7 +1940,9 @@
                 var note = document.getElementById('trade-holdnote');
                 note.textContent = d.hold
                     ? 'Your ship is parked close by: trading from the pack and the hold.'
-                    : 'Your ship is not parked close by: trading from your pack only. Land within a short walk to trade from the hold.';
+                    : d.fetch && d.fetch.coming
+                        ? 'Your ship is on its way: trading from your pack until it is down.'
+                        : 'Your ship is not parked close by: trading from your pack only. Land within a short walk, or have it brought here (Sell & buy), to trade from the hold.';
                 note.classList.toggle('far', !d.hold);
 
                 // What you can sell them.
@@ -1991,6 +1999,19 @@
                         ' · light up a cave: G throws one');
                     frow.querySelector('.act').appendChild(tradeButton('Make ' + F.make, !!F.can, function () { M._tradeMakeFlares(); }));
                     goods.appendChild(frow);
+                }
+                // Your ship, brought here: when it is parked out of reach
+                // (and while it is on its way).
+                if (d.fetch && (d.fetch.away || d.fetch.coming)) {
+                    var S = d.fetch;
+                    var srow = tradeRow({ icon: 'ship', color: '#9fb4c8' }, 'Your ship, brought here',
+                        S.coming ? 'On its way: they are setting it down on the paving here'
+                                 : cr(S.cr) + ' · they set it down on the paving here, with all that is aboard');
+                    if (!S.coming) {
+                        srow.querySelector('.act').appendChild(
+                            tradeButton('Fetch ' + cr(S.cr), !!S.can, function () { M._tradeFetchShip(); }));
+                    }
+                    goods.appendChild(srow);
                 }
                 document.getElementById('trade-goods-h').textContent = d.keeper + ' sells';
                 document.getElementById('trade-goods-note').textContent = 'worth more on other worlds';

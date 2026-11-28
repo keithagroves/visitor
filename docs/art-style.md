@@ -166,7 +166,9 @@ computed sky.**
      depth — near-black blue, the one place the game goes nearly black —
      except soft pools round the lights: a small one round the player (the
      suit lamp), a wider one in the sword's colour while it is drawn
-     (flaring on a cut), the glowing crystals and glowcaps, rock still hot
+     (thrown the way the blade points — further ahead, less far behind —
+     and swelling only slightly on a cut: a big jump reads as flicker), the
+     glowing crystals and glowcaps, rock still hot
      from the cutter, the laser where it lands, and big warm red ones round
      flares. Each pool is brightest at its light and falls off smoothly all
      the way out; no hard rims. From the surface, caves look as above.
